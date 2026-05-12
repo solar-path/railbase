@@ -307,7 +307,16 @@ func (a *App) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("discover system migrations: %w", err)
 	}
-	runner := &migrate.Runner{Pool: p.Pool, Log: a.log}
+	runner := &migrate.Runner{
+		Pool: p.Pool,
+		Log:  a.log,
+		// RAILBASE_FORCE_INIT=1 is the documented escape hatch when the
+		// operator deliberately wants to init Railbase against a non-
+		// empty foreign DB (e.g. co-locating with another app that owns
+		// `public` schema tables they accept will sit alongside ours).
+		// See migrate.ErrForeignDatabase docstring for the full model.
+		AllowForeignDatabase: os.Getenv("RAILBASE_FORCE_INIT") == "1",
+	}
 	if err := runner.Apply(ctx, sys); err != nil {
 		return fmt.Errorf("apply system migrations: %w", err)
 	}

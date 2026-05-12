@@ -28,13 +28,17 @@ import {
 // v1.7.39 split the v0.8 single-step wizard into TWO steps:
 //   1. "Database"  — pick a Postgres deployment. Calls the public
 //                    /_/setup/{detect,probe-db,save-db} endpoints.
-//                    When the operator picks "embedded" we skip
-//                    straight to step 2 with no save (the running
-//                    process IS embedded; no restart needed).
-//                    When they pick local-socket or external we
-//                    save the DSN to <DataDir>/.dsn AND tell them to
-//                    restart railbase before continuing.
+//                    Saves the DSN to <DataDir>/.dsn, then either
+//                    triggers an in-process reload (production fast
+//                    path) or asks for a manual restart (fallback).
 //   2. "Admin"     — admin-account creation.
+//
+// v1.7.41-followup removed the `embedded` driver radio entirely:
+// embedded postgres is a build-time decision (`-tags embed_pg`)
+// shipped via `make build-embed` as a separate dev binary that boots
+// directly into embedded mode without reaching this wizard. Production
+// binaries no longer surface a disabled "embedded — not available"
+// row that confuses operators.
 //
 // v1.7.41 migrates both steps to the kit's <Form> + react-hook-form +
 // zod pattern (see login.tsx for the reference). Each step owns its
@@ -61,6 +65,10 @@ type ProbeResponse = {
   version?: string;
   db_exists?: boolean;
   can_create_db?: boolean;
+  // v1.7.42 foreign-DB safety scan. See setup_db.go::setupProbeResponse
+  // docstring for the decision matrix.
+  public_table_count?: number;
+  is_existing_railbase?: boolean;
   error?: string;
   hint?: string;
 };
@@ -92,10 +100,12 @@ const dbStepSchema = z.discriminatedUnion("driver", [
       .string()
       .regex(/^postgres(ql)?:\/\//, "Must start with postgres://"),
   }),
-  z.object({
-    driver: z.literal("embedded"),
-    // No fields — operator just chose to use the embedded PG.
-  }),
+  // NOTE: the `embedded` driver is intentionally NOT in this union.
+  // Embedded postgres is a build-time decision (`-tags embed_pg`), not
+  // an operator-time decision — `make build-embed` produces a separate
+  // dev binary that boots directly into embedded mode without ever
+  // reaching this wizard. Production binaries don't ship the embed_pg
+  // driver, so surfacing it here (even disabled) is misleading UX.
 ]);
 
 type DBStepValues = z.infer<typeof dbStepSchema>;
@@ -191,16 +201,23 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
   const [save, setSave] = useState<SaveResponse | null>(null);
   const [busy, setBusy] = useState<null | "probe" | "save">(null);
   const [err, setErr] = useState<string | null>(null);
+  // Foreign-DB acknowledgement. When the most recent probe found
+  // non-Railbase tables in the target DB, the Save button is locked
+  // until the operator explicitly opts in. Reset on every new probe
+  // so a "fix the database name → re-probe" flow doesn't leak the
+  // acknowledgement from the previous (dangerous) target.
+  const [proceedAnyway, setProceedAnyway] = useState(false);
 
-  // Default to "embedded" — overridden after detect if local sockets
-  // exist (preferred) OR if the build is setup-mode (external is the
-  // only valid radio). zodResolver is fine with the discriminated
-  // union: defaultValues only carries the embedded branch initially
-  // and we reset() into the other branches when the operator picks
-  // a different driver.
+  // Default to "external_dsn" with an empty string — overridden after
+  // detect if local sockets exist (preferred for ops on their own
+  // box; we still default to external_dsn until detect completes so
+  // the radio doesn't flicker between options). zodResolver is fine
+  // with the discriminated union: defaultValues only carries the
+  // external_dsn branch initially and we reset() into the other
+  // branches when the operator picks a different driver.
   const form = useForm<DBStepValues>({
     resolver: zodResolver(dbStepSchema),
-    defaultValues: { driver: "embedded" } as DBStepValues,
+    defaultValues: { driver: "external_dsn", external_dsn: "" } as DBStepValues,
     mode: "onSubmit",
   });
 
@@ -227,13 +244,10 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
             sslmode: "disable",
             create_db: false,
           });
-        } else if (d.current_mode === "setup") {
-          // Production binary, no embed_pg, no detected sockets — the
-          // embedded driver radio is unavailable in this build. Default
-          // to external DSN so the operator isn't pre-selected on a
-          // dead option.
-          form.reset({ driver: "external_dsn", external_dsn: "" });
         }
+        // No sockets → default external_dsn stays selected. We don't
+        // need a special-case branch for current_mode === "setup"
+        // anymore because embedded is no longer offered.
       })
       .catch((e: unknown) => {
         if (!cancelled) {
@@ -266,26 +280,18 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
         create_database: values.create_db,
       };
     }
-    if (values.driver === "external_dsn") {
-      return {
-        driver: "external",
-        socket_dir: "",
-        username: "",
-        password: "",
-        database: "",
-        sslmode: "",
-        external_dsn: values.external_dsn,
-        create_database: false,
-      };
-    }
+    // values.driver === "external_dsn" — only other variant in the
+    // union after removing `embedded`. TypeScript's exhaustiveness
+    // check makes the cast unnecessary, but keep the explicit
+    // narrowing for readability.
     return {
-      driver: "embedded",
+      driver: "external",
       socket_dir: "",
       username: "",
       password: "",
       database: "",
       sslmode: "",
-      external_dsn: "",
+      external_dsn: values.external_dsn,
       create_database: false,
     };
   }
@@ -306,10 +312,9 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
         sslmode: "disable",
         create_db: false,
       });
-    } else if (next === "external_dsn") {
-      form.reset({ driver: "external_dsn", external_dsn: "" });
     } else {
-      form.reset({ driver: "embedded" });
+      // next === "external_dsn" — the only other variant in the union.
+      form.reset({ driver: "external_dsn", external_dsn: "" });
     }
   }
 
@@ -320,6 +325,7 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
   async function onProbe() {
     setErr(null);
     setProbe(null);
+    setProceedAnyway(false);
     const valid = await form.trigger();
     if (!valid) return;
     const values = form.getValues();
@@ -347,6 +353,25 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
       setBusy(null);
     }
   }
+
+  // Foreign-DB detection:
+  //
+  //   - foreignDb=true  → probe succeeded, found tables, no marker.
+  //                       Save is locked until proceedAnyway=true.
+  //   - existingRailbase → probe succeeded, found marker. Green banner;
+  //                       Save flows normally.
+  //
+  // We treat undefined/missing fields as "scan not available" rather
+  // than "DB is empty" so backends pre-v1.7.42 (or where the catalog
+  // scan errored silently) don't accidentally bypass the gate when
+  // their old shape gets cached client-side.
+  const foreignDb =
+    probe?.ok === true &&
+    (probe.public_table_count ?? 0) > 0 &&
+    probe.is_existing_railbase === false;
+  const existingRailbase =
+    probe?.ok === true && probe.is_existing_railbase === true;
+  const saveLocked = foreignDb && !proceedAnyway;
 
   async function onSubmit(values: DBStepValues) {
     setErr(null);
@@ -412,8 +437,6 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
   }
 
   const hasSockets = (detect?.sockets ?? []).length > 0;
-  const isEmbedded = driver === "embedded";
-  const embeddedDisabled = detect?.current_mode === "setup";
 
   return (
     <Card className="p-6">
@@ -464,10 +487,10 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
                   <RadioGroup
                     value={field.value}
                     onValueChange={(v) => {
-                      // The embedded RadioGroupItem is disabled in setup-mode
-                      // builds, but defensive guard kept here so a future
-                      // keyboard-driven activation can't bypass it.
-                      if (v === "embedded" && embeddedDisabled) return;
+                      // Defensive: ignore local_socket when no sockets
+                      // were detected — keyboard activation could
+                      // otherwise bypass the visual `disabled` cue on
+                      // the RadioGroupItem.
                       if (v === "local_socket" && !hasSockets) return;
                       switchDriver(v as DBStepValues["driver"]);
                     }}
@@ -489,26 +512,6 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
                       checked={field.value === "external_dsn"}
                       title="Use an external PostgreSQL"
                       subtitle="Managed Postgres (Supabase, Neon, RDS, …) or a remote host"
-                    />
-                    <DriverRadio
-                      value="embedded"
-                      checked={field.value === "embedded"}
-                      // Embedded postgres is a `-tags embed_pg` build option,
-                      // intentionally NOT included in release binaries. In
-                      // setup-mode we surface the row as disabled so the
-                      // operator sees "this exists but I can't pick it"
-                      // rather than wonders why their choice silently fails.
-                      disabled={embeddedDisabled}
-                      title={
-                        embeddedDisabled
-                          ? "Embedded postgres — not available in this build"
-                          : "Keep embedded (development)"
-                      }
-                      subtitle={
-                        embeddedDisabled
-                          ? "Rebuild with `make build-embed` for the dev-only embedded driver"
-                          : "Single-machine dev workflow; data lives under pb_data/postgres/"
-                      }
                     />
                   </RadioGroup>
                 </FormControl>
@@ -695,23 +698,15 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
             />
           ) : null}
 
-          {driver === "embedded" ? (
-            <div className="text-sm bg-amber-50 border border-amber-200 text-amber-900 rounded px-3 py-2 space-y-1">
-              <p>
-                OK to keep developing locally with embedded postgres. Data
-                lives under{" "}
-                <code className="rb-mono">&lt;dataDir&gt;/postgres/</code>.
-              </p>
-              <p className="text-xs text-amber-700">
-                Not recommended for production — embedded postgres is dev-only.
-                You can re-run the wizard after deploying to point at a managed
-                Postgres without losing application schema (Railbase migrations
-                are re-applied on first boot).
-              </p>
-            </div>
-          ) : null}
-
           {probe ? <ProbeResult probe={probe} /> : null}
+          {foreignDb ? (
+            <ForeignDbWarning
+              count={probe?.public_table_count ?? 0}
+              proceedAnyway={proceedAnyway}
+              onToggle={setProceedAnyway}
+            />
+          ) : null}
+          {existingRailbase ? <ExistingRailbaseNotice /> : null}
           {save ? <SaveResult save={save} /> : null}
           {err ? (
             <p className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded px-3 py-2">
@@ -720,44 +715,36 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
           ) : null}
 
           <div className="flex items-center gap-2 pt-2 border-t">
-            {isEmbedded ? (
-              // "Keep embedded" path is only reachable when embed_pg is
-              // compiled in (driver radio is disabled in setup-mode). The
-              // operator is staying on the current process's DB; admin
-              // create is fine without a restart.
-              <Button type="button" onClick={onContinue}>
-                Continue to admin setup →
-              </Button>
-            ) : (
-              <>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={busy !== null || save?.ok === true}
-                  onClick={onProbe}
-                >
-                  {busy === "probe" ? "Probing…" : "Probe connection"}
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={busy !== null || save?.ok === true}
-                >
-                  {busy === "save" ? "Saving…" : "Save and restart later"}
-                </Button>
-                {/*
-                  Once save succeeded, the new DSN is on disk but the current
-                  process is still bound to whatever DB it booted with
-                  (setup-mode = no DB, embedded = throwaway dev cluster). An
-                  admin created NOW lands in the wrong place — empty after
-                  the restart in setup-mode, or in the old embedded cluster
-                  that gets shadowed by the new DSN. So we hide the Continue
-                  button entirely and tell the operator to restart.
-                */}
-              </>
-            )}
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy !== null || save?.ok === true}
+              onClick={onProbe}
+            >
+              {busy === "probe" ? "Probing…" : "Probe connection"}
+            </Button>
+            <Button
+              type="submit"
+              disabled={busy !== null || save?.ok === true || saveLocked}
+              title={
+                saveLocked
+                  ? "Confirm the warning above before saving."
+                  : undefined
+              }
+            >
+              {busy === "save" ? "Saving…" : "Save and restart later"}
+            </Button>
+            {/*
+              Once save succeeded, the new DSN is on disk but the current
+              process is still bound to setup-mode (no DB). An admin
+              created NOW would land in the wrong place — empty after
+              the restart. So we hide the Continue button entirely and
+              let the in-process reload poll + window.location.reload()
+              drive the operator into the admin step on the new DB.
+            */}
           </div>
 
-          {save?.ok && !isEmbedded && save.restart_required === false ? (
+          {save?.ok && save.restart_required === false ? (
             // In-process reload path: server is about to swap from
             // setup-mode to the full boot path on the new DSN. We poll
             // /readyz in the background and reload the page as soon as the
@@ -775,7 +762,7 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
             </div>
           ) : null}
 
-          {save?.ok && !isEmbedded && save.restart_required === true ? (
+          {save?.ok && save.restart_required === true ? (
             // Manual-restart path: kept as fallback for the rare case the
             // backend can't trigger an in-process reload (e.g. invoked
             // from a normal-boot wizard re-run where the chan is nil).
@@ -853,6 +840,69 @@ function SocketRadio({
         <span className="block text-xs text-muted-foreground">{distro}</span>
       </span>
     </label>
+  );
+}
+
+// ForeignDbWarning — v1.7.42 safety gate. Renders when the probe found
+// non-system tables in `public` but no `_migrations` marker, signalling
+// that the operator is about to point Railbase at someone else's
+// database. We surface the count, explain the risk, and lock the Save
+// button until they tick the acknowledgement.
+//
+// Why a soft block (checkbox) instead of a hard refusal: there are
+// legitimate co-location cases (Railbase alongside another app sharing
+// a logical DB) where the operator knows exactly what they're doing.
+// The boot-time invariant in internal/db/migrate is the second slice
+// of the same gate and catches the `.dsn`-edit bypass route.
+function ForeignDbWarning({
+  count,
+  proceedAnyway,
+  onToggle,
+}: {
+  count: number;
+  proceedAnyway: boolean;
+  onToggle: (v: boolean) => void;
+}) {
+  return (
+    <div className="text-sm bg-amber-50 border border-amber-300 text-amber-900 rounded px-3 py-3 space-y-2">
+      <p className="font-medium">This database is not empty.</p>
+      <p className="text-xs">
+        Found <strong>{count}</strong> table{count === 1 ? "" : "s"} in the{" "}
+        <code className="rb-mono">public</code> schema, but none of them
+        is a Railbase marker. Railbase expects either an empty database
+        or an existing Railbase instance — saving now would install
+        service tables and Postgres extensions alongside another app&apos;s
+        data.
+      </p>
+      <p className="text-xs">
+        If this is intentional (e.g. you&apos;re co-locating Railbase with
+        another app in the same DB), tick the box to confirm.
+      </p>
+      <label className="inline-flex items-center gap-2 text-sm cursor-pointer pt-1">
+        <Checkbox
+          checked={proceedAnyway}
+          onCheckedChange={(v) => onToggle(v === true)}
+        />
+        I understand — install Railbase alongside the existing tables.
+      </label>
+    </div>
+  );
+}
+
+// ExistingRailbaseNotice — friendly green banner when the probe found
+// the `_migrations` marker, confirming the operator is reconnecting to
+// an existing Railbase install (e.g. after a restore or a re-deploy).
+// Pure information; doesn't gate the Save button.
+function ExistingRailbaseNotice() {
+  return (
+    <div className="text-sm bg-emerald-50 border border-emerald-200 text-emerald-800 rounded px-3 py-2">
+      <p className="font-medium">Existing Railbase instance detected.</p>
+      <p className="text-xs">
+        Found the <code className="rb-mono">_migrations</code> marker —
+        this database already belongs to Railbase. Saving will reconnect
+        the running process to it and apply any pending migrations.
+      </p>
+    </div>
   );
 }
 

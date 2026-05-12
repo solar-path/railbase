@@ -94,14 +94,32 @@ type setupDBBody struct {
 // setupProbeResponse is the success envelope for /probe-db. On
 // failure the same fields appear with ok=false; the wizard renders
 // `hint` inline so the operator can self-correct.
+//
+// v1.7.42 added the foreign-DB safety pair:
+//
+//   - PublicTableCount: count of non-system tables in `public` schema.
+//     0 = pristine; >0 = some content. We don't peek at row counts —
+//     just table presence — because that's cheap (pg_tables is a view
+//     over pg_class) and sufficient for the UX gate.
+//   - IsExistingRailbase: true iff `_migrations` is among those tables.
+//     If true, the DB is either an existing Railbase install OR a
+//     hostile DB where someone manually created a `_migrations` table.
+//     We trust the marker — collision is implausible enough that we
+//     pay the price (Liquibase / Alembic both do the same).
+//
+// The UI uses these to decide between "green: existing Railbase" /
+// "yellow: foreign non-empty DB, click to proceed anyway" / "neutral:
+// empty DB, continue normally".
 type setupProbeResponse struct {
-	OK          bool   `json:"ok"`
-	DSN         string `json:"dsn,omitempty"`
-	Version     string `json:"version,omitempty"`
-	DBExists    bool   `json:"db_exists,omitempty"`
-	CanCreateDB bool   `json:"can_create_db,omitempty"`
-	Error       string `json:"error,omitempty"`
-	Hint        string `json:"hint,omitempty"`
+	OK                 bool   `json:"ok"`
+	DSN                string `json:"dsn,omitempty"`
+	Version            string `json:"version,omitempty"`
+	DBExists           bool   `json:"db_exists,omitempty"`
+	CanCreateDB        bool   `json:"can_create_db,omitempty"`
+	PublicTableCount   int    `json:"public_table_count"`
+	IsExistingRailbase bool   `json:"is_existing_railbase"`
+	Error              string `json:"error,omitempty"`
+	Hint               string `json:"hint,omitempty"`
 }
 
 // setupSaveResponse is the envelope for /save-db on success. We do
@@ -528,12 +546,32 @@ func probeDSN(ctx context.Context, dsn string) setupProbeResponse {
 		`select rolcreatedb from pg_roles where rolname = current_user`,
 	).Scan(&canCreate)
 
+	// Schema scan: count non-system tables in `public` AND check for
+	// our marker table `_migrations`. Combined into one round-trip
+	// because both consult pg_tables. Best-effort: failure here leaves
+	// the fields at their zero values (count=0, marker=false), which
+	// makes the wizard fall back to "treat as empty / proceed normally"
+	// — strictly less protective than the scan, but never breaks the
+	// happy path.
+	publicCount := 0
+	isExisting := false
+	_ = conn.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*) FROM pg_tables WHERE schemaname = 'public')::int AS table_count,
+		  EXISTS (
+		    SELECT 1 FROM pg_tables
+		    WHERE schemaname = 'public' AND tablename = '_migrations'
+		  ) AS has_railbase_marker
+	`).Scan(&publicCount, &isExisting)
+
 	return setupProbeResponse{
-		OK:          true,
-		DSN:         dsn,
-		Version:     version,
-		DBExists:    true,
-		CanCreateDB: canCreate,
+		OK:                 true,
+		DSN:                dsn,
+		Version:            version,
+		DBExists:           true,
+		CanCreateDB:        canCreate,
+		PublicTableCount:   publicCount,
+		IsExistingRailbase: isExisting,
 	}
 }
 

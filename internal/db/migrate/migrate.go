@@ -41,6 +41,21 @@ import (
 // override with Runner.AllowDrift = true (use for development only).
 var ErrDrift = errors.New("schema drift detected: applied migration content has changed")
 
+// ErrForeignDatabase is returned by Apply when the target database
+// contains tables in `public` BUT no `_migrations` marker — i.e. the
+// operator likely pointed Railbase at a non-empty DB belonging to
+// some other application. Refusing here prevents us from polluting
+// that DB with our service tables and extensions.
+//
+// Callers can override with Runner.AllowForeignDatabase = true; the
+// production wiring in app.go flips that flag when the operator sets
+// RAILBASE_FORCE_INIT=1 (documented escape hatch).
+//
+// Note: this only fires on the FIRST boot against a given DB. Once we
+// have written `_migrations`, the marker is the canonical "this is
+// ours" signal and we proceed normally.
+var ErrForeignDatabase = errors.New("refusing to migrate non-empty database with no Railbase marker (set RAILBASE_FORCE_INIT=1 to override)")
+
 var fileRE = regexp.MustCompile(`^(\d+)_([a-z0-9_]+)\.up\.sql$`)
 
 // Migration is one discovered SQL file.
@@ -115,15 +130,24 @@ func Discover(src Source) ([]Migration, error) {
 
 // Runner applies migrations against a *pgxpool.Pool.
 type Runner struct {
-	Pool       *pgxpool.Pool
-	Log        *slog.Logger
-	AllowDrift bool
+	Pool                 *pgxpool.Pool
+	Log                  *slog.Logger
+	AllowDrift           bool
+	AllowForeignDatabase bool
 }
 
 // Apply ensures _migrations exists, then applies every pending migration
 // in version order. Already-applied migrations are skipped (or reported
 // as drift if their hash no longer matches).
 func (r *Runner) Apply(ctx context.Context, migrations []Migration) error {
+	// Foreign-DB invariant: if the target schema is non-empty AND has
+	// no _migrations marker, bail out before bootstrap() creates one.
+	// This is the second layer of the safety net (the first is the
+	// admin wizard's checkbox gate). It catches the case where the
+	// operator wrote .dsn manually, skipping the wizard.
+	if err := r.checkForeignDatabase(ctx); err != nil {
+		return err
+	}
 	if err := r.bootstrap(ctx); err != nil {
 		return err
 	}
@@ -178,6 +202,53 @@ CREATE TABLE IF NOT EXISTS _migrations (
 func (r *Runner) bootstrap(ctx context.Context) error {
 	if _, err := r.Pool.Exec(ctx, bootstrapSQL); err != nil {
 		return fmt.Errorf("migrate: bootstrap _migrations: %w", err)
+	}
+	return nil
+}
+
+// checkForeignDatabase implements the "is this DB safe to migrate?"
+// invariant described above ErrForeignDatabase. The query runs in one
+// round-trip and consults pg_tables only (no scans, no row counts).
+//
+// Decision matrix:
+//
+//	tables=0 AND marker=false → fresh DB, safe to bootstrap
+//	tables>0 AND marker=true  → existing Railbase, safe to continue
+//	tables>0 AND marker=false → foreign DB, refuse (unless allowed)
+//	tables=0 AND marker=true  → can't happen (marker IS a table)
+//
+// Failure to query pg_tables (e.g. permissions on a managed DB that
+// hides catalog views) is non-fatal — we log a warning and proceed.
+// The wizard scan layer above is the primary protection; this is the
+// belt-and-braces guard for the manual-.dsn path.
+func (r *Runner) checkForeignDatabase(ctx context.Context) error {
+	if r.AllowForeignDatabase {
+		return nil
+	}
+	var tableCount int
+	var hasMarker bool
+	err := r.Pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*) FROM pg_tables WHERE schemaname = 'public')::int,
+		  EXISTS (
+		    SELECT 1 FROM pg_tables
+		    WHERE schemaname = 'public' AND tablename = '_migrations'
+		  )
+	`).Scan(&tableCount, &hasMarker)
+	if err != nil {
+		// Can't introspect. Log and proceed — refusing here would
+		// brick managed-DB setups where pg_tables visibility is
+		// restricted. We're worse off than with the check, but no
+		// worse than pre-v1.7.42.
+		if r.Log != nil {
+			r.Log.Warn("migrate: foreign-db precheck unavailable, continuing",
+				"err", err.Error())
+		}
+		return nil
+	}
+	if tableCount > 0 && !hasMarker {
+		return fmt.Errorf("%w (found %d table(s) in public schema)",
+			ErrForeignDatabase, tableCount)
 	}
 	return nil
 }

@@ -220,6 +220,171 @@ func randomSuffix(t *testing.T) string {
 	return string(out)
 }
 
+// TestSetupDB_ProbeDB_Scan_ExistingRailbase — probe the shared suite
+// DSN, which already has the full migration set applied (incl.
+// `_migrations`). We expect IsExistingRailbase=true + a positive
+// PublicTableCount. This is the green "Existing Railbase instance"
+// case in the wizard.
+func TestSetupDB_ProbeDB_Scan_ExistingRailbase(t *testing.T) {
+	dsn := sharedEmbedPGDSN(t)
+	d := &Deps{}
+	r := newSetupRouter(d)
+	body, _ := json.Marshal(setupDBBody{Driver: "external", ExternalDSN: dsn})
+	req := httptest.NewRequest(http.MethodPost, "/_setup/probe-db",
+		bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp setupProbeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
+	}
+	if !resp.OK {
+		t.Fatalf("ok: want true, got false body=%s", rec.Body.String())
+	}
+	if !resp.IsExistingRailbase {
+		t.Errorf("is_existing_railbase: want true on a fully-migrated DB, got false")
+	}
+	if resp.PublicTableCount <= 0 {
+		t.Errorf("public_table_count: want >0 on a fully-migrated DB, got %d",
+			resp.PublicTableCount)
+	}
+}
+
+// TestSetupDB_ProbeDB_Scan_FreshDB — fresh empty DB. Expect
+// PublicTableCount=0 + IsExistingRailbase=false. This is the
+// neutral "continue normally" case.
+func TestSetupDB_ProbeDB_Scan_FreshDB(t *testing.T) {
+	baseDSN := sharedEmbedPGDSN(t)
+	freshDB := "rb_scan_fresh_" + randomSuffix(t)
+	if err := createDatabaseHelper(t, baseDSN, freshDB); err != nil {
+		t.Fatalf("createDatabaseHelper: %v", err)
+	}
+	t.Cleanup(func() {
+		adminDSN, _ := dsnWithDatabase(baseDSN, "postgres")
+		_ = dropDatabaseHelper(t, adminDSN, freshDB)
+	})
+
+	freshDSN, err := dsnWithDatabase(baseDSN, freshDB)
+	if err != nil {
+		t.Fatalf("dsnWithDatabase: %v", err)
+	}
+	d := &Deps{}
+	r := newSetupRouter(d)
+	body, _ := json.Marshal(setupDBBody{Driver: "external", ExternalDSN: freshDSN})
+	req := httptest.NewRequest(http.MethodPost, "/_setup/probe-db",
+		bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp setupProbeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
+	}
+	if !resp.OK {
+		t.Fatalf("ok: want true, got false body=%s", rec.Body.String())
+	}
+	if resp.IsExistingRailbase {
+		t.Errorf("is_existing_railbase: want false on a fresh DB, got true")
+	}
+	if resp.PublicTableCount != 0 {
+		t.Errorf("public_table_count: want 0 on a fresh DB, got %d",
+			resp.PublicTableCount)
+	}
+}
+
+// TestSetupDB_ProbeDB_Scan_ForeignDB — fresh DB with a non-Railbase
+// table. Expect PublicTableCount>0 + IsExistingRailbase=false. This
+// is the yellow "Foreign DB" gate in the wizard.
+func TestSetupDB_ProbeDB_Scan_ForeignDB(t *testing.T) {
+	baseDSN := sharedEmbedPGDSN(t)
+	freshDB := "rb_scan_foreign_" + randomSuffix(t)
+	if err := createDatabaseHelper(t, baseDSN, freshDB); err != nil {
+		t.Fatalf("createDatabaseHelper: %v", err)
+	}
+	t.Cleanup(func() {
+		adminDSN, _ := dsnWithDatabase(baseDSN, "postgres")
+		_ = dropDatabaseHelper(t, adminDSN, freshDB)
+	})
+
+	freshDSN, err := dsnWithDatabase(baseDSN, freshDB)
+	if err != nil {
+		t.Fatalf("dsnWithDatabase: %v", err)
+	}
+
+	// Create a non-Railbase table inside the new DB. Pretend this is
+	// some other app's data we don't want to clobber.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, freshDSN)
+	if err != nil {
+		t.Fatalf("connect fresh: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `CREATE TABLE foreign_app_users (id SERIAL PRIMARY KEY)`); err != nil {
+		_ = conn.Close(ctx)
+		t.Fatalf("create foreign table: %v", err)
+	}
+	_ = conn.Close(ctx)
+
+	d := &Deps{}
+	r := newSetupRouter(d)
+	body, _ := json.Marshal(setupDBBody{Driver: "external", ExternalDSN: freshDSN})
+	req := httptest.NewRequest(http.MethodPost, "/_setup/probe-db",
+		bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp setupProbeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
+	}
+	if !resp.OK {
+		t.Fatalf("ok: want true (connection succeeded), got false body=%s", rec.Body.String())
+	}
+	if resp.IsExistingRailbase {
+		t.Errorf("is_existing_railbase: want false on a foreign DB, got true")
+	}
+	if resp.PublicTableCount <= 0 {
+		t.Errorf("public_table_count: want >0 on a foreign DB, got %d",
+			resp.PublicTableCount)
+	}
+}
+
+// createDatabaseHelper is the create-side twin of dropDatabaseHelper.
+// Connects to the `postgres` admin DSN on the same server and runs
+// CREATE DATABASE. Returns nil on success or already-exists.
+func createDatabaseHelper(t *testing.T, baseDSN, dbName string) error {
+	t.Helper()
+	adminDSN, err := dsnWithDatabase(baseDSN, "postgres")
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, adminDSN)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+	quoted := pgx.Identifier{dbName}.Sanitize()
+	if _, err := conn.Exec(ctx, "CREATE DATABASE "+quoted); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 // dropDatabaseHelper drops dbName via the postgres admin DSN. Best-
 // effort cleanup; logs but doesn't fail the test on error so an
 // assertion failure isn't masked by a cleanup error.
