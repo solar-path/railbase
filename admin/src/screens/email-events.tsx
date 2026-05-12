@@ -3,6 +3,18 @@ import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import type { EmailEvent } from "../api/types";
 import { Pager } from "../layout/pager";
+import { Button } from "@/lib/ui/button.ui";
+import { Input } from "@/lib/ui/input.ui";
+import { Badge } from "@/lib/ui/badge.ui";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/lib/ui/table.ui";
+import { Card, CardContent } from "@/lib/ui/card.ui";
 
 // Email events browser — paginated, filterable list of `_email_events`
 // rows (one row per recipient per send, populated by every
@@ -73,7 +85,7 @@ export function EmailEventsScreen() {
       <header className="flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Email events</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-sm text-muted-foreground">
             {total} event{total === 1 ? "" : "s"} total. Showing newest first.
             One row per recipient per <code className="rb-mono">mailer.Send</code> call.
           </p>
@@ -83,21 +95,21 @@ export function EmailEventsScreen() {
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">recipient</span>
-          <input
+          <span className="text-muted-foreground">recipient</span>
+          <Input
             type="text"
             value={recipientInput}
-            onChange={(e) => setRecipientInput(e.target.value)}
+            onInput={(e) => setRecipientInput(e.currentTarget.value)}
             placeholder="alice@example.com"
-            className="rounded border border-neutral-300 px-2 py-1 w-56 rb-mono text-xs"
+            className="w-56 h-8 rb-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">event</span>
+          <span className="text-muted-foreground">event</span>
           <select
             value={event}
-            onChange={(e) => setEvent(e.target.value as EventFilter)}
-            className="rounded border border-neutral-300 px-2 py-1"
+            onChange={(e) => setEvent(e.currentTarget.value as EventFilter)}
+            className="rounded border border-input px-2 py-1 bg-transparent"
           >
             <option value="">all</option>
             <option value="sent">sent</option>
@@ -109,21 +121,21 @@ export function EmailEventsScreen() {
           </select>
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">template</span>
-          <input
+          <span className="text-muted-foreground">template</span>
+          <Input
             type="text"
             value={template}
-            onChange={(e) => setTemplate(e.target.value)}
+            onInput={(e) => setTemplate(e.currentTarget.value)}
             placeholder="invite_received"
-            className="rounded border border-neutral-300 px-2 py-1 w-48 rb-mono text-xs"
+            className="w-48 h-8 rb-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">bounce_type</span>
+          <span className="text-muted-foreground">bounce_type</span>
           <select
             value={bounceType}
-            onChange={(e) => setBounceType(e.target.value as BounceTypeFilter)}
-            className="rounded border border-neutral-300 px-2 py-1"
+            onChange={(e) => setBounceType(e.currentTarget.value as BounceTypeFilter)}
+            className="rounded border border-input px-2 py-1 bg-transparent"
           >
             <option value="">all</option>
             <option value="hard">hard</option>
@@ -132,26 +144,27 @@ export function EmailEventsScreen() {
           </select>
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">since</span>
-          <input
+          <span className="text-muted-foreground">since</span>
+          <Input
             type="datetime-local"
             value={since}
-            onChange={(e) => setSince(e.target.value)}
-            className="rounded border border-neutral-300 px-2 py-1 text-xs"
+            onInput={(e) => setSince(e.currentTarget.value)}
+            className="h-8 text-xs w-auto"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">until</span>
-          <input
+          <span className="text-muted-foreground">until</span>
+          <Input
             type="datetime-local"
             value={until}
-            onChange={(e) => setUntil(e.target.value)}
-            className="rounded border border-neutral-300 px-2 py-1 text-xs"
+            onInput={(e) => setUntil(e.currentTarget.value)}
+            className="h-8 text-xs w-auto"
           />
         </label>
         {hasFilter ? (
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => {
               setRecipientInput("");
               setRecipient("");
@@ -161,77 +174,76 @@ export function EmailEventsScreen() {
               setSince("");
               setUntil("");
             }}
-            className="rounded border border-neutral-300 px-2 py-1 text-neutral-600 hover:bg-neutral-100"
           >
             clear
-          </button>
+          </Button>
         ) : null}
       </div>
 
-      <div className="rounded border border-neutral-200 bg-white overflow-x-auto">
-        <table className="rb-table">
-          <thead>
-            <tr>
-              <th>time</th>
-              <th>event</th>
-              <th>recipient</th>
-              <th>subject</th>
-              <th>template</th>
-              <th>driver</th>
-              <th>code</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(q.data?.items ?? []).map((e) => {
-              const isOpen = expandedId === e.id;
-              return (
-                <Fragment key={e.id}>
-                  <tr
-                    onClick={() => setExpandedId(isOpen ? null : e.id)}
-                    className="cursor-pointer"
-                  >
-                    <td className="rb-mono text-xs text-neutral-500 whitespace-nowrap">
-                      {e.occurred_at}
-                    </td>
-                    <td>
-                      <span className={"rounded px-1.5 py-0.5 text-xs " + eventColor(e.event)}>
-                        {e.event}
-                      </span>
-                    </td>
-                    <td className="rb-mono text-xs max-w-xs truncate" title={e.recipient}>
-                      {e.recipient}
-                    </td>
-                    <td className="max-w-md truncate" title={e.subject ?? ""}>
-                      {e.subject || <span className="text-neutral-400">—</span>}
-                    </td>
-                    <td className="rb-mono text-xs" title={e.template ?? ""}>
-                      {e.template || <span className="text-neutral-400">—</span>}
-                    </td>
-                    <td className="rb-mono text-xs">{e.driver}</td>
-                    <td className="rb-mono text-xs" title={e.error_code ?? ""}>
-                      {e.error_code || <span className="text-neutral-400">—</span>}
-                    </td>
-                  </tr>
-                  {isOpen ? (
-                    <tr>
-                      <td colSpan={7} className="bg-neutral-50">
-                        <ExpandedRow event={e} />
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              );
-            })}
-            {q.data?.items.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="text-neutral-400 text-center py-4">
-                  No email events.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+      <Card>
+        <CardContent className="p-0 overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>time</TableHead>
+                <TableHead>event</TableHead>
+                <TableHead>recipient</TableHead>
+                <TableHead>subject</TableHead>
+                <TableHead>template</TableHead>
+                <TableHead>driver</TableHead>
+                <TableHead>code</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(q.data?.items ?? []).map((e) => {
+                const isOpen = expandedId === e.id;
+                return (
+                  <Fragment key={e.id}>
+                    <TableRow
+                      onClick={() => setExpandedId(isOpen ? null : e.id)}
+                      className="cursor-pointer"
+                    >
+                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                        {e.occurred_at}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={eventVariant(e.event)}>{e.event}</Badge>
+                      </TableCell>
+                      <TableCell className="rb-mono text-xs max-w-xs truncate" title={e.recipient}>
+                        {e.recipient}
+                      </TableCell>
+                      <TableCell className="max-w-md truncate" title={e.subject ?? ""}>
+                        {e.subject || <span className="text-muted-foreground">—</span>}
+                      </TableCell>
+                      <TableCell className="rb-mono text-xs" title={e.template ?? ""}>
+                        {e.template || <span className="text-muted-foreground">—</span>}
+                      </TableCell>
+                      <TableCell className="rb-mono text-xs">{e.driver}</TableCell>
+                      <TableCell className="rb-mono text-xs" title={e.error_code ?? ""}>
+                        {e.error_code || <span className="text-muted-foreground">—</span>}
+                      </TableCell>
+                    </TableRow>
+                    {isOpen ? (
+                      <TableRow>
+                        <TableCell colSpan={7} className="bg-muted">
+                          <ExpandedRow event={e} />
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+              {q.data?.items.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-muted-foreground text-center py-4">
+                    No email events.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -247,26 +259,21 @@ function localToRFC3339(local: string): string {
   return d.toISOString();
 }
 
-// eventColor pairs each event type with a Tailwind pill class. Sent
-// reads as a "happy" green; failed / bounced / complained are warn /
-// red / amber to surface in operator scans; opened / clicked are
-// neutral-info because they're informational, not actionable.
-function eventColor(ev: string): string {
+// eventVariant maps an email event to the closest Badge variant. The
+// kit's badge palette is small (default/secondary/destructive/outline)
+// so we approximate: sent → default (positive primary), failed →
+// destructive, bounced / complained → destructive (they read as bad
+// outcomes for the operator), opened / clicked → secondary
+// (informational), anything else → outline.
+function eventVariant(ev: string): "default" | "secondary" | "destructive" | "outline" {
   switch (ev) {
-    case "sent":
-      return "bg-emerald-50 text-emerald-700 border border-emerald-200";
-    case "failed":
-      return "bg-red-50 text-red-700 border border-red-200";
-    case "bounced":
-      return "bg-amber-50 text-amber-700 border border-amber-200";
-    case "complained":
-      return "bg-rose-50 text-rose-700 border border-rose-200";
-    case "opened":
-      return "bg-sky-50 text-sky-700 border border-sky-200";
-    case "clicked":
-      return "bg-indigo-50 text-indigo-700 border border-indigo-200";
-    default:
-      return "bg-neutral-50 text-neutral-700 border border-neutral-200";
+    case "sent":       return "default";
+    case "failed":     return "destructive";
+    case "bounced":    return "destructive";
+    case "complained": return "destructive";
+    case "opened":     return "secondary";
+    case "clicked":    return "secondary";
+    default:           return "outline";
   }
 }
 
@@ -287,8 +294,8 @@ function ExpandedRow({ event }: { event: EmailEvent }) {
       ) : null}
       {event.metadata && Object.keys(event.metadata).length > 0 ? (
         <div>
-          <div className="text-neutral-500">metadata</div>
-          <pre className="rb-mono text-xs text-neutral-700 whitespace-pre-wrap break-all rounded bg-white border border-neutral-200 p-2 mt-1">
+          <div className="text-muted-foreground">metadata</div>
+          <pre className="rb-mono text-xs text-foreground whitespace-pre-wrap break-all rounded bg-background border border-input p-2 mt-1">
             {JSON.stringify(event.metadata, null, 2)}
           </pre>
         </div>
@@ -300,8 +307,8 @@ function ExpandedRow({ event }: { event: EmailEvent }) {
 function Field({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex gap-2">
-      <span className="text-neutral-500 w-32 shrink-0">{label}</span>
-      <span className={"text-neutral-800 break-all " + (mono ? "rb-mono" : "")}>{value}</span>
+      <span className="text-muted-foreground w-32 shrink-0">{label}</span>
+      <span className={"text-foreground break-all " + (mono ? "rb-mono" : "")}>{value}</span>
     </div>
   );
 }

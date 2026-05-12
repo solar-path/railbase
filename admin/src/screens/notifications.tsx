@@ -2,6 +2,19 @@ import { Fragment, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import { Pager } from "../layout/pager";
+import { Button } from "@/lib/ui/button.ui";
+import { Input } from "@/lib/ui/input.ui";
+import { Badge } from "@/lib/ui/badge.ui";
+import { Checkbox } from "@/lib/ui/checkbox.ui";
+import { Card, CardContent } from "@/lib/ui/card.ui";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/lib/ui/table.ui";
 
 // Notifications browser — cross-user log of every persisted notification.
 // Backend endpoint: GET /api/_admin/notifications (v1.7.10+).
@@ -88,7 +101,7 @@ export function NotificationsScreen() {
       <header className="flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Notifications</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-sm text-muted-foreground">
             {stats
               ? `${stats.total} delivered (${stats.unread} unread). `
               : ""}
@@ -101,48 +114,48 @@ export function NotificationsScreen() {
       {stats ? (
         <div className="flex gap-2 items-baseline flex-wrap">
           {topKinds.map(([k, n]) => (
-            <span
+            <Badge
               key={"kind-" + k}
-              className="inline-block bg-neutral-100 rounded px-2 py-0.5 text-xs"
+              variant="secondary"
               title={`${n} notifications with kind=${k}`}
             >
               <span className="rb-mono">{k}</span>
-              <span className="text-neutral-500"> · {n}</span>
-            </span>
+              <span className="text-muted-foreground"> · {n}</span>
+            </Badge>
           ))}
           {topChannels.map(([c, n]) => (
-            <span
+            <Badge
               key={"channel-" + c}
-              className="inline-block bg-neutral-100 rounded px-2 py-0.5 text-xs"
+              variant="secondary"
               title={`${n} notifications delivered via ${c}`}
             >
               {c}
-              <span className="text-neutral-500"> · {n}</span>
-            </span>
+              <span className="text-muted-foreground"> · {n}</span>
+            </Badge>
           ))}
           {topKinds.length === 0 && topChannels.length === 0 ? (
-            <span className="text-xs text-neutral-400">No deliveries yet.</span>
+            <span className="text-xs text-muted-foreground">No deliveries yet.</span>
           ) : null}
         </div>
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">kind</span>
-          <input
+          <span className="text-muted-foreground">kind</span>
+          <Input
             type="text"
             value={kindInput}
-            onChange={(e) => setKindInput(e.target.value)}
+            onInput={(e) => setKindInput(e.currentTarget.value)}
             placeholder="exact match"
-            className="rounded border border-neutral-300 px-2 py-1 w-56 rb-mono text-xs"
+            className="w-56 h-8 rb-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">channel</span>
+          <span className="text-muted-foreground">channel</span>
           <select
             value={channel}
-            onChange={(e) => setChannel(e.target.value as ChannelFilter)}
-            className="rounded border border-neutral-300 px-2 py-1"
+            onChange={(e) => setChannel(e.currentTarget.value as ChannelFilter)}
+            className="rounded border border-input px-2 py-1 bg-transparent"
           >
             <option value="">all</option>
             <option value="inapp">inapp</option>
@@ -151,26 +164,26 @@ export function NotificationsScreen() {
           </select>
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">user_id</span>
-          <input
+          <span className="text-muted-foreground">user_id</span>
+          <Input
             type="text"
             value={userIdInput}
-            onChange={(e) => setUserIdInput(e.target.value)}
+            onInput={(e) => setUserIdInput(e.currentTarget.value)}
             placeholder="UUID"
-            className="rounded border border-neutral-300 px-2 py-1 w-64 rb-mono text-xs"
+            className="w-64 h-8 rb-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={unreadOnly}
-            onChange={(e) => setUnreadOnly(e.target.checked)}
+            onCheckedChange={(c) => setUnreadOnly(c === true)}
           />
-          <span className="text-neutral-600">unread only</span>
+          <span className="text-muted-foreground">unread only</span>
         </label>
         {(kind || channel || userId || unreadOnly) ? (
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => {
               setKindInput("");
               setKind("");
@@ -179,118 +192,122 @@ export function NotificationsScreen() {
               setUserId("");
               setUnreadOnly(false);
             }}
-            className="rounded border border-neutral-300 px-2 py-1 text-neutral-600 hover:bg-neutral-100"
           >
             clear
-          </button>
+          </Button>
         ) : null}
       </div>
 
-      <div className="rounded border border-neutral-200 bg-white overflow-x-auto">
-        <table className="rb-table">
-          <thead>
-            <tr>
-              <th>created</th>
-              <th>kind</th>
-              <th>channel</th>
-              <th>title</th>
-              <th>user</th>
-              <th>read</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(listQ.data?.items ?? []).map((n) => {
-              const isOpen = expandedId === n.id;
-              return (
-                <Fragment key={n.id}>
-                  <tr
-                    onClick={() => setExpandedId(isOpen ? null : n.id)}
-                    className="cursor-pointer"
-                  >
-                    <td className="rb-mono text-xs text-neutral-500 whitespace-nowrap">
-                      {n.created_at}
-                    </td>
-                    <td className="rb-mono">{n.kind}</td>
-                    <td>
-                      <span className={"rounded px-1.5 py-0.5 text-xs " + channelColor(n.channel)}>
-                        {n.channel}
-                      </span>
-                    </td>
-                    <td className="max-w-md truncate">{n.title}</td>
-                    <td className="rb-mono text-xs" title={n.user_id}>
-                      {n.user_id.slice(0, 8)}…
-                    </td>
-                    <td>
-                      {n.read_at ? (
-                        <span className="text-xs text-neutral-400">read</span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
-                          <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
-                          unread
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                  {isOpen ? (
-                    <tr>
-                      <td colSpan={6} className="bg-neutral-50">
-                        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 p-3 text-xs">
-                          <dt className="text-neutral-500">id</dt>
-                          <dd className="rb-mono">{n.id}</dd>
-                          <dt className="text-neutral-500">user_id</dt>
-                          <dd className="rb-mono">{n.user_id}</dd>
-                          <dt className="text-neutral-500">tenant_id</dt>
-                          <dd className="rb-mono">{n.tenant_id ?? "—"}</dd>
-                          <dt className="text-neutral-500">priority</dt>
-                          <dd className="rb-mono">{n.priority}</dd>
-                          <dt className="text-neutral-500">read_at</dt>
-                          <dd className="rb-mono">{n.read_at ?? "—"}</dd>
-                          <dt className="text-neutral-500">expires_at</dt>
-                          <dd className="rb-mono">{n.expires_at ?? "—"}</dd>
-                          {n.body ? (
-                            <>
-                              <dt className="text-neutral-500 self-start">body</dt>
-                              <dd>
-                                <pre className="rb-mono text-xs text-neutral-700 whitespace-pre-wrap break-all m-0">
-                                  {n.body}
-                                </pre>
-                              </dd>
-                            </>
-                          ) : null}
-                          <dt className="text-neutral-500 self-start">payload</dt>
-                          <dd>
-                            <pre className="rb-mono text-xs text-neutral-700 whitespace-pre-wrap break-all m-0">
-                              {JSON.stringify(n.payload ?? {}, null, 2)}
-                            </pre>
-                          </dd>
-                        </dl>
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              );
-            })}
-            {listQ.data?.items.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="text-neutral-400 text-center py-4">
-                  No notifications.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+      <Card>
+        <CardContent className="p-0 overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>created</TableHead>
+                <TableHead>kind</TableHead>
+                <TableHead>channel</TableHead>
+                <TableHead>title</TableHead>
+                <TableHead>user</TableHead>
+                <TableHead>read</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(listQ.data?.items ?? []).map((n) => {
+                const isOpen = expandedId === n.id;
+                return (
+                  <Fragment key={n.id}>
+                    <TableRow
+                      onClick={() => setExpandedId(isOpen ? null : n.id)}
+                      className="cursor-pointer"
+                    >
+                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                        {n.created_at}
+                      </TableCell>
+                      <TableCell className="rb-mono">{n.kind}</TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={channelBadgeClass(n.channel)}
+                        >
+                          {n.channel}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="max-w-md truncate">{n.title}</TableCell>
+                      <TableCell className="rb-mono text-xs" title={n.user_id}>
+                        {n.user_id.slice(0, 8)}…
+                      </TableCell>
+                      <TableCell>
+                        {n.read_at ? (
+                          <span className="text-xs text-muted-foreground">read</span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
+                            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+                            unread
+                          </span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                    {isOpen ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="bg-muted">
+                          <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 p-3 text-xs">
+                            <dt className="text-muted-foreground">id</dt>
+                            <dd className="rb-mono">{n.id}</dd>
+                            <dt className="text-muted-foreground">user_id</dt>
+                            <dd className="rb-mono">{n.user_id}</dd>
+                            <dt className="text-muted-foreground">tenant_id</dt>
+                            <dd className="rb-mono">{n.tenant_id ?? "—"}</dd>
+                            <dt className="text-muted-foreground">priority</dt>
+                            <dd className="rb-mono">{n.priority}</dd>
+                            <dt className="text-muted-foreground">read_at</dt>
+                            <dd className="rb-mono">{n.read_at ?? "—"}</dd>
+                            <dt className="text-muted-foreground">expires_at</dt>
+                            <dd className="rb-mono">{n.expires_at ?? "—"}</dd>
+                            {n.body ? (
+                              <>
+                                <dt className="text-muted-foreground self-start">body</dt>
+                                <dd>
+                                  <pre className="rb-mono text-xs text-foreground whitespace-pre-wrap break-all m-0">
+                                    {n.body}
+                                  </pre>
+                                </dd>
+                              </>
+                            ) : null}
+                            <dt className="text-muted-foreground self-start">payload</dt>
+                            <dd>
+                              <pre className="rb-mono text-xs text-foreground whitespace-pre-wrap break-all m-0">
+                                {JSON.stringify(n.payload ?? {}, null, 2)}
+                              </pre>
+                            </dd>
+                          </dl>
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+              {listQ.data?.items.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-muted-foreground text-center py-4">
+                    No notifications.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
 // Channel badge palette per spec: inapp → neutral, email → sky,
 // push → emerald.
-function channelColor(c: string): string {
+function channelBadgeClass(c: string): string {
   switch (c) {
-    case "inapp": return "bg-neutral-50 text-neutral-700 border border-neutral-200";
-    case "email": return "bg-sky-50 text-sky-700 border border-sky-200";
-    case "push":  return "bg-emerald-50 text-emerald-700 border border-emerald-200";
-    default:      return "bg-neutral-50 text-neutral-700 border border-neutral-200";
+    case "inapp": return "border-input bg-muted text-foreground";
+    case "email": return "border-sky-200 bg-sky-50 text-sky-700";
+    case "push":  return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    default:      return "border-input bg-muted text-foreground";
   }
 }

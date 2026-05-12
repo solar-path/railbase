@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { adminAPI } from "../api/admin";
+import { isAPIError } from "../api/client";
 import { useAuth } from "../auth/context";
 import { Pager } from "../layout/pager";
 import type {
@@ -9,6 +13,27 @@ import type {
   NotificationPrefsEnvelope,
   NotificationUserSettings,
 } from "../api/types";
+import { Button } from "@/lib/ui/button.ui";
+import { Input } from "@/lib/ui/input.ui";
+import { Switch } from "@/lib/ui/switch.ui";
+import { Card } from "@/lib/ui/card.ui";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/lib/ui/form.ui";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/lib/ui/table.ui";
 
 // Admin notification preferences editor (v1.7.35 §3.9.1). Closes the
 // v1.5.3 "admin-side preferences editor deferred" note. Backend
@@ -58,6 +83,49 @@ const TZ_QUICKPICKS = [
   "Australia/Sydney",
 ];
 
+// Per-user settings form schema. The per-kind channel toggles are
+// dynamic master-detail state and stay outside zod (see comment near
+// UserPrefsEditor). Only the quiet-hours + digest settings form is
+// modelled here.
+//
+// HH:MM[:SS] accepted — the backend re-parses either form via
+// parseClockTime. Empty string disables quiet hours.
+const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+
+const settingsFormSchema = z.object({
+  quiet_hours_start: z
+    .string()
+    .refine((v) => v === "" || TIME_REGEX.test(v), {
+      message: "Use HH:MM (e.g. 22:00)",
+    }),
+  quiet_hours_end: z
+    .string()
+    .refine((v) => v === "" || TIME_REGEX.test(v), {
+      message: "Use HH:MM (e.g. 07:00)",
+    }),
+  quiet_hours_tz: z.string(),
+  digest_mode: z.enum(["off", "daily", "weekly"]),
+  digest_hour: z
+    .number()
+    .int("must be an integer")
+    .min(0, "0-23")
+    .max(23, "0-23"),
+  digest_dow: z.number().int().min(0).max(6),
+  digest_tz: z.string(),
+});
+
+type SettingsFormValues = z.infer<typeof settingsFormSchema>;
+
+const SETTINGS_DEFAULTS: SettingsFormValues = {
+  quiet_hours_start: "",
+  quiet_hours_end: "",
+  quiet_hours_tz: "",
+  digest_mode: "off",
+  digest_hour: 8,
+  digest_dow: 1,
+  digest_tz: "",
+};
+
 export function NotificationsPrefsScreen() {
   // --- Left pane state ---
   const [page, setPage] = useState(1);
@@ -94,7 +162,7 @@ export function NotificationsPrefsScreen() {
       <header className="flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Notification preferences</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-sm text-muted-foreground">
             Edit per-user notification posture: per-kind/per-channel toggles
             plus quiet hours and digest mode. Changes are audited as{" "}
             <span className="rb-mono">notifications.admin_prefs_changed</span>.
@@ -104,30 +172,30 @@ export function NotificationsPrefsScreen() {
 
       <div className="grid grid-cols-[320px_1fr] gap-4 min-h-[480px]">
         {/* Left pane: user list */}
-        <div className="rounded border border-neutral-200 bg-white flex flex-col">
-          <div className="px-3 py-2 border-b border-neutral-200">
-            <input
+        <Card className="flex flex-col p-0">
+          <div className="px-3 py-2 border-b">
+            <Input
               type="text"
               value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
+              onInput={(e) => setSearchInput(e.currentTarget.value)}
               placeholder="Filter by email…"
-              className="w-full rounded border border-neutral-300 px-2 py-1 text-sm"
-              spellCheck={false}
+              className="h-8 text-sm"
+              spellcheck={false}
               autoComplete="off"
             />
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto">
             {usersQ.isLoading ? (
-              <div className="p-4 text-sm text-neutral-500">Loading…</div>
+              <div className="p-4 text-sm text-muted-foreground">Loading…</div>
             ) : users.length === 0 ? (
-              <div className="p-4 text-sm text-neutral-400">
+              <div className="p-4 text-sm text-muted-foreground">
                 {search
                   ? "No users match that filter."
                   : "No users have notification preferences yet."}
               </div>
             ) : (
-              <ul className="divide-y divide-neutral-100">
+              <ul className="divide-y">
                 {users.map((u) => (
                   <li
                     key={u.user_id}
@@ -136,7 +204,7 @@ export function NotificationsPrefsScreen() {
                       "px-3 py-2 cursor-pointer text-sm " +
                       (selectedUserID === u.user_id
                         ? "bg-neutral-900 text-white"
-                        : "hover:bg-neutral-50")
+                        : "hover:bg-muted")
                     }
                   >
                     <div className="truncate font-medium">
@@ -151,7 +219,7 @@ export function NotificationsPrefsScreen() {
                         "text-xs " +
                         (selectedUserID === u.user_id
                           ? "text-neutral-300"
-                          : "text-neutral-500")
+                          : "text-muted-foreground")
                       }
                     >
                       <span className="rb-mono">{u.user_id.slice(0, 8)}…</span>
@@ -170,11 +238,11 @@ export function NotificationsPrefsScreen() {
             )}
           </div>
 
-          <div className="border-t border-neutral-200 px-3 py-2 flex items-center justify-between">
-            <span className="text-xs text-neutral-500">{total} users</span>
+          <div className="border-t px-3 py-2 flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">{total} users</span>
             <Pager page={page} totalPages={totalPages} onChange={setPage} />
           </div>
-        </div>
+        </Card>
 
         {/* Right pane: editor */}
         <div className="min-w-0">
@@ -191,12 +259,12 @@ export function NotificationsPrefsScreen() {
 
 function EmptyDetailState() {
   return (
-    <div className="rounded-lg border-2 border-dashed border-neutral-300 bg-neutral-50 p-8 text-center h-full flex items-center justify-center">
+    <div className="rounded-lg border-2 border-dashed border-input bg-muted p-8 text-center h-full flex items-center justify-center">
       <div>
-        <div className="text-sm font-medium text-neutral-700">
+        <div className="text-sm font-medium text-foreground">
           Select a user to edit their preferences.
         </div>
-        <div className="text-xs text-neutral-500 mt-1">
+        <div className="text-xs text-muted-foreground mt-1">
           The left pane lists every user who has at least one
           notification preference or settings row.
         </div>
@@ -219,35 +287,52 @@ function UserPrefsEditor({ userID }: { userID: string }) {
 
   // Local editable copy. We rebuild it whenever the server payload
   // changes (loaded fresh / after save invalidation).
+  //
+  // Note: the per-kind / per-channel prefs grid stays on useState
+  // intentionally — the column set is dynamic per kind, the rows are
+  // master-detail UI state, and the "Save" button batches whatever
+  // toggles the operator made. The settings block (below) is the part
+  // we hoisted onto react-hook-form + zod.
   const [prefs, setPrefs] = useState<NotificationPrefRow[]>([]);
-  const [settings, setSettings] = useState<NotificationUserSettings>({
-    quiet_hours_start: "",
-    quiet_hours_end: "",
-    quiet_hours_tz: "",
-    digest_mode: "off",
-    digest_hour: 8,
-    digest_dow: 1,
-    digest_tz: "",
-  });
   // Track an in-progress "add row" so the operator can introduce a
   // new (kind, channel) tuple without immediately writing to the DB.
   const [newKind, setNewKind] = useState("");
 
+  // Settings form — quiet-hours + digest fields. Trim seconds on the
+  // way in so the <input type="time"> renders the short form; the
+  // backend re-parses either shape via parseClockTime on save.
+  const settingsForm = useForm<SettingsFormValues>({
+    resolver: zodResolver(settingsFormSchema),
+    defaultValues: SETTINGS_DEFAULTS,
+    mode: "onSubmit",
+  });
+
   useEffect(() => {
-    if (envQ.data) {
-      setPrefs(envQ.data.prefs ?? []);
-      setSettings(
-        envQ.data.settings ?? {
-          quiet_hours_start: "",
-          quiet_hours_end: "",
-          quiet_hours_tz: "",
-          digest_mode: "off",
-          digest_hour: 8,
-          digest_dow: 1,
-          digest_tz: "",
-        },
-      );
-    }
+    if (!envQ.data) return;
+    setPrefs(envQ.data.prefs ?? []);
+    const s = envQ.data.settings;
+    settingsForm.reset(
+      s
+        ? {
+            quiet_hours_start: trimSeconds(s.quiet_hours_start),
+            quiet_hours_end: trimSeconds(s.quiet_hours_end),
+            quiet_hours_tz: s.quiet_hours_tz,
+            // Server type widens to string for forward-compat; zod
+            // narrows back to the enum, with "off" as the safe
+            // fallback for any unrecognised mode.
+            digest_mode:
+              s.digest_mode === "daily" || s.digest_mode === "weekly"
+                ? s.digest_mode
+                : "off",
+            digest_hour: s.digest_hour,
+            digest_dow: s.digest_dow,
+            digest_tz: s.digest_tz,
+          }
+        : SETTINGS_DEFAULTS,
+    );
+    // settingsForm is stable per render. Avoid re-running on form
+    // identity churn by depending only on the server payload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [envQ.data]);
 
   const saveM = useMutation({
@@ -256,6 +341,34 @@ function UserPrefsEditor({ userID }: { userID: string }) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["notifications-prefs", userID] });
       void qc.invalidateQueries({ queryKey: ["notifications-prefs-users"] });
+    },
+    onError: (err) => {
+      // 422 with field-level errors → setError per field. Otherwise
+      // fall back to the inline banner the header strip already
+      // renders from saveM.error.
+      if (isAPIError(err) && err.status === 422) {
+        const details = err.body.details;
+        const fields =
+          details &&
+          typeof details === "object" &&
+          "fields" in details &&
+          (details as { fields?: unknown }).fields &&
+          typeof (details as { fields?: unknown }).fields === "object"
+            ? ((details as { fields: Record<string, unknown> }).fields)
+            : null;
+        if (fields) {
+          for (const [k, v] of Object.entries(fields)) {
+            const msg = typeof v === "string" ? v : String(v);
+            // Only map keys that are actually in our settings schema.
+            if (k in SETTINGS_DEFAULTS) {
+              settingsForm.setError(k as keyof SettingsFormValues, {
+                type: "server",
+                message: msg,
+              });
+            }
+          }
+        }
+      }
     },
   });
 
@@ -309,17 +422,21 @@ function UserPrefsEditor({ userID }: { userID: string }) {
     setPrefs((current) => current.filter((p) => p.kind !== kind));
   };
 
-  const onSave = () => {
+  // The header Save button submits the settings form, which runs
+  // zod validation first and only then PUTs the combined envelope
+  // (prefs grid + validated settings). Field-level errors stay on the
+  // form; transport errors surface through saveM.error in the header.
+  const onSave = settingsForm.handleSubmit((values) => {
     saveM.mutate({
       user_id: userID,
       prefs,
-      settings,
+      settings: values satisfies NotificationUserSettings,
     });
-  };
+  });
 
   if (envQ.isLoading) {
     return (
-      <div className="text-sm text-neutral-500 p-4">Loading prefs…</div>
+      <div className="text-sm text-muted-foreground p-4">Loading prefs…</div>
     );
   }
   if (envQ.error) {
@@ -340,14 +457,14 @@ function UserPrefsEditor({ userID }: { userID: string }) {
   return (
     <div className="space-y-4">
       {/* Header strip for the selected user */}
-      <div className="rounded border border-neutral-200 bg-white px-4 py-2 flex items-center justify-between">
+      <Card className="px-4 py-2 flex items-center justify-between">
         <div className="min-w-0">
           <div className="text-sm font-medium truncate">
             {envQ.data?.email || (
               <span className="rb-mono text-xs">{userID}</span>
             )}
           </div>
-          <div className="rb-mono text-[11px] text-neutral-500 truncate">
+          <div className="rb-mono text-[11px] text-muted-foreground truncate">
             {userID}
           </div>
         </div>
@@ -356,30 +473,30 @@ function UserPrefsEditor({ userID }: { userID: string }) {
             <span className="text-xs text-emerald-700">Saved.</span>
           ) : null}
           {saveM.error ? (
-            <span className="text-xs text-red-700">
+            <span className="text-xs text-destructive">
               {(saveM.error as Error).message}
             </span>
           ) : null}
-          <button
+          <Button
             type="button"
+            size="sm"
             onClick={onSave}
             disabled={saveM.isPending}
-            className="rounded bg-neutral-900 px-3 py-1 text-sm text-white hover:bg-neutral-800 disabled:opacity-50"
           >
             {saveM.isPending ? "Saving…" : "Save"}
-          </button>
+          </Button>
         </div>
-      </div>
+      </Card>
 
       {/* Card 1: prefs grid */}
-      <section className="rounded border border-neutral-200 bg-white">
-        <header className="px-4 py-2 border-b border-neutral-200 flex items-center justify-between">
+      <Card className="p-0">
+        <header className="px-4 py-2 border-b flex items-center justify-between">
           <h2 className="text-sm font-semibold">Per-kind preferences</h2>
           <div className="flex items-center gap-2">
-            <input
+            <Input
               type="text"
               value={newKind}
-              onChange={(e) => setNewKind(e.target.value)}
+              onInput={(e) => setNewKind(e.currentTarget.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
@@ -387,163 +504,230 @@ function UserPrefsEditor({ userID }: { userID: string }) {
                 }
               }}
               placeholder="Add kind (e.g. invite_received)"
-              className="rounded border border-neutral-300 px-2 py-1 text-xs w-56 rb-mono"
+              className="h-7 w-56 text-xs rb-mono"
             />
-            <button
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
               onClick={() => addKindRow(newKind)}
               disabled={!newKind.trim()}
-              className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 disabled:opacity-30"
             >
               + add
-            </button>
+            </Button>
           </div>
         </header>
 
         {prefsByKind.length === 0 ? (
-          <div className="px-4 py-6 text-sm text-neutral-500 text-center">
+          <div className="px-4 py-6 text-sm text-muted-foreground text-center">
             No per-kind preferences yet. Add a kind above to override
             channel defaults.
           </div>
         ) : (
-          <table className="rb-table">
-            <thead>
-              <tr>
-                <th>kind</th>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>kind</TableHead>
                 {CHANNELS.map((c) => (
-                  <th key={c} className="text-center">
+                  <TableHead key={c} className="text-center">
                     {c}
-                  </th>
+                  </TableHead>
                 ))}
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
+                <TableHead></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {prefsByKind.map(({ kind, byChannel }) => (
-                <tr key={kind}>
-                  <td className="rb-mono text-sm">{kind}</td>
+                <TableRow key={kind}>
+                  <TableCell className="rb-mono text-sm">{kind}</TableCell>
                   {CHANNELS.map((c) => {
                     const row = byChannel.get(c);
                     return (
-                      <td key={c} className="text-center">
-                        <input
-                          type="checkbox"
-                          checked={row?.enabled ?? false}
-                          onChange={() => togglePref(kind, c)}
-                          aria-label={`${kind} on ${c}`}
-                        />
-                      </td>
+                      <TableCell key={c} className="text-center">
+                        <div className="inline-flex">
+                          <Switch
+                            checked={row?.enabled ?? false}
+                            onCheckedChange={() => togglePref(kind, c)}
+                            aria-label={`${kind} on ${c}`}
+                          />
+                        </div>
+                      </TableCell>
                     );
                   })}
-                  <td className="text-right">
-                    <button
+                  <TableCell className="text-right">
+                    <Button
                       type="button"
+                      variant="link"
+                      size="sm"
                       onClick={() => removeKindRow(kind)}
-                      className="text-xs text-red-600 hover:underline"
+                      className="h-auto px-0 text-xs text-destructive"
                     >
                       remove
-                    </button>
-                  </td>
-                </tr>
+                    </Button>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
-      </section>
+      </Card>
 
-      {/* Card 2: settings form */}
-      <section className="rounded border border-neutral-200 bg-white">
-        <header className="px-4 py-2 border-b border-neutral-200">
+      {/* Card 2: settings form (RHF + zod) */}
+      <Card className="p-0">
+        <header className="px-4 py-2 border-b">
           <h2 className="text-sm font-semibold">Quiet hours and digest</h2>
         </header>
-        <div className="p-4 grid grid-cols-2 gap-4 text-sm">
-          <SettingsField label="Quiet hours start">
-            <input
-              type="time"
-              value={trimSeconds(settings.quiet_hours_start)}
-              onChange={(e) =>
-                setSettings({ ...settings, quiet_hours_start: e.target.value })
-              }
-              className="rounded border border-neutral-300 px-2 py-1 rb-mono"
+        <Form {...settingsForm}>
+          <form onSubmit={onSave} className="p-4 grid grid-cols-2 gap-4 text-sm">
+            <FormField
+              control={settingsForm.control}
+              name="quiet_hours_start"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Quiet hours start</FormLabel>
+                  <FormControl>
+                    <Input type="time" className="h-8 rb-mono w-auto" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
             />
-          </SettingsField>
-          <SettingsField label="Quiet hours end">
-            <input
-              type="time"
-              value={trimSeconds(settings.quiet_hours_end)}
-              onChange={(e) =>
-                setSettings({ ...settings, quiet_hours_end: e.target.value })
-              }
-              className="rounded border border-neutral-300 px-2 py-1 rb-mono"
+            <FormField
+              control={settingsForm.control}
+              name="quiet_hours_end"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Quiet hours end</FormLabel>
+                  <FormControl>
+                    <Input type="time" className="h-8 rb-mono w-auto" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
             />
-          </SettingsField>
-          <SettingsField label="Quiet hours timezone (IANA)">
-            <TZInput
-              value={settings.quiet_hours_tz}
-              onChange={(v) =>
-                setSettings({ ...settings, quiet_hours_tz: v })
-              }
+            <FormField
+              control={settingsForm.control}
+              name="quiet_hours_tz"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Quiet hours timezone (IANA)</FormLabel>
+                  <FormControl>
+                    <TZInput
+                      value={field.value}
+                      onChange={(v) => field.onChange(v)}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
             />
-          </SettingsField>
-          <SettingsField label="Digest mode">
-            <select
-              value={settings.digest_mode}
-              onChange={(e) =>
-                setSettings({
-                  ...settings,
-                  digest_mode: e.target.value as NotificationUserSettings["digest_mode"],
-                })
-              }
-              className="rounded border border-neutral-300 px-2 py-1"
-            >
-              <option value="off">off</option>
-              <option value="daily">daily</option>
-              <option value="weekly">weekly</option>
-            </select>
-          </SettingsField>
-          <SettingsField label="Digest hour (0-23, local to digest tz)">
-            <input
-              type="number"
-              min={0}
-              max={23}
-              value={settings.digest_hour}
-              onChange={(e) =>
-                setSettings({
-                  ...settings,
-                  digest_hour: clamp(parseInt(e.target.value || "0", 10), 0, 23),
-                })
-              }
-              className="rounded border border-neutral-300 px-2 py-1 rb-mono w-24"
+            <FormField
+              control={settingsForm.control}
+              name="digest_mode"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Digest mode</FormLabel>
+                  <FormControl>
+                    <select
+                      className="h-8 rounded border border-input bg-transparent px-2 text-sm"
+                      {...field}
+                    >
+                      <option value="off">off</option>
+                      <option value="daily">daily</option>
+                      <option value="weekly">weekly</option>
+                    </select>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
             />
-          </SettingsField>
-          <SettingsField label="Digest day of week (weekly only)">
-            <select
-              value={settings.digest_dow}
-              disabled={settings.digest_mode !== "weekly"}
-              onChange={(e) =>
-                setSettings({
-                  ...settings,
-                  digest_dow: parseInt(e.target.value, 10),
-                })
-              }
-              className="rounded border border-neutral-300 px-2 py-1 disabled:opacity-50"
-            >
-              {DOW_LABELS.map((label, idx) => (
-                <option key={label} value={idx}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </SettingsField>
-          <SettingsField label="Digest timezone (IANA, blank = quiet-hours tz)">
-            <TZInput
-              value={settings.digest_tz}
-              onChange={(v) =>
-                setSettings({ ...settings, digest_tz: v })
-              }
+            <FormField
+              control={settingsForm.control}
+              name="digest_hour"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Digest hour (0-23, local to digest tz)</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={23}
+                      className="h-8 w-24 rb-mono"
+                      value={field.value}
+                      onInput={(e) => {
+                        const raw = parseInt(
+                          (e.currentTarget as HTMLInputElement).value || "0",
+                          10,
+                        );
+                        field.onChange(clamp(raw, 0, 23));
+                      }}
+                      onBlur={field.onBlur}
+                      name={field.name}
+                      ref={field.ref}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
             />
-          </SettingsField>
-        </div>
+            <FormField
+              control={settingsForm.control}
+              name="digest_dow"
+              render={({ field }) => {
+                const mode = settingsForm.watch("digest_mode");
+                return (
+                  <FormItem>
+                    <FormLabel>Digest day of week (weekly only)</FormLabel>
+                    <FormControl>
+                      <select
+                        disabled={mode !== "weekly"}
+                        className="h-8 rounded border border-input bg-transparent px-2 text-sm disabled:opacity-50"
+                        value={field.value}
+                        onChange={(e) =>
+                          field.onChange(
+                            parseInt(
+                              (e.currentTarget as HTMLSelectElement).value,
+                              10,
+                            ),
+                          )
+                        }
+                        onBlur={field.onBlur}
+                        name={field.name}
+                        ref={field.ref}
+                      >
+                        {DOW_LABELS.map((label, idx) => (
+                          <option key={label} value={idx}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                );
+              }}
+            />
+            <FormField
+              control={settingsForm.control}
+              name="digest_tz"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Digest timezone (IANA, blank = quiet-hours tz)</FormLabel>
+                  <FormControl>
+                    <TZInput
+                      value={field.value}
+                      onChange={(v) => field.onChange(v)}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    Leave blank to inherit the quiet-hours timezone.
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </form>
+        </Form>
         {/* v1.7.36 — Send a digest-preview email so the operator can
             eyeball the layout without waiting for the cron to fire.
             Disabled when digest_mode === "off" (a preview of "no
@@ -552,9 +736,9 @@ function UserPrefsEditor({ userID }: { userID: string }) {
             spam the user. */}
         <DigestPreviewControls
           userID={userID}
-          digestMode={settings.digest_mode}
+          digestMode={settingsForm.watch("digest_mode")}
         />
-      </section>
+      </Card>
     </div>
   );
 }
@@ -591,21 +775,23 @@ function DigestPreviewControls({
   const disabled = digestMode === "off" || previewM.isPending;
 
   return (
-    <div className="border-t border-neutral-200 px-4 py-3 flex items-center gap-2 text-sm">
-      <span className="text-xs font-medium text-neutral-700">
+    <div className="border-t px-4 py-3 flex items-center gap-2 text-sm">
+      <span className="text-xs font-medium text-foreground">
         Send a sample digest to:
       </span>
-      <input
+      <Input
         type="email"
         value={recipient}
-        onChange={(e) => setRecipient(e.target.value)}
+        onInput={(e) => setRecipient(e.currentTarget.value)}
         placeholder={adminEmail || "operator@example.com"}
-        className="rounded border border-neutral-300 px-2 py-1 text-xs rb-mono w-64"
-        spellCheck={false}
+        className="h-7 w-64 text-xs rb-mono"
+        spellcheck={false}
         autoComplete="off"
       />
-      <button
+      <Button
         type="button"
+        variant="outline"
+        size="sm"
         onClick={() => previewM.mutate()}
         disabled={disabled}
         title={
@@ -613,10 +799,9 @@ function DigestPreviewControls({
             ? "Set a digest mode (daily or weekly) to enable preview"
             : "Render and email a sample digest for this user"
         }
-        className="rounded border border-neutral-300 px-3 py-1 text-xs hover:bg-neutral-100 disabled:opacity-30"
       >
         {previewM.isPending ? "Sending…" : "Send preview"}
-      </button>
+      </Button>
       {previewM.isSuccess && previewM.data ? (
         <span className="text-xs text-emerald-700">
           Sent to{" "}
@@ -627,26 +812,11 @@ function DigestPreviewControls({
         </span>
       ) : null}
       {previewM.error ? (
-        <span className="text-xs text-red-700">
+        <span className="text-xs text-destructive">
           {(previewM.error as Error).message}
         </span>
       ) : null}
     </div>
-  );
-}
-
-function SettingsField({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="block">
-      <div className="text-xs font-medium text-neutral-700 mb-1">{label}</div>
-      {children}
-    </label>
   );
 }
 
@@ -662,13 +832,13 @@ function TZInput({
 }) {
   return (
     <div className="flex items-center gap-1">
-      <input
+      <Input
         type="text"
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onInput={(e) => onChange(e.currentTarget.value)}
         placeholder="UTC"
         list="iana-tz-quickpicks"
-        className="rounded border border-neutral-300 px-2 py-1 rb-mono w-56"
+        className="h-8 w-56 rb-mono"
       />
       <datalist id="iana-tz-quickpicks">
         {TZ_QUICKPICKS.map((tz) => (

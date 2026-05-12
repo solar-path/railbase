@@ -4,21 +4,314 @@
 
 ## Tech stack
 
-- **React 19** + **TypeScript** (strict)
-- **Tailwind 4** + **Radix UI** primitives + **shadcn/ui** patterns
-- **wouter** для routing (~1.5 KB, hook-based, minimal API) + **TanStack Query** (data + cache)
-- **QDataTable** — кастомный data grid (см. ниже); virtualized через `@tanstack/virtual` (только windowing primitive, не headless table API)
-- **Monaco editor** для hooks JS / JSON / SQL view queries
-- **Tiptap** для RichText field editor
-- **React Hook Form** + **zod** для всех форм
-- **Recharts** для dashboard графиков (поверх shadcn chart primitives)
-- **cmdk** для command palette
-- **Vite** build → один `dist/` → `go:embed` в бинарь
-- **Использует тот же TS SDK**, что Railbase генерирует для пользователей — dogfooding (если что-то сломалось в SDK, admin UI перестаёт работать)
+- **Preact 10** + **TypeScript** (strict) — выбран вместо React 19 ради bundle size + fine-grained reactivity. React-only зависимости (TanStack Query, Monaco editor wrapper) работают через `preact/compat` alias в `vite.config.ts` + `tsconfig.paths` — наш собственный код импортит `preact` / `preact/hooks` / `@preact/signals` напрямую.
+- **@preact/signals** — реактивные ячейки вместо React Context для глобального state (auth state, settings) + `useSignal()` в формах вместо `useState` (fine-grained: re-render только подписчиков, не всего дерева).
+- **Tailwind 4** через `@tailwindcss/vite` plugin + **tw-animate-css** для shadcn-style entry/exit animations.
+- **wouter-preact** для routing (~1.5 KB, hook-based, minimal API) + **TanStack Query** (data + cache; через preact/compat).
+- **shadcn-on-Preact UI kit** — собственный port shadcn/ui под Preact живёт в `admin/src/lib/ui/`: 50 компонентов (Button/Card/Input/Table/Dropdown/Select/Command/Sheet/…) + 11 Radix-replacement primitives (Portal, FocusScope, DismissableLayer, Popper, …) + hand-rolled icon set в `icons.tsx`. **Тот же kit железно зашит в Railbase-бинарь и раздаётся downstream-приложениям** — см. секцию "Shareable UI kit" ниже.
+- **class-variance-authority** + **clsx** + **tailwind-merge** — CVA pattern для variant-based компонентов; `cn()` хелпер в `lib/ui/cn.ts` собирает результат.
+- **@floating-ui/dom** — backend для `_primitives/popper.tsx` (positioning Select / Popover / DropdownMenu / Tooltip без Radix).
+- **react-hook-form** + **@hookform/resolvers** + **zod** — каноничный form pattern через kit-овский `form.ui.tsx`. `login.tsx` — reference-implementation в admin'e. См. секцию **Form strategy** ниже.
+- **react-day-picker** — peer-dep для kit-овского `calendar.ui.tsx`.
+- **embla-carousel** — peer-dep для kit-овского `carousel.ui.tsx`.
+- **Monaco editor** для hooks JS / JSON / SQL view queries — **lazy-loaded** через `lazy(() => import("@monaco-editor/react"))` + `<Suspense>` — не входит в основной bundle, грузится только на `/hooks` экране.
+- **Tiptap** для RichText field editor (через preact/compat).
+- **Recharts** для dashboard графиков (через preact/compat).
+- **Command palette** (⌘K) реализован hand-rolled в `layout/command_palette.tsx` — не используем kit-овский `<Command>` чтобы не переписывать keyboard-nav логику.
+- **Vite 5** build (`@preact/preset-vite` plugin) → один `dist/` → `go:embed` в бинарь.
+- **Использует тот же TS SDK**, что Railbase генерирует для пользователей — dogfooding (если что-то сломалось в SDK, admin UI перестаёт работать).
 
-**Заметка про routing**: wouter сознательно отказывается от typed-routes / file-based-routing / nested-loaders в пользу size & simplicity. Для admin UI это приемлемо — данные грузим через TanStack Query (где есть caching, deduplication, mutations), а не через router loaders. Type-safety для path params живёт в helper `routes.ts` (см. ниже), не в router-runtime.
+**Зачем Preact**: после миграции с React 19 main-bundle gzip сократился с 132 KB → **79 KB** (−40%). Lazy-load Monaco отделил ещё ~50 KB JS chunk загружающийся только когда оператор открывает `/hooks`. Signals дают per-field rerender вместо whole-form rerender (заметно на больших record editor'ах с 30+ полями). React 19 + react-dom (~45 KB gzip) заменены на preact (~10 KB) + preact/compat shim (~5 KB) для React-only зависимостей.
 
-Размер: target ≤ 3 MB gzipped (~5 MB raw embedded).
+**Заметка про routing**: wouter-preact сознательно отказывается от typed-routes / file-based-routing / nested-loaders в пользу size & simplicity. Для admin UI это приемлемо — данные грузим через TanStack Query (где есть caching, deduplication, mutations), а не через router loaders. Type-safety для path params живёт в helper `routes.ts` (см. ниже), не в router-runtime.
+
+**Build pipeline notes** (для maintainers):
+- `vite.config.ts` маппит `react → preact/compat`, `react-dom → preact/compat`, `react-dom/test-utils → preact/test-utils`, `react/jsx-runtime → preact/jsx-runtime`.
+- `tsconfig.json` имеет `jsxImportSource: "preact"` + `paths.react → ./node_modules/preact/compat` для type-resolution.
+- Native Preact JSX types: handlers используют `e.currentTarget.value` (не `e.target.value`) и HTML-style attrs (`spellcheck`, не React's `spellCheck`).
+- `main.tsx` использует `preact.render(<App/>, root)` вместо React's `createRoot(root).render(...)`. `<StrictMode>` не существует в Preact и не нужен.
+
+Размер: после миграции на shadcn-on-Preact kit main bundle **~115 KB gzip / ~422 KB raw** (был 79 KB / 307 KB до использования kit-овских компонентов — расход ~35 KB gzip оправдан тем, что kit полностью кроет UI surface всех 24+ экранов и одновременно раздаётся downstream-приложениям). Target ≤ 3 MB gzipped — большой запас на будущие фичи.
+
+## Shareable UI kit (`admin/src/lib/ui/`)
+
+**Источник правды для UI** — каталог `admin/src/lib/ui/`. Тот же код, что использует Railbase admin, **раздаётся через бинарь** любому downstream-приложению — пользователи Railbase получают готовый Preact-port shadcn/ui «бесплатно» вместе с бэкендом.
+
+### Структура
+
+```
+admin/src/lib/ui/
+├── *.ui.tsx            ← 50 компонентов (button, card, input, table, dialog, …)
+├── _primitives/        ← 11 Radix-replacement modules
+│   ├── slot.tsx          asChild composition
+│   ├── portal.tsx        DOM portal через createPortal
+│   ├── popper.tsx        @floating-ui/dom wrapper
+│   ├── focus-scope.tsx   focus trap для модалок
+│   ├── dismissable-layer.tsx  click-outside + Escape
+│   ├── presence.tsx      enter/exit animations
+│   ├── visually-hidden.tsx
+│   ├── collection.ts
+│   ├── use-controllable.ts
+│   ├── use-id.ts
+│   └── index.ts
+├── cn.ts               ← cn() = twMerge(clsx(...)) helper
+├── icons.tsx           ← hand-rolled SVG icon set (без lucide зависимости)
+├── theme.ts            ← light/dark toggle
+└── index.ts            ← barrel export + source-of-truth doc
+```
+
+### Контракт
+
+1. **Этот каталог = source of truth.** Admin сам импортит компоненты через `@/lib/ui/<name>.ui`; downstream-приложения копируют те же файлы в свой `src/lib/ui/` через CLI/HTTP.
+2. **Никаких ссылок наружу.** Файлы под `admin/src/{auth,api,fields,layout,screens}/` — admin-app-private, **не уезжают** с kit'ом. Любой компонент, который читает application state, **не принадлежит** kit'у.
+3. **App-specific composites** (типа air-овского `QEditableForm`) живут в `admin/src/screens/` или в `_composites/` под экраном-владельцем, **не в `lib/ui/`**.
+
+### Раздача downstream-приложениям
+
+Бинарь embed'ит kit через `admin/uikit.go` (`//go:embed src/lib/ui src/styles.css`) и сервит его двумя путями:
+
+**HTTP** (для browser-only сценариев — air-gapped registry):
+
+| Endpoint | Что возвращает |
+|---|---|
+| `GET /api/_ui/manifest` | Полный граф: компоненты + примитивы + peer deps + onboarding notes |
+| `GET /api/_ui/registry` | shadcn-shaped список (name + peers) |
+| `GET /api/_ui/components/{name}` | JSON с метой и source |
+| `GET /api/_ui/components/{name}/source` | raw .tsx |
+| `GET /api/_ui/primitives/{name}` | raw _primitives/<name>.{ts,tsx} |
+| `GET /api/_ui/cn.ts` | cn() helper |
+| `GET /api/_ui/styles.css` | theme tokens (oklch) + tw-animate-css import |
+| `GET /api/_ui/peers` | `npm install <peers>` (или JSON с `Accept: application/json`) |
+| `GET /api/_ui/init` | Long-form onboarding (vite/tsconfig snippets) |
+
+Endpoints **public** (без auth) — это published-source component code, эквивалент CDN-fetch'a.
+
+**CLI** (offline, transitive-dep aware, атомарный multi-file copy):
+
+```bash
+railbase ui list             # 50 components, 11 primitives
+railbase ui peers            # npm install line
+railbase ui init [--out X]   # scaffold styles.css + cn.ts + icons.tsx + theme.ts + _primitives/*
+railbase ui add NAME...      # copy specific components (resolves transitive local deps)
+railbase ui add --all        # everything
+```
+
+Транзитивное разрешение: `ui add password` подтянет `input` (потому что `password.ui.tsx` импортит `./input.ui`); `ui add form` подтянет `label`. Algorithm — BFS по `Local[]` метаданным до закрытия set'a.
+
+### Регистрационная инфраструктура (Go)
+
+| Файл | Роль |
+|---|---|
+| `admin/uikit.go` | `//go:embed all:src/lib/ui src/styles.css`, экспорт `UIKit() fs.FS` |
+| `internal/api/uiapi/registry.go` | boot-time scan: распарсивает `from '<pkg>'` импорты, классифицирует peers / primitives / local siblings, строит `Manifest` |
+| `internal/api/uiapi/handler.go` | 10 chi-handler'ов |
+| `pkg/railbase/cli/ui.go` | cobra-команды `ui list/peers/init/add` поверх той же `uiapi` |
+
+Манифест строится один раз через `sync.Once` — FS immutable на process lifetime. `cache.Register("uiapi.manifest", ...)` НЕ wired (не hot-path).
+
+### Покрытие 30 MB binary-size budget
+
+Embed'инг ~500 KB TSX source добавляет ~250 KB к бинарю (некоторый overlap сжимается в embed.FS). Все 6 cross-compile targets укладываются в 30 MB ceiling (largest ~27.7 MB, headroom ~2.3 MB). Размер verified через `make check-size` после каждого изменения.
+
+### Test coverage
+
+`internal/api/uiapi/registry_test.go` — 11 тестов под `-race`:
+- классификация импортов (relative `./foo` + alias `@/lib/ui/foo` — обе формы)
+- транзитивное разрешение local siblings
+- kit-base файлы (`cn` / `icons` / `theme` / `index`) НЕ попадают в Local
+- primitive deps (`@floating-ui/dom`) попадают в общий peer set
+- handler-тесты: manifest / source / 404 / peers (JSON vs text)
+- nil-FS path (dev/test) → пустой манифест без panic
+
+## Form strategy
+
+Канонический form pattern в admin'e — **kit's `<Form>` + react-hook-form + zod**. `form.ui.tsx` импортит `react-hook-form` и оборачивает RHF в shadcn-shaped компоненты (`<Form>`, `<FormField>`, `<FormItem>`, `<FormLabel>`, `<FormControl>`, `<FormDescription>`, `<FormMessage>`). Это **тот же** паттерн, который downstream-приложения получают через `railbase ui add form`.
+
+### Reference implementation: `admin/src/screens/login.tsx`
+
+```tsx
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/lib/ui/form.ui";
+import { Input } from "@/lib/ui/input.ui";
+
+const schema = z.object({
+  email: z.string().email("Enter a valid email"),
+  password: z.string().min(1, "Password required"),
+});
+type Values = z.infer<typeof schema>;
+
+export function LoginScreen() {
+  const form = useForm<Values>({
+    resolver: zodResolver(schema),
+    defaultValues: { email: "", password: "" },
+    mode: "onSubmit",
+  });
+
+  async function onSubmit(values: Values) {
+    /* … */
+  }
+
+  return (
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)} class="space-y-4">
+        <FormField
+          control={form.control}
+          name="email"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Email</FormLabel>
+              <FormControl><Input type="email" {...field} /></FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        {/* ... */}
+      </form>
+    </Form>
+  );
+}
+```
+
+### Что даёт паттерн (vs hand-rolled signals + manual onSubmit)
+
+| Концерн | RHF + form.ui | Hand-rolled signals |
+|---|---|---|
+| Field-level error display | `<FormMessage>` рендерит zod-error автоматически | Ручная state |
+| ARIA wiring (id, aria-describedby, aria-invalid) | Авто через `<FormItem>` + `<FormControl>` | Ручная |
+| Dirty/touched/isValid tracking | Из коробки `form.formState.*` | Не из коробки |
+| Validation timing | `mode: "onSubmit" \| "onChange" \| "onBlur" \| "all"` | Ручная |
+| Per-keystroke re-render scope | Только подписчик field (через RHF) | Только подписчик `.value` (через signals) |
+| Server-error mapping | `form.setError(field, ...)` на 422 → field-level UI | Ручная state + ручной JSX |
+
+### Preact compat note
+
+RHF полагается на `onChange`-per-keystroke. Preact-native `onChange` срабатывает по blur (HTML-стандарт), что сломало бы RHF — но **`preact/compat` патчит** `onChange → oninput` на vnode-build уровне для `<input>` и `<textarea>` (исключая checkbox/radio/file типы). Verified в `node_modules/preact/compat/dist/compat.mjs::e.vnode` — регулярка вокруг `"onchange" → "oninput"`. Так что `{...field}` spread на `<Input>` работает идентично React.
+
+### Когда `<Form>` ИЗБЫТОЧЕН (можно signals + manual onSubmit)
+
+- **Transient UI state**, не привязанная к submit: filter inputs в list-views, search-as-you-type, modal open/close, busy-флаги, отображаемые server-errors. Это **не форма**, это эфемерное UI-состояние — `useSignal()` подходит.
+- **Однополочные toggle'ы без validation**: «show deleted records», «expand row». Чистый `useSignal<boolean>(false)`.
+- **Inline-edit cells в таблицах**: текущая реализация в `records.tsx` (компактный inline-input в ячейке) — signals остаются.
+
+### Когда `<Form>` ОБЯЗАТЕЛЕН (RHF + zod)
+
+- **Любая submit-форма с client-side validation** (login, signup, profile-edit, settings, password-change)
+- **Multi-step wizards** (bootstrap — будущая миграция)
+- **Dynamic field-driven forms** (`record_editor.tsx` — будущая миграция; dynamic zod schema + per-field server-error mapping на 422)
+- **Create-modals в list-views** (api_tokens.tsx, webhooks.tsx — будущая миграция)
+
+### Cost
+
+RHF + @hookform/resolvers + zod-validation добавляют ~**+12 KB gzip / +37 KB raw** в bundle (177 → 237 modules). Платится ONE-TIME первой формой; последующие form-screens растят bundle только на размер собственного кода (по ~1-2 KB gzip каждый).
+
+### Migration status — все целевые формы переписаны (v1.7.41)
+
+| Файл | Pattern |
+|---|---|
+| `login.tsx` ✅ | Static zod schema (email + password) — reference implementation |
+| `bootstrap.tsx` ✅ | TWO `useForm()` (по одной на step) + discriminated union по `driver` + `.refine` для confirm-match + `setValue` fan-out в onGenerate |
+| `record_editor.tsx` ✅ | Dynamic zod schema через `buildSchema(fields)` + 422-маппинг на `form.setError` из `err.body.details.errors` |
+| `api_tokens.tsx` ✅ | Create-modal + chained `useState` для display-once token banner |
+| `webhooks.tsx` ✅ | Create-modal + `.refine` для http(s) URL validator |
+| `notifications-prefs.tsx` ✅ | Per-user settings form (quiet_hours + digest); master-detail toggle-grid остаётся `useState` |
+| `settings.tsx` ✅ | KV add-form + `<select>` для типа + coercion в onSubmit с `form.setError("value")` на parse-failure |
+| `i18n.tsx` ✅ | Dynamic zod через `useMemo(() => z.object(shape), [rows])`; flat-key cast `name={k as string}` обходит RHF auto-nested-paths для ключей с точками |
+| `hooks.tsx` TestPanel ✅ | 3 поля + `z.string().refine` для JSON-object validation |
+
+### Pattern catalogue
+
+**1) Static zod schema** (`login.tsx`, `api_tokens.tsx`, `webhooks.tsx`, `settings.tsx`, `hooks.tsx`)
+
+```tsx
+const schema = z.object({ /* fields */ });
+type Values = z.infer<typeof schema>;
+const form = useForm<Values>({ resolver: zodResolver(schema), defaultValues: {...}, mode: "onSubmit" });
+```
+
+**2) Dynamic zod schema** (`record_editor.tsx`, `i18n.tsx`)
+
+```tsx
+const schema = useMemo(() => {
+  const shape: Record<string, z.ZodTypeAny> = {};
+  for (const f of fields) shape[f.name] = z.string();   // или per-field shape
+  return z.object(shape);
+}, [fields]);
+```
+
+**3) Discriminated union** (`bootstrap.tsx` DB step)
+
+```tsx
+const dbStepSchema = z.discriminatedUnion("driver", [
+  z.object({ driver: z.literal("local_socket"), socket_dir: z.string().min(1), ... }),
+  z.object({ driver: z.literal("external_dsn"), external_dsn: z.string().regex(/^postgres/) }),
+  z.object({ driver: z.literal("embedded") }),
+]);
+
+const driver = form.watch("driver");
+{driver === "local_socket" && <FormField name="socket_dir" ... />}
+```
+
+Important: switching driver via radio калит `form.reset({ driver: ..., ...defaults })`, **не** просто `setValue("driver", ...)` — иначе другая ветка union'a не пройдёт валидацию.
+
+**4) Cross-field validation** (`bootstrap.tsx` AdminStep)
+
+```tsx
+z.object({ password: z.string()..., confirm: z.string() })
+  .refine((d) => d.password === d.confirm, { message: "Passwords don't match", path: ["confirm"] });
+```
+
+Ошибка рендерится в `<FormMessage>` под `confirm`-полем благодаря `path: ["confirm"]`.
+
+**5) Server-error mapping (422 → field-level)** (`record_editor.tsx`, `notifications-prefs.tsx`, `i18n.tsx`)
+
+```tsx
+function handleSubmitError(e: unknown) {
+  if (isAPIError(e)) {
+    const fields = (e.body.details as { errors?: Record<string, string> } | undefined)?.errors;
+    if (fields) {
+      for (const [name, msg] of Object.entries(fields)) {
+        if (knownFields.has(name)) form.setError(name as never, { type: "server", message: msg });
+      }
+      return;
+    }
+  }
+  // Fallback: form-wide error in root.serverError или transient useState
+  form.setError("root.serverError", { type: "server", message: "..." });
+}
+```
+
+**6) Generator fan-out** (`bootstrap.tsx` AdminStep)
+
+```tsx
+<PasswordInput
+  value={field.value}
+  onInput={(e) => field.onChange(e.currentTarget.value)}
+  showGenerate
+  onGenerate={(p) => {
+    form.setValue("password", p, { shouldValidate: true });
+    form.setValue("confirm", p, { shouldValidate: true });
+  }}
+/>
+```
+
+`shouldValidate: true` запускает schema-check немедленно — generator-сгенерированный пароль сразу зажигает strength-bar + clears any prior validation error.
+
+### `@hookform/resolvers` v5 — known gotcha
+
+zod-`.default(value)` разводит input/output типы у схемы: input получает `field?: T | undefined`, output — `field: T`. `Resolver<...>` ожидает их идентичности и ломается. Workaround: НЕ использовать `.default()` в zod-schema, ставить дефолт через `useForm({ defaultValues: {...} })` + `form.reset({...})` после загрузки данных.
+
+### Bundle cost summary (после полной миграции)
+
+| Snapshot | Modules | Raw | Gzip |
+|---|---|---|---|
+| До kit'a (v1.7.40 start) | 1695 | 307 KB | 79 KB |
+| После kit migration (24 экрана) | 174 | 422 KB | 115 KB |
+| После RHF migration (8 forms) — **now** | 237 | **468 KB** | **130 KB** |
+| Δ от kit-only до full-form | +63 | +46 KB | +15 KB |
+
+Всего ~+51 KB gzip от React 19 baseline на полностью переписанной админке с kit-овским shadcn UI + RHF-based forms. Хороший trade-off за consistency + field-level validation + ARIA-wiring во всех 8 формах.
 
 ## Authentication & access
 

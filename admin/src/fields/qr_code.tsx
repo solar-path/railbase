@@ -46,10 +46,10 @@ export function QrCodeInput({
     <div className="mt-1">
       <textarea
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => setDraft(e.currentTarget.value)}
         onBlur={() => onChange(draft === "" ? null : draft)}
         rows={4}
-        spellCheck={false}
+        spellcheck={false}
         className={
           "w-full rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +
           (over

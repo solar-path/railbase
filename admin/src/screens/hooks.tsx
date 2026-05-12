@@ -1,13 +1,41 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import Editor, { type OnMount } from "@monaco-editor/react";
+import type { OnMount } from "@monaco-editor/react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { adminAPI } from "../api/admin";
+
+// Monaco is huge (~3 MB raw / 600 KB gzip on its own — most of admin's
+// pre-Preact bundle bulk). Lazy-loading it cuts the initial admin bundle
+// dramatically: every screen that ISN'T /hooks downloads zero Monaco
+// bytes. Suspense renders the "Loading…" fallback while the chunk is in
+// flight; on a slow connection that's a few-hundred-ms visible blink,
+// vs slowing the whole admin login by 2-3s without lazy.
+const Editor = lazy(() => import("@monaco-editor/react"));
 import { APIError, isAPIError } from "../api/client";
 import type {
   HooksFile,
   HookEventName,
   HookTestRunResult,
 } from "../api/types";
+import { Badge } from "@/lib/ui/badge.ui";
+import { Button } from "@/lib/ui/button.ui";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/lib/ui/collapsible.ui";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/lib/ui/form.ui";
+import { Input } from "@/lib/ui/input.ui";
+import { Textarea } from "@/lib/ui/textarea.ui";
 
 // Hooks editor admin screen (v1.7.20 §3.14 #123 / §3.11).
 //
@@ -223,7 +251,7 @@ export function HooksScreen() {
         <header className="flex items-baseline justify-between">
           <div>
             <h1 className="text-2xl font-semibold">Hooks</h1>
-            <p className="text-sm text-neutral-500">
+            <p className="text-sm text-muted-foreground">
               JavaScript hook files in <span className="rb-mono">pb_hooks/</span>.
               Changes hot-reload within 1s.
             </p>
@@ -231,7 +259,7 @@ export function HooksScreen() {
         </header>
       </div>
 
-      <div className="flex flex-1 min-h-0 border-t border-neutral-200">
+      <div className="flex flex-1 min-h-0 border-t">
         <FileTree
           items={listQ.data?.items ?? []}
           loading={listQ.isLoading}
@@ -256,22 +284,30 @@ export function HooksScreen() {
               />
               <div className="flex-1 min-h-0">
                 {fileQ.isLoading ? (
-                  <div className="p-6 text-sm text-neutral-500">Loading…</div>
+                  <div className="p-6 text-sm text-muted-foreground">Loading…</div>
                 ) : (
-                  <Editor
-                    value={editorValue}
-                    onChange={(v) => setEditorValue(v ?? "")}
-                    onMount={onEditorMount}
-                    language="javascript"
-                    theme="vs-dark"
-                    options={{
-                      minimap: { enabled: false },
-                      fontSize: 13,
-                      tabSize: 2,
-                      automaticLayout: true,
-                      scrollBeyondLastLine: false,
-                    }}
-                  />
+                  <Suspense
+                    fallback={
+                      <div className="p-6 text-sm text-muted-foreground">
+                        Loading editor…
+                      </div>
+                    }
+                  >
+                    <Editor
+                      value={editorValue}
+                      onChange={(v) => setEditorValue(v ?? "")}
+                      onMount={onEditorMount}
+                      language="javascript"
+                      theme="vs-dark"
+                      options={{
+                        minimap: { enabled: false },
+                        fontSize: 13,
+                        tabSize: 2,
+                        automaticLayout: true,
+                        scrollBeyondLastLine: false,
+                      }}
+                    />
+                  </Suspense>
                 )}
               </div>
               <TestPanel />
@@ -297,6 +333,9 @@ export function HooksScreen() {
 // files in sequence. Lifting state to HooksScreen would require
 // preserving across file switches; keeping it local is simpler and
 // the cost of re-entering inputs after a panel-collapse is minimal.
+//
+// v1.7.40 — switched the manual expanded/collapsed toggle to the kit
+// <Collapsible>, so the chevron + ARIA wiring come from the primitive.
 
 const TEST_PANEL_EVENTS: HookEventName[] = [
   "BeforeCreate",
@@ -312,39 +351,72 @@ const DEFAULT_RECORD_JSON = `{
   "title": "Sample record"
 }`;
 
+// zod schema for the hook test-runner form. recordJson stays as a
+// string in the form (textarea-friendly) and is parsed on submit via
+// `.refine` — that gives us "object-shaped JSON or rejection" in one
+// step without splitting validation across paths.
+const testPanelSchema = z.object({
+  event: z.enum([
+    "BeforeCreate",
+    "AfterCreate",
+    "BeforeUpdate",
+    "AfterUpdate",
+    "BeforeDelete",
+    "AfterDelete",
+  ]),
+  collection: z.string(), // empty = wildcard match, ok
+  recordJson: z
+    .string()
+    .min(1, "Record JSON required")
+    .refine(
+      (s) => {
+        try {
+          const parsed = JSON.parse(s);
+          return (
+            typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+          );
+        } catch {
+          return false;
+        }
+      },
+      { message: "Must be a valid JSON object" },
+    ),
+});
+type TestPanelValues = z.infer<typeof testPanelSchema>;
+
 function TestPanel() {
+  // Transient UI state — NOT in the form schema. expanded toggles the
+  // collapsible; result/requestError surface the server response.
+  // Form values (event/collection/recordJson) live in RHF.
   const [expanded, setExpanded] = useState(false);
-  const [event, setEvent] = useState<HookEventName>("BeforeCreate");
-  const [collection, setCollection] = useState("");
-  const [recordText, setRecordText] = useState(DEFAULT_RECORD_JSON);
-  const [recordError, setRecordError] = useState<string | null>(null);
   const [result, setResult] = useState<HookTestRunResult | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
 
+  const form = useForm<TestPanelValues>({
+    resolver: zodResolver(testPanelSchema),
+    defaultValues: {
+      event: "BeforeCreate",
+      collection: "",
+      recordJson: DEFAULT_RECORD_JSON,
+    },
+    mode: "onSubmit",
+  });
+
   const runM = useMutation({
-    mutationFn: async () => {
-      let parsed: Record<string, unknown>;
-      try {
-        parsed = JSON.parse(recordText);
-      } catch (e) {
-        throw new Error(
-          "Record JSON is invalid: " +
-            (e instanceof Error ? e.message : String(e)),
-        );
-      }
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        throw new Error("Record JSON must be an object (got array / primitive)");
-      }
+    mutationFn: async (values: TestPanelValues) => {
+      // zod's .refine already proved recordJson is a parseable object,
+      // so the JSON.parse here can't throw — but keep defensive try/
+      // catch for unexpected refine bypass.
+      const parsed = JSON.parse(values.recordJson) as Record<string, unknown>;
       return adminAPI.runHookTest({
-        event,
-        collection,
+        event: values.event,
+        collection: values.collection,
         record: parsed,
       });
     },
     onMutate: () => {
       setRequestError(null);
       setResult(null);
-      setRecordError(null);
     },
     onSuccess: (data) => {
       setResult(data);
@@ -354,139 +426,139 @@ function TestPanel() {
     },
   });
 
-  const validateRecordOnBlur = useCallback(() => {
-    if (recordText.trim() === "") {
-      setRecordError(null);
-      return;
-    }
-    try {
-      JSON.parse(recordText);
-      setRecordError(null);
-    } catch (e) {
-      setRecordError(e instanceof Error ? e.message : String(e));
-    }
-  }, [recordText]);
-
-  if (!expanded) {
-    return (
-      <div className="border-t border-neutral-200 bg-neutral-50 px-4 py-2">
-        <button
-          type="button"
-          onClick={() => setExpanded(true)}
-          className="text-xs text-neutral-700 hover:text-neutral-900 flex items-center gap-1"
-        >
-          <span aria-hidden>▸</span> Test panel
-          <span className="text-neutral-500 ml-2">
-            Fire a hook against a synthetic record (no DB writes)
-          </span>
-        </button>
-      </div>
-    );
-  }
-
   return (
-    <div className="border-t border-neutral-200 bg-neutral-50 flex flex-col"
-         style={{ maxHeight: "40vh" }}>
-      <div className="flex items-center justify-between px-4 py-2 border-b border-neutral-200">
-        <button
-          type="button"
-          onClick={() => setExpanded(false)}
-          className="text-xs text-neutral-700 hover:text-neutral-900 flex items-center gap-1"
-        >
-          <span aria-hidden>▾</span> Test panel
-        </button>
-        <div className="text-[11px] text-neutral-500">
-          Fires the runtime against a synthetic record. No DB side effects.
-        </div>
+    <Collapsible open={expanded} onOpenChange={setExpanded} className="border-t bg-muted">
+      <div className="flex items-center justify-between px-4 py-2 border-b">
+        <CollapsibleTrigger className="text-xs text-foreground hover:text-foreground flex items-center gap-1">
+          <span aria-hidden>{expanded ? "▾" : "▸"}</span> Test panel
+          {!expanded ? (
+            <span className="text-muted-foreground ml-2">
+              Fire a hook against a synthetic record (no DB writes)
+            </span>
+          ) : null}
+        </CollapsibleTrigger>
+        {expanded ? (
+          <div className="text-[11px] text-muted-foreground">
+            Fires the runtime against a synthetic record. No DB side effects.
+          </div>
+        ) : null}
       </div>
 
-      <div className="flex flex-1 min-h-0 overflow-auto">
-        {/* Left column: inputs */}
-        <div className="w-[50%] p-3 border-r border-neutral-200 space-y-2 overflow-auto">
-          <div className="flex items-center gap-2">
-            <label className="text-xs font-medium text-neutral-700 w-20">Event</label>
-            <select
-              value={event}
-              onChange={(e) => setEvent(e.target.value as HookEventName)}
-              className="flex-1 rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+      <CollapsibleContent
+        className="flex flex-col"
+        // Cap the expanded height so the panel doesn't crowd out the
+        // editor when the operator opens it on a small viewport.
+        style={{ maxHeight: "40vh" }}
+      >
+        <div className="flex flex-1 min-h-0 overflow-auto">
+          {/* Left column: inputs */}
+          <Form {...form}>
+            <form
+              onSubmit={form.handleSubmit((values) => runM.mutate(values))}
+              className="w-[50%] p-3 border-r space-y-2 overflow-auto"
             >
-              {TEST_PANEL_EVENTS.map((ev) => (
-                <option key={ev} value={ev}>
-                  {ev}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="text-xs font-medium text-neutral-700 w-20">
-              Collection
-            </label>
-            <input
-              type="text"
-              value={collection}
-              onChange={(e) => setCollection(e.target.value)}
-              placeholder='"posts" or empty for wildcard'
-              className="flex-1 rb-mono rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
-            />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-neutral-700 block mb-1">
-              Record JSON
-            </label>
-            <textarea
-              value={recordText}
-              onChange={(e) => setRecordText(e.target.value)}
-              onBlur={validateRecordOnBlur}
-              rows={8}
-              spellCheck={false}
-              className="w-full rb-mono rounded border border-neutral-300 bg-white px-2 py-1 text-[12px] resize-y"
-            />
-            {recordError && (
-              <div className="text-[11px] text-red-700 mt-1">
-                JSON parse error: {recordError}
+              <FormField
+                control={form.control}
+                name="event"
+                render={({ field }) => (
+                  <FormItem className="flex items-center gap-2 space-y-0">
+                    <FormLabel className="text-xs w-20 m-0">Event</FormLabel>
+                    <FormControl>
+                      <select
+                        {...field}
+                        className="flex-1 h-8 rounded border border-input bg-background px-2 text-xs"
+                      >
+                        {TEST_PANEL_EVENTS.map((ev) => (
+                          <option key={ev} value={ev}>
+                            {ev}
+                          </option>
+                        ))}
+                      </select>
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="collection"
+                render={({ field }) => (
+                  <FormItem className="flex items-center gap-2 space-y-0">
+                    <FormLabel className="text-xs w-20 m-0">Collection</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="text"
+                        placeholder='"posts" or empty for wildcard'
+                        className="flex-1 h-8 rb-mono text-xs"
+                        {...field}
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="recordJson"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs block mb-1">Record JSON</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        rows={8}
+                        spellcheck={false}
+                        className="rb-mono text-[12px] resize-y bg-background"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage className="text-[11px]" />
+                  </FormItem>
+                )}
+              />
+              <div className="flex items-center gap-2 pt-1">
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={runM.isPending || form.formState.isSubmitting}
+                >
+                  {runM.isPending ? "Running…" : "Run test"}
+                </Button>
+                {requestError && (
+                  <span className="text-[11px] text-destructive">{requestError}</span>
+                )}
+              </div>
+            </form>
+          </Form>
+
+          {/* Right column: output */}
+          <div className="w-[50%] p-3 overflow-auto">
+            {result === null && !runM.isPending && (
+              <div className="text-xs text-muted-foreground italic">
+                No run yet. Configure the inputs on the left and click{" "}
+                <span className="rb-mono">Run test</span>.
               </div>
             )}
-          </div>
-          <div className="flex items-center gap-2 pt-1">
-            <button
-              type="button"
-              onClick={() => runM.mutate()}
-              disabled={runM.isPending || recordError !== null}
-              className="rounded bg-neutral-900 px-3 py-1 text-xs font-medium text-white hover:bg-neutral-700 disabled:bg-neutral-400"
-            >
-              {runM.isPending ? "Running…" : "Run test"}
-            </button>
-            {requestError && (
-              <span className="text-[11px] text-red-700">{requestError}</span>
+            {runM.isPending && (
+              <div className="text-xs text-muted-foreground">Firing handler…</div>
             )}
+            {result !== null && <TestResultPanel result={result} />}
           </div>
         </div>
-
-        {/* Right column: output */}
-        <div className="w-[50%] p-3 overflow-auto">
-          {result === null && !runM.isPending && (
-            <div className="text-xs text-neutral-500 italic">
-              No run yet. Configure the inputs on the left and click{" "}
-              <span className="rb-mono">Run test</span>.
-            </div>
-          )}
-          {runM.isPending && (
-            <div className="text-xs text-neutral-500">Firing handler…</div>
-          )}
-          {result !== null && <TestResultPanel result={result} />}
-        </div>
-      </div>
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
 function TestResultPanel({ result }: { result: HookTestRunResult }) {
+  // Map outcome → Badge tone. We DON'T use kit Badge variants here
+  // because the outcome palette (ok / rejected / error) doesn't map
+  // 1:1 onto default / secondary / destructive — emerald for "ok",
+  // amber for "rejected" (programmatic refusal, not failure), red for
+  // "error" (hook threw). Keep the bespoke colours.
   const pillClass =
     result.outcome === "ok"
       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
       : result.outcome === "rejected"
         ? "border-amber-200 bg-amber-50 text-amber-800"
-        : "border-red-200 bg-red-50 text-red-700";
+        : "border-destructive/30 bg-destructive/10 text-destructive";
 
   return (
     <div className="space-y-3">
@@ -499,23 +571,23 @@ function TestResultPanel({ result }: { result: HookTestRunResult }) {
         >
           {result.outcome}
         </span>
-        <span className="text-[11px] text-neutral-500">
+        <span className="text-[11px] text-muted-foreground">
           {result.duration_ms} ms
         </span>
       </div>
       {result.error && (
-        <div className="rounded border border-red-200 bg-red-50 p-2 rb-mono text-[11px] text-red-800 whitespace-pre-wrap">
+        <div className="rounded border border-destructive/30 bg-destructive/10 p-2 rb-mono text-[11px] text-destructive whitespace-pre-wrap">
           {result.error}
         </div>
       )}
       <div>
-        <div className="text-[11px] font-medium text-neutral-700 mb-1">
+        <div className="text-[11px] font-medium text-foreground mb-1">
           console ({result.console.length})
         </div>
         {result.console.length === 0 ? (
-          <div className="text-[11px] text-neutral-500 italic">(no output)</div>
+          <div className="text-[11px] text-muted-foreground italic">(no output)</div>
         ) : (
-          <div className="rounded border border-neutral-300 bg-neutral-900 text-neutral-100 p-2 rb-mono text-[11px] space-y-0.5 max-h-40 overflow-auto">
+          <div className="rounded border border-input bg-neutral-900 text-neutral-100 p-2 rb-mono text-[11px] space-y-0.5 max-h-40 overflow-auto">
             {result.console.map((line, i) => (
               <div key={i}>{line}</div>
             ))}
@@ -523,10 +595,10 @@ function TestResultPanel({ result }: { result: HookTestRunResult }) {
         )}
       </div>
       <div>
-        <div className="text-[11px] font-medium text-neutral-700 mb-1">
+        <div className="text-[11px] font-medium text-foreground mb-1">
           modified_record
         </div>
-        <pre className="rounded border border-neutral-300 bg-white p-2 rb-mono text-[11px] overflow-auto max-h-40">
+        <pre className="rounded border border-input bg-background p-2 rb-mono text-[11px] overflow-auto max-h-40">
           {JSON.stringify(result.modified_record, null, 2)}
         </pre>
       </div>
@@ -561,25 +633,27 @@ function FileTree({
   }, [items]);
 
   return (
-    <div className="w-[250px] shrink-0 border-r border-neutral-200 bg-neutral-50 flex flex-col">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-200">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+    <div className="w-[250px] shrink-0 border-r bg-muted flex flex-col">
+      <div className="flex items-center justify-between px-3 py-2 border-b">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           pb_hooks/
         </span>
-        <button
+        <Button
           type="button"
+          variant="outline"
+          size="sm"
           onClick={onNew}
           title="New hook file"
-          className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100"
+          className="h-6 px-1.5 text-xs"
         >
           + new
-        </button>
+        </Button>
       </div>
       <div className="flex-1 overflow-auto py-1">
         {loading ? (
-          <div className="px-3 py-2 text-xs text-neutral-500">Loading…</div>
+          <div className="px-3 py-2 text-xs text-muted-foreground">Loading…</div>
         ) : rendered.length === 0 ? (
-          <div className="px-3 py-2 text-xs text-neutral-500">
+          <div className="px-3 py-2 text-xs text-muted-foreground">
             No hooks yet. Click <span className="rb-mono">+ new</span> to create one.
           </div>
         ) : (
@@ -592,7 +666,7 @@ function FileTree({
                   "group flex items-center justify-between text-sm pr-2 " +
                   (active
                     ? "bg-neutral-900 text-white"
-                    : "text-neutral-700 hover:bg-neutral-200")
+                    : "text-foreground hover:bg-neutral-200")
                 }
               >
                 <button
@@ -613,7 +687,7 @@ function FileTree({
                   title="Delete"
                   className={
                     "opacity-0 group-hover:opacity-100 px-1 text-xs " +
-                    (active ? "text-white hover:text-red-200" : "text-neutral-500 hover:text-red-600")
+                    (active ? "text-white hover:text-red-200" : "text-muted-foreground hover:text-destructive")
                   }
                 >
                   🗑
@@ -645,29 +719,31 @@ function EditorToolbar({
   dirty: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between px-4 py-2 border-b border-neutral-200 bg-white">
+    <div className="flex items-center justify-between px-4 py-2 border-b bg-background">
       <div className="flex items-center gap-3 min-w-0">
-        <span className="rb-mono text-sm text-neutral-800 truncate" title={filename}>
+        <span className="rb-mono text-sm text-foreground truncate" title={filename}>
           {filename}
         </span>
         <StatusPill status={status} pending={pending} detail={statusDetail} dirty={dirty} />
       </div>
       <div className="flex items-center gap-2">
-        <button
+        <Button
           type="button"
+          variant="outline"
+          size="sm"
           onClick={onFormat}
-          className="rounded border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100"
         >
           Format
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="outline"
+          size="sm"
           onClick={onReload}
           title="Re-read the file from disk"
-          className="rounded border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100"
         >
           Reload from disk
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -689,55 +765,62 @@ function StatusPill({
   // was saved / error.
   if (pending || status === "saving") {
     return (
-      <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-800">
+      <Badge
+        variant="outline"
+        className="text-[11px] border-amber-200 bg-amber-50 text-amber-800"
+      >
         saving…
-      </span>
+      </Badge>
     );
   }
   if (status === "error") {
     return (
-      <span
+      <Badge
+        variant="outline"
         title={detail ?? ""}
-        className="rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] text-red-700"
+        className="text-[11px] border-destructive/30 bg-destructive/10 text-destructive"
       >
         save failed
-      </span>
+      </Badge>
     );
   }
   if (dirty) {
     return (
-      <span className="rounded border border-neutral-300 bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-700">
+      <Badge variant="secondary" className="text-[11px]">
         unsaved
-      </span>
+      </Badge>
     );
   }
   if (status === "saved") {
     return (
-      <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[11px] text-emerald-700">
+      <Badge
+        variant="outline"
+        className="text-[11px] border-emerald-200 bg-emerald-50 text-emerald-700"
+      >
         saved
-      </span>
+      </Badge>
     );
   }
   return (
-    <span className="rounded border border-neutral-200 bg-neutral-50 px-1.5 py-0.5 text-[11px] text-neutral-600">
+    <Badge variant="outline" className="text-[11px] text-muted-foreground">
       idle
-    </span>
+    </Badge>
   );
 }
 
 function EmptyEditorState() {
   return (
     <div className="p-6 max-w-2xl">
-      <div className="rounded-lg border-2 border-dashed border-neutral-300 bg-neutral-50 p-6">
-        <div className="text-sm font-medium text-neutral-700">No file selected.</div>
-        <div className="text-xs text-neutral-600 mt-2 leading-relaxed">
+      <div className="rounded-lg border-2 border-dashed border-input bg-muted p-6">
+        <div className="text-sm font-medium text-foreground">No file selected.</div>
+        <div className="text-xs text-muted-foreground mt-2 leading-relaxed">
           Pick a file from the sidebar, or click{" "}
           <span className="rb-mono">+ new</span> to create one. Files are stored
           on disk in <span className="rb-mono">pb_hooks/</span> and the runtime
           hot-reloads them within ~1 s of every save.
         </div>
-        <div className="mt-3 text-xs text-neutral-600">
-          <div className="font-medium text-neutral-700 mb-1">Available bindings:</div>
+        <div className="mt-3 text-xs text-muted-foreground">
+          <div className="font-medium text-foreground mb-1">Available bindings:</div>
           <ul className="rb-mono space-y-0.5 text-[12px]">
             <li>$app.onRecordBeforeCreate("collection", (e) =&gt; …)</li>
             <li>$app.onRecordAfterCreate / Before|AfterUpdate / Before|AfterDelete</li>
@@ -756,7 +839,7 @@ function UnavailableState() {
     <div className="space-y-4">
       <header>
         <h1 className="text-2xl font-semibold">Hooks</h1>
-        <p className="text-sm text-neutral-500">
+        <p className="text-sm text-muted-foreground">
           JavaScript hook files in <span className="rb-mono">pb_hooks/</span>.
         </p>
       </header>

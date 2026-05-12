@@ -2,6 +2,18 @@ import { Fragment, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import { Pager } from "../layout/pager";
+import { Button } from "@/lib/ui/button.ui";
+import { Input } from "@/lib/ui/input.ui";
+import { Badge } from "@/lib/ui/badge.ui";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/lib/ui/table.ui";
+import { Card, CardContent } from "@/lib/ui/card.ui";
 
 // Logs viewer — paginated, filterable list of structured log events.
 // Backend endpoint: GET /api/_admin/logs (v1.7.6+).
@@ -57,7 +69,7 @@ export function LogsScreen() {
       <header className="flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Logs</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-sm text-muted-foreground">
             {total} event{total === 1 ? "" : "s"} total. Showing newest first.
             Past 14 days by default (configurable via{" "}
             <code className="rb-mono">logs.retention_days</code>).
@@ -68,11 +80,11 @@ export function LogsScreen() {
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">level</span>
+          <span className="text-muted-foreground">level</span>
           <select
             value={level}
-            onChange={(e) => setLevel(e.target.value as LevelFilter)}
-            className="rounded border border-neutral-300 px-2 py-1"
+            onChange={(e) => setLevel(e.currentTarget.value as LevelFilter)}
+            className="rounded border border-input px-2 py-1 bg-transparent"
           >
             <option value="">all</option>
             <option value="debug">debug</option>
@@ -82,114 +94,118 @@ export function LogsScreen() {
           </select>
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">search</span>
-          <input
+          <span className="text-muted-foreground">search</span>
+          <Input
             type="text"
             value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
+            onInput={(e) => setSearchInput(e.currentTarget.value)}
             placeholder="message substring"
-            className="rounded border border-neutral-300 px-2 py-1 w-56"
+            className="w-56 h-8"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">request_id</span>
-          <input
+          <span className="text-muted-foreground">request_id</span>
+          <Input
             type="text"
             value={requestId}
-            onChange={(e) => setRequestId(e.target.value)}
+            onInput={(e) => setRequestId(e.currentTarget.value)}
             placeholder="exact match"
-            className="rounded border border-neutral-300 px-2 py-1 w-64 rb-mono text-xs"
+            className="w-64 h-8 rb-mono text-xs"
           />
         </label>
         {(level || search || requestId) ? (
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => {
               setLevel("");
               setSearchInput("");
               setSearch("");
               setRequestId("");
             }}
-            className="rounded border border-neutral-300 px-2 py-1 text-neutral-600 hover:bg-neutral-100"
           >
             clear
-          </button>
+          </Button>
         ) : null}
       </div>
 
-      <div className="rounded border border-neutral-200 bg-white overflow-x-auto">
-        <table className="rb-table">
-          <thead>
-            <tr>
-              <th>at</th>
-              <th>level</th>
-              <th>message</th>
-              <th>attrs</th>
-              <th>request</th>
-              <th>user</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(q.data?.items ?? []).map((e) => {
-              const isOpen = expandedId === e.id;
-              return (
-                <Fragment key={e.id}>
-                  <tr
-                    onClick={() => setExpandedId(isOpen ? null : e.id)}
-                    className="cursor-pointer"
-                  >
-                    <td className="rb-mono text-xs text-neutral-500 whitespace-nowrap">
-                      {e.created}
-                    </td>
-                    <td>
-                      <span className={"rounded px-1.5 py-0.5 text-xs " + levelColor(e.level)}>
-                        {e.level}
-                      </span>
-                    </td>
-                    <td className="max-w-md truncate">{e.message}</td>
-                    <td className="rb-mono text-xs text-neutral-500 max-w-xs truncate">
-                      {attrsPreview(e.attrs)}
-                    </td>
-                    <td className="rb-mono text-xs" title={e.request_id ?? ""}>
-                      {e.request_id ? e.request_id.slice(0, 8) + "…" : "—"}
-                    </td>
-                    <td className="rb-mono text-xs" title={e.user_id ?? ""}>
-                      {e.user_id ? e.user_id.slice(0, 8) + "…" : "—"}
-                    </td>
-                  </tr>
-                  {isOpen ? (
-                    <tr>
-                      <td colSpan={6} className="bg-neutral-50">
-                        <pre className="rb-mono text-xs text-neutral-700 whitespace-pre-wrap break-all p-2">
-                          {JSON.stringify(e.attrs ?? {}, null, 2)}
-                        </pre>
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              );
-            })}
-            {q.data?.items.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="text-neutral-400 text-center py-4">
-                  No log events.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+      <Card>
+        <CardContent className="p-0 overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>at</TableHead>
+                <TableHead>level</TableHead>
+                <TableHead>message</TableHead>
+                <TableHead>attrs</TableHead>
+                <TableHead>request</TableHead>
+                <TableHead>user</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(q.data?.items ?? []).map((e) => {
+                const isOpen = expandedId === e.id;
+                return (
+                  <Fragment key={e.id}>
+                    <TableRow
+                      onClick={() => setExpandedId(isOpen ? null : e.id)}
+                      className="cursor-pointer"
+                    >
+                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                        {e.created}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={levelVariant(e.level)}>{e.level}</Badge>
+                      </TableCell>
+                      <TableCell className="max-w-md truncate">{e.message}</TableCell>
+                      <TableCell className="rb-mono text-xs text-muted-foreground max-w-xs truncate">
+                        {attrsPreview(e.attrs)}
+                      </TableCell>
+                      <TableCell className="rb-mono text-xs" title={e.request_id ?? ""}>
+                        {e.request_id ? e.request_id.slice(0, 8) + "…" : "—"}
+                      </TableCell>
+                      <TableCell className="rb-mono text-xs" title={e.user_id ?? ""}>
+                        {e.user_id ? e.user_id.slice(0, 8) + "…" : "—"}
+                      </TableCell>
+                    </TableRow>
+                    {isOpen ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="bg-muted">
+                          <pre className="rb-mono text-xs text-foreground whitespace-pre-wrap break-all p-2">
+                            {JSON.stringify(e.attrs ?? {}, null, 2)}
+                          </pre>
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+              {q.data?.items.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-muted-foreground text-center py-4">
+                    No log events.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
-function levelColor(l: string): string {
+// levelVariant maps a log level to the closest Badge variant. The
+// kit's badge palette is small (default/secondary/destructive/outline)
+// so we approximate: error → destructive, warn → default (primary
+// emphasis), info → secondary, debug → outline.
+function levelVariant(l: string): "default" | "secondary" | "destructive" | "outline" {
   switch (l.toUpperCase()) {
-    case "DEBUG": return "bg-neutral-50 text-neutral-700 border border-neutral-200";
-    case "INFO":  return "bg-sky-50 text-sky-700 border border-sky-200";
-    case "WARN":  return "bg-amber-50 text-amber-700 border border-amber-200";
-    case "ERROR": return "bg-red-50 text-red-700 border border-red-200";
-    default:      return "bg-neutral-50 text-neutral-700 border border-neutral-200";
+    case "ERROR": return "destructive";
+    case "WARN":  return "default";
+    case "INFO":  return "secondary";
+    case "DEBUG": return "outline";
+    default:      return "outline";
   }
 }
 

@@ -142,9 +142,9 @@ export function BankAccountInput({
         <input
           type="text"
           value={draft.iban ?? ""}
-          onChange={(e) => onField("iban", e.target.value)}
+          onChange={(e) => onField("iban", e.currentTarget.value)}
           onBlur={onBlurCommit}
-          spellCheck={false}
+          spellcheck={false}
           autoCorrect="off"
           placeholder="DE89370400440532013000"
           className={inputCls}
@@ -155,9 +155,9 @@ export function BankAccountInput({
         <input
           type="text"
           value={draft.bic ?? ""}
-          onChange={(e) => onField("bic", e.target.value)}
+          onChange={(e) => onField("bic", e.currentTarget.value)}
           onBlur={onBlurCommit}
-          spellCheck={false}
+          spellcheck={false}
           autoCorrect="off"
           placeholder="DEUTDEFF"
           className={inputCls}
@@ -168,9 +168,9 @@ export function BankAccountInput({
         <input
           type="text"
           value={draft.accountNumber ?? ""}
-          onChange={(e) => onField("accountNumber", e.target.value)}
+          onChange={(e) => onField("accountNumber", e.currentTarget.value)}
           onBlur={onBlurCommit}
-          spellCheck={false}
+          spellcheck={false}
           autoCorrect="off"
           placeholder="12345678"
           className={inputCls}
@@ -182,9 +182,9 @@ export function BankAccountInput({
           <input
             type="text"
             value={draft.sortCode ?? ""}
-            onChange={(e) => onField("sortCode", e.target.value)}
+            onChange={(e) => onField("sortCode", e.currentTarget.value)}
             onBlur={onBlurCommit}
-            spellCheck={false}
+            spellcheck={false}
             autoCorrect="off"
             placeholder="20-00-00"
             className={inputCls}
@@ -195,9 +195,9 @@ export function BankAccountInput({
           <input
             type="text"
             value={draft.routingNumber ?? ""}
-            onChange={(e) => onField("routingNumber", e.target.value)}
+            onChange={(e) => onField("routingNumber", e.currentTarget.value)}
             onBlur={onBlurCommit}
-            spellCheck={false}
+            spellcheck={false}
             autoCorrect="off"
             placeholder="021000021"
             className={inputCls}

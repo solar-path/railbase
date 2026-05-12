@@ -2,6 +2,16 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { adminAPI, recordsAPI } from "../api/admin";
 import { Pager } from "../layout/pager";
+import { Button } from "@/lib/ui/button.ui";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/lib/ui/table.ui";
+import { Card, CardContent } from "@/lib/ui/card.ui";
 
 // Trash admin screen — cross-collection listing of soft-deleted
 // records with a per-row restore button. Backend endpoint:
@@ -71,7 +81,7 @@ export function TrashScreen() {
       <header className="flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Trash</h1>
-          <p className="text-sm text-neutral-500 max-w-3xl">
+          <p className="text-sm text-muted-foreground max-w-3xl">
             Soft-deleted records across all collections with{" "}
             <code className="rb-mono">.SoftDelete()</code>. Records here can be
             restored or stay until your retention policy permanently purges them.
@@ -83,19 +93,20 @@ export function TrashScreen() {
       {flash ? (
         <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 flex items-start justify-between gap-3">
           <div>{flash}</div>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setFlash(null)}
-            className="text-emerald-700/70 hover:text-emerald-900"
             aria-label="Dismiss"
+            className="text-emerald-700/70 hover:text-emerald-900 hover:bg-transparent h-auto p-0"
           >
             ×
-          </button>
+          </Button>
         </div>
       ) : null}
 
       {restoreM.isError ? (
-        <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           Restore failed:{" "}
           <span className="rb-mono">
             {(restoreM.error as { message?: string } | null)?.message ?? "unknown error"}
@@ -106,11 +117,11 @@ export function TrashScreen() {
       {hasSoftDelete ? (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <label className="flex items-center gap-1">
-            <span className="text-neutral-600">collection</span>
+            <span className="text-muted-foreground">collection</span>
             <select
               value={collection}
-              onChange={(e) => setCollection(e.target.value)}
-              className="rounded border border-neutral-300 px-2 py-1"
+              onChange={(e) => setCollection(e.currentTarget.value)}
+              className="rounded border border-input px-2 py-1 bg-transparent"
             >
               <option value="">all</option>
               {collections.map((c) => (
@@ -121,115 +132,117 @@ export function TrashScreen() {
             </select>
           </label>
           {collection ? (
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setCollection("")}
-              className="rounded border border-neutral-300 px-2 py-1 text-neutral-600 hover:bg-neutral-100"
             >
               clear
-            </button>
+            </Button>
           ) : null}
-          <span className="text-xs text-neutral-500 ml-auto">
+          <span className="text-xs text-muted-foreground ml-auto">
             {total} record{total === 1 ? "" : "s"} in trash
           </span>
         </div>
       ) : null}
 
       {q.isLoading ? (
-        <div className="text-sm text-neutral-500">Loading…</div>
+        <div className="text-sm text-muted-foreground">Loading…</div>
       ) : !hasSoftDelete ? (
         // No collection declares .SoftDelete() — distinct from "empty
         // trash". This guides the dev to the schema builder rather
         // than implying the trash is just empty.
-        <div className="rounded border border-dashed border-neutral-300 bg-neutral-50 px-4 py-8 text-center text-sm text-neutral-500">
+        <div className="rounded border border-dashed border-input bg-muted px-4 py-8 text-center text-sm text-muted-foreground">
           No collection has <code className="rb-mono">.SoftDelete()</code> enabled.
           Add the flag to a collection in your schema to start collecting
           tombstones here.
         </div>
       ) : items.length === 0 ? (
-        <div className="rounded border border-dashed border-neutral-300 bg-neutral-50 px-4 py-8 text-center text-sm text-neutral-500 space-y-1">
+        <div className="rounded border border-dashed border-input bg-muted px-4 py-8 text-center text-sm text-muted-foreground space-y-1">
           <div>(No soft-deleted records — nothing to restore.)</div>
-          <div className="text-xs text-neutral-400">
+          <div className="text-xs text-muted-foreground">
             Soft-deleted records linger here instead of being physically removed,
             so an accidental delete is one click away from being undone.
           </div>
         </div>
       ) : (
-        <div className="rounded border border-neutral-200 bg-white overflow-x-auto">
-          <table className="rb-table">
-            <thead>
-              <tr>
-                <th>deleted</th>
-                <th>collection</th>
-                <th>id</th>
-                <th>created</th>
-                <th>updated</th>
-                <th className="text-right">actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((it) => {
-                const idShort = it.id.slice(0, 8);
-                const pending =
-                  restoreM.isPending &&
-                  restoreM.variables?.collection === it.collection &&
-                  restoreM.variables?.id === it.id;
-                return (
-                  <tr key={`${it.collection}/${it.id}`}>
-                    <td
-                      className="rb-mono text-xs text-neutral-500 whitespace-nowrap"
-                      title={it.deleted}
-                    >
-                      {relativeTime(it.deleted)}
-                    </td>
-                    <td>
-                      <span className="inline-block bg-neutral-100 rounded px-1.5 py-0.5 text-xs rb-mono">
-                        {it.collection}
-                      </span>
-                    </td>
-                    <td className="rb-mono text-xs" title={it.id}>
-                      {idShort}…
-                    </td>
-                    <td
-                      className="rb-mono text-xs text-neutral-500 whitespace-nowrap"
-                      title={it.created}
-                    >
-                      {relativeTime(it.created)}
-                    </td>
-                    <td
-                      className="rb-mono text-xs text-neutral-500 whitespace-nowrap"
-                      title={it.updated}
-                    >
-                      {relativeTime(it.updated)}
-                    </td>
-                    <td className="text-right">
-                      <button
-                        type="button"
-                        disabled={pending}
-                        onClick={() => {
-                          if (
-                            !window.confirm(
-                              `Restore ${it.collection}/${idShort}…?`,
-                            )
-                          ) {
-                            return;
-                          }
-                          restoreM.mutate({
-                            collection: it.collection,
-                            id: it.id,
-                          });
-                        }}
-                        className="text-sky-600 hover:underline disabled:opacity-50 disabled:no-underline disabled:cursor-not-allowed text-sm"
+        <Card>
+          <CardContent className="p-0 overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>deleted</TableHead>
+                  <TableHead>collection</TableHead>
+                  <TableHead>id</TableHead>
+                  <TableHead>created</TableHead>
+                  <TableHead>updated</TableHead>
+                  <TableHead className="text-right">actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {items.map((it) => {
+                  const idShort = it.id.slice(0, 8);
+                  const pending =
+                    restoreM.isPending &&
+                    restoreM.variables?.collection === it.collection &&
+                    restoreM.variables?.id === it.id;
+                  return (
+                    <TableRow key={`${it.collection}/${it.id}`}>
+                      <TableCell
+                        className="rb-mono text-xs text-muted-foreground whitespace-nowrap"
+                        title={it.deleted}
                       >
-                        {pending ? "Restoring…" : "Restore"}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                        {relativeTime(it.deleted)}
+                      </TableCell>
+                      <TableCell>
+                        <span className="inline-block bg-muted rounded px-1.5 py-0.5 text-xs rb-mono">
+                          {it.collection}
+                        </span>
+                      </TableCell>
+                      <TableCell className="rb-mono text-xs" title={it.id}>
+                        {idShort}…
+                      </TableCell>
+                      <TableCell
+                        className="rb-mono text-xs text-muted-foreground whitespace-nowrap"
+                        title={it.created}
+                      >
+                        {relativeTime(it.created)}
+                      </TableCell>
+                      <TableCell
+                        className="rb-mono text-xs text-muted-foreground whitespace-nowrap"
+                        title={it.updated}
+                      >
+                        {relativeTime(it.updated)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="link"
+                          size="sm"
+                          disabled={pending}
+                          onClick={() => {
+                            if (
+                              !window.confirm(
+                                `Restore ${it.collection}/${idShort}…?`,
+                              )
+                            ) {
+                              return;
+                            }
+                            restoreM.mutate({
+                              collection: it.collection,
+                              id: it.id,
+                            });
+                          }}
+                        >
+                          {pending ? "Restoring…" : "Restore"}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

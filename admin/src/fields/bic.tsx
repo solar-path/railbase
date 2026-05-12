@@ -48,7 +48,7 @@ export function BicInput({
         value={draft}
         onChange={(e) => {
           // Auto-uppercase + strip whitespace as the user types.
-          const next = e.target.value.replace(/\s+/g, "").toUpperCase();
+          const next = e.currentTarget.value.replace(/\s+/g, "").toUpperCase();
           setDraft(next);
           setErr(null);
         }}
@@ -59,7 +59,7 @@ export function BicInput({
         }}
         placeholder="DEUTDEFFXXX"
         maxLength={11}
-        spellCheck={false}
+        spellcheck={false}
         autoCapitalize="characters"
         autoCorrect="off"
         className={

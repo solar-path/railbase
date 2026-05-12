@@ -219,6 +219,46 @@ railbase health
   CLI healthcheck (для container probes без HTTP).
 ```
 
+### UI kit (`ui`)
+
+Раздача embedded shadcn-on-Preact компонент-библиотеки downstream-приложениям. Бинарь embed'ит весь `admin/src/lib/ui/` (50 компонентов + 11 Radix-replacement primitives + cn/icons/theme + styles.css с oklch theme tokens); этот subcommand копирует source-файлы в указанный frontend-проект — shadcn-style "copy don't install" workflow, но без HTTP round-trip к shadcn.com (registry зашит в Railbase).
+
+Те же файлы параллельно доступны через HTTP по `/api/_ui/*` — см. docs/12-admin-ui.md, секция «Shareable UI kit».
+
+```
+railbase ui list [--with-peers]
+  Print available components (alphabetical, one per line).
+  --with-peers : append npm peer-dep list to each row.
+
+railbase ui peers [--json]
+  Print `npm install <peers>` line for the entire kit.
+  Includes peers transitively reached via _primitives/ (например
+  @floating-ui/dom приходит из popper.tsx).
+  --json : array form вместо shell line.
+
+railbase ui init [--out DIR]
+  Scaffold foundation files в DIR (default: ./):
+    src/styles.css                  (theme tokens — only if absent)
+    src/lib/ui/cn.ts                (overwrite — owned by kit)
+    src/lib/ui/icons.tsx            (overwrite)
+    src/lib/ui/theme.ts             (overwrite)
+    src/lib/ui/index.ts             (overwrite)
+    src/lib/ui/_primitives/*.{ts,tsx}  (overwrite — all 11 files)
+  styles.css скипается если уже существует — пользователи обычно
+  владеют своим global CSS, не клобберим.
+
+railbase ui add NAME... [--out DIR] [--force]
+railbase ui add --all     [--out DIR] [--force]
+  Copy specific components in DIR/src/lib/ui/. Transitive local deps
+  resolve автоматически через BFS по импортам:
+    railbase ui add password   # подтянет ./input.ui за компанию
+    railbase ui add form       # подтянет ./label.ui
+  Печатает peer-dep summary в stderr (npm install ... для выбранного
+  set'a). --force перезаписывает существующие файлы (default: skip).
+```
+
+Pre-condition для `ui add`: `cn.ts` должен существовать (т.е. `ui init` уже запускался). Иначе команда падает с подсказкой «run `railbase ui init` first».
+
 ### MCP (с plugin railbase-mcp)
 
 ```

@@ -151,7 +151,7 @@ export function DurationInput({
         type="text"
         value={draft}
         onChange={(e) => {
-          setDraft(e.target.value.toUpperCase());
+          setDraft(e.currentTarget.value.toUpperCase());
           setErr(null);
         }}
         onBlur={() => {
@@ -160,7 +160,7 @@ export function DurationInput({
           if (!e) onChange(draft === "" ? null : draft);
         }}
         placeholder="PT2H30M"
-        spellCheck={false}
+        spellcheck={false}
         autoCapitalize="characters"
         autoCorrect="off"
         className={

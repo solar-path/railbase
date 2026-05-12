@@ -2,6 +2,18 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import { Pager } from "../layout/pager";
+import { Button } from "@/lib/ui/button.ui";
+import { Input } from "@/lib/ui/input.ui";
+import { Badge } from "@/lib/ui/badge.ui";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/lib/ui/table.ui";
+import { Card, CardContent } from "@/lib/ui/card.ui";
 
 // Audit log viewer — paginated, filterable list of `_audit_log` rows.
 // Backend endpoint: GET /api/_admin/audit (v0.8 list, v1.7.11 filters).
@@ -78,7 +90,7 @@ export function AuditScreen() {
       <header className="flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Audit log</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-sm text-muted-foreground">
             {total} event{total === 1 ? "" : "s"} total. Append-only chain — verify with{" "}
             <code className="rb-mono">railbase audit verify</code>.
           </p>
@@ -88,21 +100,21 @@ export function AuditScreen() {
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">event</span>
-          <input
+          <span className="text-muted-foreground">event</span>
+          <Input
             type="text"
             value={eventInput}
-            onChange={(e) => setEventInput(e.target.value)}
+            onInput={(e) => setEventInput(e.currentTarget.value)}
             placeholder="substring (e.g. auth.signin)"
-            className="rounded border border-neutral-300 px-2 py-1 w-56 rb-mono text-xs"
+            className="w-56 h-8 rb-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">outcome</span>
+          <span className="text-muted-foreground">outcome</span>
           <select
             value={outcome}
-            onChange={(e) => setOutcome(e.target.value as OutcomeFilter)}
-            className="rounded border border-neutral-300 px-2 py-1"
+            onChange={(e) => setOutcome(e.currentTarget.value as OutcomeFilter)}
+            className="rounded border border-input px-2 py-1 bg-transparent"
           >
             <option value="">all</option>
             <option value="success">success</option>
@@ -112,48 +124,49 @@ export function AuditScreen() {
           </select>
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">user_id</span>
-          <input
+          <span className="text-muted-foreground">user_id</span>
+          <Input
             type="text"
             value={userIdInput}
-            onChange={(e) => setUserIdInput(e.target.value)}
+            onInput={(e) => setUserIdInput(e.currentTarget.value)}
             placeholder="UUID exact match"
-            className="rounded border border-neutral-300 px-2 py-1 w-64 rb-mono text-xs"
+            className="w-64 h-8 rb-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">since</span>
-          <input
+          <span className="text-muted-foreground">since</span>
+          <Input
             type="datetime-local"
             value={since}
-            onChange={(e) => setSince(e.target.value)}
-            className="rounded border border-neutral-300 px-2 py-1 rb-mono text-xs"
+            onInput={(e) => setSince(e.currentTarget.value)}
+            className="h-8 rb-mono text-xs w-auto"
             title="RFC3339 lower bound on the row's `at` column"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">until</span>
-          <input
+          <span className="text-muted-foreground">until</span>
+          <Input
             type="datetime-local"
             value={until}
-            onChange={(e) => setUntil(e.target.value)}
-            className="rounded border border-neutral-300 px-2 py-1 rb-mono text-xs"
+            onInput={(e) => setUntil(e.currentTarget.value)}
+            className="h-8 rb-mono text-xs w-auto"
             title="RFC3339 upper bound on the row's `at` column"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">error_code</span>
-          <input
+          <span className="text-muted-foreground">error_code</span>
+          <Input
             type="text"
             value={errorCodeInput}
-            onChange={(e) => setErrorCodeInput(e.target.value)}
+            onInput={(e) => setErrorCodeInput(e.currentTarget.value)}
             placeholder="substring"
-            className="rounded border border-neutral-300 px-2 py-1 w-48 rb-mono text-xs"
+            className="w-48 h-8 rb-mono text-xs"
           />
         </label>
         {anyFilter ? (
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => {
               setEventInput("");
               setEvent("");
@@ -165,69 +178,71 @@ export function AuditScreen() {
               setErrorCodeInput("");
               setErrorCode("");
             }}
-            className="rounded border border-neutral-300 px-2 py-1 text-neutral-600 hover:bg-neutral-100"
           >
             clear
-          </button>
+          </Button>
         ) : null}
       </div>
 
-      <div className="rounded border border-neutral-200 bg-white overflow-x-auto">
-        <table className="rb-table">
-          <thead>
-            <tr>
-              <th>seq</th>
-              <th>at</th>
-              <th>event</th>
-              <th>outcome</th>
-              <th>user</th>
-              <th>ip</th>
-              <th>error</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(q.data?.items ?? []).map((e) => (
-              <tr key={e.seq}>
-                <td className="rb-mono text-neutral-500">{e.seq}</td>
-                <td className="rb-mono text-xs text-neutral-500">{e.at}</td>
-                <td className="rb-mono">{e.event}</td>
-                <td>
-                  <span className={"rounded px-1.5 py-0.5 text-xs " + outcomeColor(e.outcome)}>
-                    {e.outcome}
-                  </span>
-                </td>
-                <td className="rb-mono text-xs">
-                  {e.user_id ? (
-                    <span title={e.user_collection ?? ""}>{e.user_id.slice(0, 8)}…</span>
-                  ) : (
-                    "—"
-                  )}
-                </td>
-                <td className="rb-mono text-xs">{e.ip ?? "—"}</td>
-                <td className="rb-mono text-xs text-amber-700">{e.error_code ?? ""}</td>
-              </tr>
-            ))}
-            {q.data?.items.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="text-neutral-400 text-center py-4">
-                  No events.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+      <Card>
+        <CardContent className="p-0 overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>seq</TableHead>
+                <TableHead>at</TableHead>
+                <TableHead>event</TableHead>
+                <TableHead>outcome</TableHead>
+                <TableHead>user</TableHead>
+                <TableHead>ip</TableHead>
+                <TableHead>error</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(q.data?.items ?? []).map((e) => (
+                <TableRow key={e.seq}>
+                  <TableCell className="rb-mono text-muted-foreground">{e.seq}</TableCell>
+                  <TableCell className="rb-mono text-xs text-muted-foreground">{e.at}</TableCell>
+                  <TableCell className="rb-mono">{e.event}</TableCell>
+                  <TableCell>
+                    <Badge variant={outcomeVariant(e.outcome)}>{e.outcome}</Badge>
+                  </TableCell>
+                  <TableCell className="rb-mono text-xs">
+                    {e.user_id ? (
+                      <span title={e.user_collection ?? ""}>{e.user_id.slice(0, 8)}…</span>
+                    ) : (
+                      "—"
+                    )}
+                  </TableCell>
+                  <TableCell className="rb-mono text-xs">{e.ip ?? "—"}</TableCell>
+                  <TableCell className="rb-mono text-xs text-amber-700">{e.error_code ?? ""}</TableCell>
+                </TableRow>
+              ))}
+              {q.data?.items.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-muted-foreground text-center py-4">
+                    No events.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
-function outcomeColor(o: string): string {
+// outcomeVariant maps audit outcomes onto Badge variants. success →
+// default (primary positive), denied → secondary (informational
+// warning), failed / error → destructive.
+function outcomeVariant(o: string): "default" | "secondary" | "destructive" | "outline" {
   switch (o) {
-    case "success": return "bg-emerald-50 text-emerald-700 border border-emerald-200";
-    case "denied":  return "bg-amber-50 text-amber-700 border border-amber-200";
-    case "failed":  return "bg-red-50 text-red-700 border border-red-200";
-    case "error":   return "bg-red-50 text-red-700 border border-red-200";
-    default:        return "bg-neutral-50 text-neutral-700 border border-neutral-200";
+    case "success": return "default";
+    case "denied":  return "secondary";
+    case "failed":  return "destructive";
+    case "error":   return "destructive";
+    default:        return "outline";
   }
 }
 

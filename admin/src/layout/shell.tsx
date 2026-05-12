@@ -1,9 +1,11 @@
 import { type ReactNode } from "react";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation } from "wouter-preact";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../auth/context";
 import { adminAPI } from "../api/admin";
 import CommandPalette from "./command_palette";
+import { Button } from "@/lib/ui/button.ui";
+import { cn } from "@/lib/ui/cn";
 
 // Shell is the persistent layout shown to authenticated admins:
 //
@@ -21,6 +23,11 @@ import CommandPalette from "./command_palette";
 // We fetch the schema once at this level so the sidebar can list
 // every collection. Sub-pages reuse the same query (TanStack Query
 // dedups it) without refetching.
+//
+// Styling note: the shell is the first consumer of theme tokens (bg-
+// background / bg-muted / text-foreground / border-border) — it sets
+// the visual chrome that every other screen reads from. If you tweak
+// a token here, ripple it through styles.css, not back into this file.
 
 export function Shell({ children }: { children: ReactNode }) {
   const { state, signout } = useAuth();
@@ -33,38 +40,38 @@ export function Shell({ children }: { children: ReactNode }) {
   });
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="flex items-center justify-between border-b border-neutral-200 bg-white px-4 py-2">
+    <div className="min-h-screen flex flex-col bg-background text-foreground">
+      <header className="flex items-center justify-between border-b bg-card px-4 py-2">
         <div className="flex items-center gap-3">
           <span className="font-semibold tracking-tight">Railbase</span>
-          <span className="text-xs text-neutral-400">admin</span>
+          <span className="text-xs text-muted-foreground">admin</span>
         </div>
-        <div className="flex items-center gap-3 text-sm text-neutral-600">
+        <div className="flex items-center gap-3 text-sm text-muted-foreground">
           <button
             type="button"
             onClick={openCommandPalette}
             title="Open command palette"
-            className="rb-mono text-[11px] rounded border border-neutral-300 bg-neutral-50 px-1.5 py-0.5 text-neutral-600 hover:bg-neutral-100"
+            className="rb-mono text-[11px] rounded border bg-muted px-1.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
           >
             ⌘K
           </button>
           {me ? <span>{me.email}</span> : null}
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => void signout()}
-            className="text-neutral-700 hover:text-neutral-900"
           >
             Sign out
-          </button>
+          </Button>
         </div>
       </header>
 
       <div className="flex flex-1 min-h-0">
-        <nav className="w-56 shrink-0 border-r border-neutral-200 bg-neutral-50 px-3 py-4 overflow-y-auto">
+        <nav className="w-56 shrink-0 border-r bg-muted/40 px-3 py-4 overflow-y-auto">
           <SidebarLink href="/">Dashboard</SidebarLink>
           <SidebarLink href="/schema">Schema</SidebarLink>
 
-          <div className="mt-4 mb-1 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
+          <div className="mt-4 mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Data
           </div>
           {schemaQ.data?.collections.map((c) => (
@@ -73,7 +80,7 @@ export function Shell({ children }: { children: ReactNode }) {
             </SidebarLink>
           ))}
 
-          <div className="mt-4 mb-1 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
+          <div className="mt-4 mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             System
           </div>
           <SidebarLink href="/settings">Settings</SidebarLink>
@@ -139,14 +146,13 @@ function SidebarLink({
   return (
     <Link
       href={href}
-      className={
-        (nested
-          ? "block rounded pl-5 pr-2 py-0.5 text-xs "
-          : "block rounded px-2 py-1 text-sm ") +
-        (active
-          ? "bg-neutral-900 text-white"
-          : "text-neutral-700 hover:bg-neutral-200")
-      }
+      className={cn(
+        "block rounded",
+        nested ? "pl-5 pr-2 py-0.5 text-xs" : "px-2 py-1 text-sm",
+        active
+          ? "bg-primary text-primary-foreground"
+          : "text-foreground hover:bg-accent hover:text-accent-foreground",
+      )}
     >
       {children}
     </Link>

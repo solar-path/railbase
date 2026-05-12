@@ -103,7 +103,7 @@ export function IbanInput({
         onChange={(e) => {
           // Accept whatever the user types (spaces / case); we normalise
           // on commit. Re-group as they go so the display stays tidy.
-          const next = e.target.value;
+          const next = e.currentTarget.value;
           const n = normaliseIban(next);
           setDraft(groupIban(n));
           setErr(null);
@@ -117,7 +117,7 @@ export function IbanInput({
           }
         }}
         placeholder="DE89 3704 0044 0532 0130 00"
-        spellCheck={false}
+        spellcheck={false}
         autoCapitalize="characters"
         autoCorrect="off"
         className={

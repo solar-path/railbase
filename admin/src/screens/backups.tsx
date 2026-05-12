@@ -2,6 +2,16 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import type { BackupCreatedResponse } from "../api/types";
+import { Button } from "@/lib/ui/button.ui";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/lib/ui/table.ui";
+import { Card, CardContent } from "@/lib/ui/card.ui";
 
 // Backups admin screen — read-only listing of .tar.gz archives in
 // <DataDir>/backups/ plus a "create new backup" button. Backend:
@@ -53,18 +63,17 @@ export function BackupsScreen() {
       <header className="flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Backups</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-sm text-muted-foreground">
             {items.length} archive{items.length === 1 ? "" : "s"}
             {items.length > 0 ? <> — {humanSize(totalSize)} total</> : null}.
             Stored under <code className="rb-mono">&lt;dataDir&gt;/backups/</code>.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
+          <Button
             onClick={() => createM.mutate()}
             disabled={createM.isPending}
-            className="rounded bg-neutral-900 px-3 py-1 text-sm text-white hover:bg-neutral-800 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
+            size="sm"
           >
             {createM.isPending ? (
               <>
@@ -74,7 +83,7 @@ export function BackupsScreen() {
             ) : (
               <>+ Create backup</>
             )}
-          </button>
+          </Button>
         </div>
       </header>
 
@@ -87,19 +96,20 @@ export function BackupsScreen() {
             {flash.manifest.rows_count.toLocaleString()} row
             {flash.manifest.rows_count === 1 ? "" : "s"})
           </div>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setFlash(null)}
-            className="text-emerald-700/70 hover:text-emerald-900"
             aria-label="Dismiss"
+            className="text-emerald-700/70 hover:text-emerald-900 hover:bg-transparent h-auto p-0"
           >
             ×
-          </button>
+          </Button>
         </div>
       ) : null}
 
       {createM.isError ? (
-        <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           Backup failed:{" "}
           <span className="rb-mono">
             {(createM.error as { message?: string } | null)?.message ?? "unknown error"}
@@ -108,42 +118,44 @@ export function BackupsScreen() {
       ) : null}
 
       {q.isLoading ? (
-        <div className="text-sm text-neutral-500">Loading…</div>
+        <div className="text-sm text-muted-foreground">Loading…</div>
       ) : items.length === 0 ? (
-        <div className="rounded border border-dashed border-neutral-300 bg-neutral-50 px-4 py-8 text-center text-sm text-neutral-500">
+        <div className="rounded border border-dashed border-input bg-muted px-4 py-8 text-center text-sm text-muted-foreground">
           No backups yet — click <span className="font-medium">Create backup</span> to make your first one.
         </div>
       ) : (
-        <div className="rounded border border-neutral-200 bg-white overflow-x-auto">
-          <table className="rb-table">
-            <thead>
-              <tr>
-                <th>name</th>
-                <th>size</th>
-                <th>created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((b) => (
-                <tr key={b.path}>
-                  <td className="rb-mono">{b.name}</td>
-                  <td className="rb-mono text-xs whitespace-nowrap">
-                    {humanSize(b.size_bytes)}
-                  </td>
-                  <td
-                    className="rb-mono text-xs text-neutral-500 whitespace-nowrap"
-                    title={b.created}
-                  >
-                    {relativeTime(b.created)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Card>
+          <CardContent className="p-0 overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>name</TableHead>
+                  <TableHead>size</TableHead>
+                  <TableHead>created</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {items.map((b) => (
+                  <TableRow key={b.path}>
+                    <TableCell className="rb-mono">{b.name}</TableCell>
+                    <TableCell className="rb-mono text-xs whitespace-nowrap">
+                      {humanSize(b.size_bytes)}
+                    </TableCell>
+                    <TableCell
+                      className="rb-mono text-xs text-muted-foreground whitespace-nowrap"
+                      title={b.created}
+                    >
+                      {relativeTime(b.created)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       )}
 
-      <p className="text-xs text-neutral-500">
+      <p className="text-xs text-muted-foreground">
         To restore a backup, use{" "}
         <code className="rb-mono">railbase backup restore &lt;path&gt; --force</code>{" "}
         from the CLI. Restoring from the admin UI is intentionally not

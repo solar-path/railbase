@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation } from "wouter-preact";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
+import { cn } from "@/lib/ui/cn";
 
 // Command palette overlay (⌘K / Ctrl+K). Lightweight, hand-rolled:
-// no cmdk / Headless UI dependency — the surface area is small enough
-// that raw React + Tailwind is clearer than pulling in a primitive.
+// the surface is too small to be worth wiring through the kit's
+// <Command/> (which uses cmdk-style children and would force a full
+// rewrite of the keyboard-nav logic). v1.7.40 migration just swapped
+// raw color classes for theme tokens so the palette inherits the kit's
+// dark-mode + accent palette without behavioural changes.
 //
 // State is local: the palette listens on window for the open shortcut
 // and toggles itself. The shell mounts <CommandPalette /> exactly once
@@ -131,7 +135,7 @@ export default function CommandPalette() {
     close();
   };
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
       close();
@@ -174,26 +178,26 @@ export default function CommandPalette() {
     >
       <div
         ref={cardRef}
-        className="w-full max-w-[640px] bg-white rounded-lg shadow-2xl overflow-hidden border border-neutral-200"
+        className="w-full max-w-[640px] bg-popover text-popover-foreground rounded-lg shadow-2xl overflow-hidden border"
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
         role="dialog"
         aria-label="Command palette"
       >
-        <div className="border-b border-neutral-200 px-3 py-2">
+        <div className="border-b px-3 py-2">
           <input
             ref={inputRef}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => setQuery(e.currentTarget.value)}
             placeholder="Search pages, collections…"
-            className="w-full bg-transparent text-sm outline-none placeholder:text-neutral-400"
-            spellCheck={false}
+            className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            spellcheck={false}
             autoComplete="off"
           />
         </div>
         <div ref={listRef} className="max-h-[360px] overflow-y-auto py-1">
           {rows.length === 0 ? (
-            <div className="px-4 py-6 text-center text-sm text-neutral-400">
+            <div className="px-4 py-6 text-center text-sm text-muted-foreground">
               No matches
             </div>
           ) : (
@@ -229,7 +233,7 @@ export default function CommandPalette() {
             </>
           )}
         </div>
-        <div className="border-t border-neutral-200 px-3 py-1.5 text-[11px] text-neutral-500 flex items-center gap-3">
+        <div className="border-t px-3 py-1.5 text-[11px] text-muted-foreground flex items-center gap-3">
           <span>
             <kbd className="rb-mono">↑↓</kbd> navigate
           </span>
@@ -248,7 +252,7 @@ export default function CommandPalette() {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="py-1">
-      <div className="sticky top-0 z-10 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
+      <div className="sticky top-0 z-10 bg-popover px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
         {title}
       </div>
       {children}
@@ -281,25 +285,27 @@ function RowItem({
         e.preventDefault();
         onPick(row);
       }}
-      className={
-        "mx-1 flex items-center gap-3 rounded px-2 py-1.5 cursor-pointer text-sm " +
-        (active ? "bg-neutral-900 text-white" : "text-neutral-800 hover:bg-neutral-100")
-      }
+      className={cn(
+        "mx-1 flex items-center gap-3 rounded px-2 py-1.5 cursor-pointer text-sm",
+        active
+          ? "bg-primary text-primary-foreground"
+          : "text-foreground hover:bg-accent hover:text-accent-foreground",
+      )}
     >
       <span
-        className={
-          "inline-flex w-4 justify-center " +
-          (active ? "text-white" : "text-neutral-400")
-        }
+        className={cn(
+          "inline-flex w-4 justify-center",
+          active ? "text-primary-foreground/80" : "text-muted-foreground",
+        )}
       >
         {glyph}
       </span>
       <span className="flex-1 truncate">{row.label}</span>
       <span
-        className={
-          "rb-mono text-[11px] " +
-          (active ? "text-neutral-300" : "text-neutral-400")
-        }
+        className={cn(
+          "rb-mono text-[11px]",
+          active ? "text-primary-foreground/70" : "text-muted-foreground",
+        )}
       >
         {row.path}
       </span>

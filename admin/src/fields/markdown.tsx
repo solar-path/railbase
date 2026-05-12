@@ -149,10 +149,10 @@ export function MarkdownInput({
         <textarea
           ref={ref}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => setDraft(e.currentTarget.value)}
           onBlur={() => onChange(draft === "" ? null : draft)}
           rows={rows}
-          spellCheck={false}
+          spellcheck={false}
           className="w-full rounded border border-neutral-300 px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 focus:ring-neutral-900"
         />
       ) : (

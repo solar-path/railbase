@@ -109,8 +109,8 @@ export function StatusInput({
         type="text"
         value={draft}
         onChange={(e) => {
-          setDraft(e.target.value);
-          onChange(e.target.value === "" ? null : e.target.value);
+          setDraft(e.currentTarget.value);
+          onChange(e.currentTarget.value === "" ? null : e.currentTarget.value);
         }}
         placeholder="status"
         className="mt-1 w-full rounded border border-neutral-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-900"
@@ -122,7 +122,7 @@ export function StatusInput({
     <select
       value={draft}
       onChange={(e) => {
-        const v = e.target.value;
+        const v = e.currentTarget.value;
         setDraft(v);
         onChange(v === "" ? null : v);
       }}

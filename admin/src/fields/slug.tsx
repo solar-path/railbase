@@ -68,7 +68,7 @@ export function SlugInput({
       <input
         type="text"
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => setDraft(e.currentTarget.value)}
         onBlur={() => {
           // Commit even when invalid — backend will reject with a
           // clear 400 if the slug is unsalvageable, and the inline
@@ -76,7 +76,7 @@ export function SlugInput({
           onChange(draft === "" ? null : draft);
         }}
         placeholder="my-post-slug"
-        spellCheck={false}
+        spellcheck={false}
         autoCapitalize="off"
         autoCorrect="off"
         className={

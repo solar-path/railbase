@@ -2,6 +2,18 @@ import { Fragment, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import { Pager } from "../layout/pager";
+import { Button } from "@/lib/ui/button.ui";
+import { Input } from "@/lib/ui/input.ui";
+import { Badge } from "@/lib/ui/badge.ui";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/lib/ui/table.ui";
+import { Card, CardContent } from "@/lib/ui/card.ui";
 
 // Jobs queue browser — paginated, filterable list of `_jobs` rows.
 // Backend endpoint: GET /api/_admin/jobs (v1.7.7+).
@@ -53,7 +65,7 @@ export function JobsScreen() {
       <header className="flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Jobs queue</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-sm text-muted-foreground">
             {total} job{total === 1 ? "" : "s"} total. Showing newest first.
             Use the <code className="rb-mono">railbase jobs</code> CLI for cancel /
             run-now / reset / recover.
@@ -64,11 +76,11 @@ export function JobsScreen() {
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">status</span>
+          <span className="text-muted-foreground">status</span>
           <select
             value={status}
-            onChange={(e) => setStatus(e.target.value as StatusFilter)}
-            className="rounded border border-neutral-300 px-2 py-1"
+            onChange={(e) => setStatus(e.currentTarget.value as StatusFilter)}
+            className="rounded border border-input px-2 py-1 bg-transparent"
           >
             <option value="">all</option>
             <option value="pending">pending</option>
@@ -79,135 +91,135 @@ export function JobsScreen() {
           </select>
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">kind</span>
-          <input
+          <span className="text-muted-foreground">kind</span>
+          <Input
             type="text"
             value={kindInput}
-            onChange={(e) => setKindInput(e.target.value)}
+            onInput={(e) => setKindInput(e.currentTarget.value)}
             placeholder="substring"
-            className="rounded border border-neutral-300 px-2 py-1 w-56 rb-mono text-xs"
+            className="w-56 h-8 rb-mono text-xs"
           />
         </label>
         {(status || kind) ? (
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => {
               setStatus("");
               setKindInput("");
               setKind("");
             }}
-            className="rounded border border-neutral-300 px-2 py-1 text-neutral-600 hover:bg-neutral-100"
           >
             clear
-          </button>
+          </Button>
         ) : null}
       </div>
 
-      <div className="rounded border border-neutral-200 bg-white overflow-x-auto">
-        <table className="rb-table">
-          <thead>
-            <tr>
-              <th>created</th>
-              <th>kind</th>
-              <th>queue</th>
-              <th>status</th>
-              <th>attempts</th>
-              <th>last error</th>
-              <th>id</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(q.data?.items ?? []).map((j) => {
-              const isOpen = expandedId === j.id;
-              return (
-                <Fragment key={j.id}>
-                  <tr
-                    onClick={() => setExpandedId(isOpen ? null : j.id)}
-                    className="cursor-pointer"
-                  >
-                    <td className="rb-mono text-xs text-neutral-500 whitespace-nowrap">
-                      {j.created_at}
-                    </td>
-                    <td className="rb-mono">{j.kind}</td>
-                    <td className="rb-mono text-xs text-neutral-600">{j.queue}</td>
-                    <td>
-                      <span className={"rounded px-1.5 py-0.5 text-xs " + statusColor(j.status)}>
-                        {j.status}
-                      </span>
-                    </td>
-                    <td className="rb-mono text-xs whitespace-nowrap">
-                      {j.attempts}/{j.max_attempts}
-                    </td>
-                    <td className="max-w-md truncate text-xs text-red-700">
-                      {j.last_error ? firstLine(j.last_error) : ""}
-                    </td>
-                    <td className="rb-mono text-xs" title={j.id}>
-                      {j.id.slice(0, 8)}…
-                    </td>
-                  </tr>
-                  {isOpen ? (
-                    <tr>
-                      <td colSpan={7} className="bg-neutral-50">
-                        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 p-3 text-xs">
-                          <dt className="text-neutral-500">id</dt>
-                          <dd className="rb-mono">{j.id}</dd>
-                          <dt className="text-neutral-500">queue</dt>
-                          <dd className="rb-mono">{j.queue}</dd>
-                          <dt className="text-neutral-500">run_after</dt>
-                          <dd className="rb-mono">{j.run_after}</dd>
-                          <dt className="text-neutral-500">started_at</dt>
-                          <dd className="rb-mono">{j.started_at ?? "—"}</dd>
-                          <dt className="text-neutral-500">completed_at</dt>
-                          <dd className="rb-mono">{j.completed_at ?? "—"}</dd>
-                          <dt className="text-neutral-500">locked_by</dt>
-                          <dd className="rb-mono">{j.locked_by ?? "—"}</dd>
-                          <dt className="text-neutral-500">locked_until</dt>
-                          <dd className="rb-mono">{j.locked_until ?? "—"}</dd>
-                          <dt className="text-neutral-500">cron_id</dt>
-                          <dd className="rb-mono">{j.cron_id ?? "—"}</dd>
-                          {j.last_error ? (
-                            <>
-                              <dt className="text-neutral-500 self-start">last_error</dt>
-                              <dd>
-                                <pre className="rb-mono text-xs text-red-700 whitespace-pre-wrap break-all m-0">
-                                  {j.last_error}
-                                </pre>
-                              </dd>
-                            </>
-                          ) : null}
-                        </dl>
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              );
-            })}
-            {q.data?.items.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="text-neutral-400 text-center py-4">
-                  No jobs.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+      <Card>
+        <CardContent className="p-0 overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>created</TableHead>
+                <TableHead>kind</TableHead>
+                <TableHead>queue</TableHead>
+                <TableHead>status</TableHead>
+                <TableHead>attempts</TableHead>
+                <TableHead>last error</TableHead>
+                <TableHead>id</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(q.data?.items ?? []).map((j) => {
+                const isOpen = expandedId === j.id;
+                return (
+                  <Fragment key={j.id}>
+                    <TableRow
+                      onClick={() => setExpandedId(isOpen ? null : j.id)}
+                      className="cursor-pointer"
+                    >
+                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                        {j.created_at}
+                      </TableCell>
+                      <TableCell className="rb-mono">{j.kind}</TableCell>
+                      <TableCell className="rb-mono text-xs text-muted-foreground">{j.queue}</TableCell>
+                      <TableCell>
+                        <Badge variant={statusVariant(j.status)}>{j.status}</Badge>
+                      </TableCell>
+                      <TableCell className="rb-mono text-xs whitespace-nowrap">
+                        {j.attempts}/{j.max_attempts}
+                      </TableCell>
+                      <TableCell className="max-w-md truncate text-xs text-destructive">
+                        {j.last_error ? firstLine(j.last_error) : ""}
+                      </TableCell>
+                      <TableCell className="rb-mono text-xs" title={j.id}>
+                        {j.id.slice(0, 8)}…
+                      </TableCell>
+                    </TableRow>
+                    {isOpen ? (
+                      <TableRow>
+                        <TableCell colSpan={7} className="bg-muted">
+                          <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 p-3 text-xs">
+                            <dt className="text-muted-foreground">id</dt>
+                            <dd className="rb-mono">{j.id}</dd>
+                            <dt className="text-muted-foreground">queue</dt>
+                            <dd className="rb-mono">{j.queue}</dd>
+                            <dt className="text-muted-foreground">run_after</dt>
+                            <dd className="rb-mono">{j.run_after}</dd>
+                            <dt className="text-muted-foreground">started_at</dt>
+                            <dd className="rb-mono">{j.started_at ?? "—"}</dd>
+                            <dt className="text-muted-foreground">completed_at</dt>
+                            <dd className="rb-mono">{j.completed_at ?? "—"}</dd>
+                            <dt className="text-muted-foreground">locked_by</dt>
+                            <dd className="rb-mono">{j.locked_by ?? "—"}</dd>
+                            <dt className="text-muted-foreground">locked_until</dt>
+                            <dd className="rb-mono">{j.locked_until ?? "—"}</dd>
+                            <dt className="text-muted-foreground">cron_id</dt>
+                            <dd className="rb-mono">{j.cron_id ?? "—"}</dd>
+                            {j.last_error ? (
+                              <>
+                                <dt className="text-muted-foreground self-start">last_error</dt>
+                                <dd>
+                                  <pre className="rb-mono text-xs text-destructive whitespace-pre-wrap break-all m-0">
+                                    {j.last_error}
+                                  </pre>
+                                </dd>
+                              </>
+                            ) : null}
+                          </dl>
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+              {q.data?.items.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-muted-foreground text-center py-4">
+                    No jobs.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
-// Status badge palette matches the convention from the brief:
-// pending → neutral, running → sky, completed → emerald, failed → red,
-// cancelled → amber. (The brief used "succeeded" in prose, but the
-// backend enum is "completed" — we follow the wire.)
-function statusColor(s: string): string {
+// Status badge mapping. The kit's badge palette is small, so we
+// approximate: failed → destructive, completed → default (primary
+// emphasis as the "success" affordance), running/cancelled → secondary,
+// pending → outline.
+function statusVariant(s: string): "default" | "secondary" | "destructive" | "outline" {
   switch (s) {
-    case "pending":   return "bg-neutral-50 text-neutral-700 border border-neutral-200";
-    case "running":   return "bg-sky-50 text-sky-700 border border-sky-200";
-    case "completed": return "bg-emerald-50 text-emerald-700 border border-emerald-200";
-    case "failed":    return "bg-red-50 text-red-700 border border-red-200";
-    case "cancelled": return "bg-amber-50 text-amber-700 border border-amber-200";
-    default:          return "bg-neutral-50 text-neutral-700 border border-neutral-200";
+    case "pending":   return "outline";
+    case "running":   return "secondary";
+    case "completed": return "default";
+    case "failed":    return "destructive";
+    case "cancelled": return "secondary";
+    default:          return "outline";
   }
 }
 

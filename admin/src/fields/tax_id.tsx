@@ -63,7 +63,7 @@ export function TaxIdInput({
         type="text"
         value={draft}
         onChange={(e) => {
-          setDraft(e.target.value);
+          setDraft(e.currentTarget.value);
           setErr(null);
         }}
         onBlur={() => {
@@ -72,7 +72,7 @@ export function TaxIdInput({
           if (!e) onChange(draft === "" ? null : draft);
         }}
         placeholder={hint ? `${hint} tax ID` : "tax ID"}
-        spellCheck={false}
+        spellcheck={false}
         autoCapitalize="characters"
         autoCorrect="off"
         className={

@@ -92,7 +92,7 @@ export function FinanceInput({
         value={draft}
         title={focused ? draft : undefined}
         onChange={(e) => {
-          const v = e.target.value;
+          const v = e.currentTarget.value;
           // Only accept characters fitting the mask; silently drop
           // others so the field never holds a non-decimal string.
           if (v === "" || MASK.test(v)) {

@@ -101,7 +101,7 @@ export function CoordinatesInput({
             min={-90}
             max={90}
             onChange={(e) => {
-              setLat(e.target.value);
+              setLat(e.currentTarget.value);
               setErr(null);
             }}
             onBlur={validateAndCommit}
@@ -118,7 +118,7 @@ export function CoordinatesInput({
             min={-180}
             max={180}
             onChange={(e) => {
-              setLng(e.target.value);
+              setLng(e.currentTarget.value);
               setErr(null);
             }}
             onBlur={validateAndCommit}

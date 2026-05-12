@@ -1,7 +1,25 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { useLocation } from "wouter";
+import { useEffect, useState } from "react";
+import { useLocation } from "wouter-preact";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { api, isAPIError } from "../api/client";
 import { useAuth } from "../auth/context";
+import { Button } from "@/lib/ui/button.ui";
+import { Card } from "@/lib/ui/card.ui";
+import { Checkbox } from "@/lib/ui/checkbox.ui";
+import { Input } from "@/lib/ui/input.ui";
+import { PasswordInput } from "@/lib/ui/password.ui";
+import { RadioGroup, RadioGroupItem } from "@/lib/ui/radio-group.ui";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/lib/ui/form.ui";
 
 // First-run wizard. Reachable when /api/_admin/_bootstrap reports
 // `needsBootstrap: true` (LoginGate routes there) OR directly at
@@ -15,16 +33,15 @@ import { useAuth } from "../auth/context";
 //                    process IS embedded; no restart needed).
 //                    When they pick local-socket or external we
 //                    save the DSN to <DataDir>/.dsn AND tell them to
-//                    restart railbase before continuing. The admin
-//                    account creation will happen after that restart
-//                    (which boots against the real Postgres).
-//   2. "Admin"     — existing v0.8 admin-account creation.
+//                    restart railbase before continuing.
+//   2. "Admin"     — admin-account creation.
 //
-// The wizard state machine is the small "step" useState below. We
-// don't use a router because the wizard is intentionally linear and
-// the two steps share a chrome (panel + heading) — flipping the
-// rendered component is simpler than maintaining two distinct
-// /bootstrap/* routes.
+// v1.7.41 migrates both steps to the kit's <Form> + react-hook-form +
+// zod pattern (see login.tsx for the reference). Each step owns its
+// OWN useForm() — schemas, defaults, and submit targets diverge enough
+// that one mega-form would be more friction than two co-mounted ones.
+// Transient UI state (probe banners, save banners, step navigation,
+// detect result) stays on plain useState — it isn't form data.
 
 type SocketInfo = { dir: string; path: string; distro: string };
 type DetectResponse = {
@@ -54,7 +71,54 @@ type SaveResponse = {
   note: string;
 };
 
-type DBDriver = "local-socket" | "external" | "embedded";
+// Discriminated union by driver. Each branch carries only the fields
+// the backend will actually consume for that driver — the type system
+// (plus form.watch("driver")) drives which fields render. The "local_socket"
+// branch keeps `password` optional because peer/trust auth on local
+// sockets often does without one.
+const dbStepSchema = z.discriminatedUnion("driver", [
+  z.object({
+    driver: z.literal("local_socket"),
+    socket_dir: z.string().min(1, "Pick a socket"),
+    username: z.string().min(1, "Username required"),
+    password: z.string().optional(),
+    database: z.string().min(1, "Database name required"),
+    sslmode: z.enum(["disable", "require", "prefer"]),
+    create_db: z.boolean(),
+  }),
+  z.object({
+    driver: z.literal("external_dsn"),
+    external_dsn: z
+      .string()
+      .regex(/^postgres(ql)?:\/\//, "Must start with postgres://"),
+  }),
+  z.object({
+    driver: z.literal("embedded"),
+    // No fields — operator just chose to use the embedded PG.
+  }),
+]);
+
+type DBStepValues = z.infer<typeof dbStepSchema>;
+
+const adminStepSchema = z
+  .object({
+    email: z.string().email("Valid email required"),
+    password: z
+      .string()
+      .min(8, "Min 8 characters")
+      .regex(/[A-Z]/, "Need uppercase")
+      .regex(/[0-9]/, "Need digit")
+      .regex(/[^A-Za-z0-9]/, "Need symbol"),
+    confirm: z.string(),
+  })
+  // Cross-field validation: zod's .refine + path: ["confirm"] surfaces
+  // the error under the confirm field's <FormMessage> automatically.
+  .refine((d) => d.password === d.confirm, {
+    message: "Passwords don't match",
+    path: ["confirm"],
+  });
+
+type AdminStepValues = z.infer<typeof adminStepSchema>;
 
 export function BootstrapScreen() {
   // step 0 = database, step 1 = admin. We start on 0 — the operator
@@ -90,7 +154,7 @@ export function BootstrapScreen() {
   }, [autoAdvanced]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-neutral-100 p-6">
+    <div className="min-h-screen flex items-center justify-center bg-muted p-6">
       <div className="w-full max-w-2xl space-y-3">
         <Stepper step={step} />
         {step === 0 ? (
@@ -105,12 +169,12 @@ export function BootstrapScreen() {
 
 function Stepper({ step }: { step: 0 | 1 }) {
   return (
-    <ol className="flex items-center gap-3 text-sm text-neutral-500">
-      <li className={step === 0 ? "font-semibold text-neutral-900" : ""}>
+    <ol className="flex items-center gap-3 text-sm text-muted-foreground">
+      <li className={step === 0 ? "font-semibold text-foreground" : ""}>
         1. Database
       </li>
       <li>→</li>
-      <li className={step === 1 ? "font-semibold text-neutral-900" : ""}>
+      <li className={step === 1 ? "font-semibold text-foreground" : ""}>
         2. Admin account
       </li>
     </ol>
@@ -123,19 +187,24 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
   const [detect, setDetect] = useState<DetectResponse | null>(null);
   const [detectErr, setDetectErr] = useState<string | null>(null);
 
-  const [driver, setDriver] = useState<DBDriver>("embedded");
-  const [pickedSocket, setPickedSocket] = useState<string>("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [database, setDatabase] = useState("railbase");
-  const [sslmode, setSslmode] = useState("disable");
-  const [externalDSN, setExternalDSN] = useState("");
-  const [createDB, setCreateDB] = useState(false);
-
   const [probe, setProbe] = useState<ProbeResponse | null>(null);
   const [save, setSave] = useState<SaveResponse | null>(null);
   const [busy, setBusy] = useState<null | "probe" | "save">(null);
   const [err, setErr] = useState<string | null>(null);
+
+  // Default to "embedded" — overridden after detect if local sockets
+  // exist (preferred) OR if the build is setup-mode (external is the
+  // only valid radio). zodResolver is fine with the discriminated
+  // union: defaultValues only carries the embedded branch initially
+  // and we reset() into the other branches when the operator picks
+  // a different driver.
+  const form = useForm<DBStepValues>({
+    resolver: zodResolver(dbStepSchema),
+    defaultValues: { driver: "embedded" } as DBStepValues,
+    mode: "onSubmit",
+  });
+
+  const driver = form.watch("driver");
 
   // Detect on mount. The endpoint is public; we use fetch directly
   // rather than api.request because (a) the response shape isn't a
@@ -149,18 +218,21 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
         if (cancelled) return;
         setDetect(d);
         if (d.sockets.length > 0) {
-          setDriver("local-socket");
-          setPickedSocket(d.sockets[0].dir);
+          form.reset({
+            driver: "local_socket",
+            socket_dir: d.sockets[0].dir,
+            username: d.suggested_username ?? "",
+            password: "",
+            database: "railbase",
+            sslmode: "disable",
+            create_db: false,
+          });
         } else if (d.current_mode === "setup") {
           // Production binary, no embed_pg, no detected sockets — the
           // embedded driver radio is unavailable in this build. Default
           // to external DSN so the operator isn't pre-selected on a
-          // dead option. The radio for embedded is rendered disabled
-          // below when current_mode === "setup".
-          setDriver("external");
-        }
-        if (d.suggested_username && !username) {
-          setUsername(d.suggested_username);
+          // dead option.
+          form.reset({ driver: "external_dsn", external_dsn: "" });
         }
       })
       .catch((e: unknown) => {
@@ -176,33 +248,95 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function bodyForBackend() {
+  // The backend payload predates the discriminated union: it expects a
+  // single flat object with driver name + all per-driver fields, where
+  // unused branches stay empty. Re-flatten the validated form values
+  // into that shape. Driver names also map back to the hyphenated
+  // wire format the server still accepts.
+  function bodyForBackend(values: DBStepValues) {
+    if (values.driver === "local_socket") {
+      return {
+        driver: "local-socket",
+        socket_dir: values.socket_dir,
+        username: values.username,
+        password: values.password ?? "",
+        database: values.database,
+        sslmode: values.sslmode,
+        external_dsn: "",
+        create_database: values.create_db,
+      };
+    }
+    if (values.driver === "external_dsn") {
+      return {
+        driver: "external",
+        socket_dir: "",
+        username: "",
+        password: "",
+        database: "",
+        sslmode: "",
+        external_dsn: values.external_dsn,
+        create_database: false,
+      };
+    }
     return {
-      driver,
-      socket_dir: pickedSocket,
-      username,
-      password,
-      database,
-      sslmode,
-      external_dsn: externalDSN,
-      create_database: createDB,
+      driver: "embedded",
+      socket_dir: "",
+      username: "",
+      password: "",
+      database: "",
+      sslmode: "",
+      external_dsn: "",
+      create_database: false,
     };
   }
 
-  async function doProbe() {
+  // Driver radio is a click action on the FORM (not a submit) — switch
+  // discriminated-union branch by calling form.reset with the right
+  // defaults for that branch. We can't just setValue("driver", …)
+  // because the other branch fields would still be invalid/undefined.
+  function switchDriver(next: DBStepValues["driver"]) {
+    if (next === "local_socket") {
+      const first = detect?.sockets[0];
+      form.reset({
+        driver: "local_socket",
+        socket_dir: first?.dir ?? "",
+        username: detect?.suggested_username ?? "",
+        password: "",
+        database: "railbase",
+        sslmode: "disable",
+        create_db: false,
+      });
+    } else if (next === "external_dsn") {
+      form.reset({ driver: "external_dsn", external_dsn: "" });
+    } else {
+      form.reset({ driver: "embedded" });
+    }
+  }
+
+  // Probe is an action on current form values — explicitly validate
+  // first so we don't ship garbage to the backend, then call the
+  // probe-db endpoint. Result lives in transient probe state (not form
+  // state) — it's a banner above the buttons, not a field.
+  async function onProbe() {
     setErr(null);
     setProbe(null);
+    const valid = await form.trigger();
+    if (!valid) return;
+    const values = form.getValues();
     setBusy("probe");
     try {
       const r = await fetch("/api/_admin/_setup/probe-db", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(bodyForBackend()),
+        body: JSON.stringify(bodyForBackend(values)),
       });
-      const data = (await r.json()) as ProbeResponse | { error?: { message?: string } };
+      const data = (await r.json()) as
+        | ProbeResponse
+        | { error?: { message?: string } };
       if (r.status === 400) {
         const m =
-          (data as { error?: { message?: string } }).error?.message ?? "Validation error.";
+          (data as { error?: { message?: string } }).error?.message ??
+          "Validation error.";
         setErr(m);
       } else {
         setProbe(data as ProbeResponse);
@@ -214,7 +348,7 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
     }
   }
 
-  async function doSave() {
+  async function onSubmit(values: DBStepValues) {
     setErr(null);
     setSave(null);
     setBusy("save");
@@ -222,12 +356,15 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
       const r = await fetch("/api/_admin/_setup/save-db", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(bodyForBackend()),
+        body: JSON.stringify(bodyForBackend(values)),
       });
-      const data = (await r.json()) as SaveResponse | { error?: { message?: string } };
+      const data = (await r.json()) as
+        | SaveResponse
+        | { error?: { message?: string } };
       if (r.status === 400) {
         const m =
-          (data as { error?: { message?: string } }).error?.message ?? "Validation error.";
+          (data as { error?: { message?: string } }).error?.message ??
+          "Validation error.";
         setErr(m);
       } else {
         const saveData = data as SaveResponse;
@@ -276,293 +413,401 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
 
   const hasSockets = (detect?.sockets ?? []).length > 0;
   const isEmbedded = driver === "embedded";
+  const embeddedDisabled = detect?.current_mode === "setup";
 
   return (
-    <form
-      onSubmit={(e) => e.preventDefault()}
-      className="w-full bg-white rounded-lg shadow border border-neutral-200 p-6 space-y-5"
-    >
-      <header className="space-y-1">
-        <h1 className="text-xl font-semibold">Welcome to Railbase</h1>
-        <p className="text-sm text-neutral-500">
-          Choose where to store your data. You can change this later by
-          editing <code className="rb-mono px-1 py-0.5 bg-neutral-100 rounded">
-          &lt;dataDir&gt;/.dsn</code>.
-        </p>
-      </header>
+    <Card className="p-6">
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+          <header className="space-y-1">
+            <h1 className="text-xl font-semibold">Welcome to Railbase</h1>
+            <p className="text-sm text-muted-foreground">
+              Choose where to store your data. You can change this later by
+              editing{" "}
+              <code className="rb-mono px-1 py-0.5 bg-muted rounded">
+                &lt;dataDir&gt;/.dsn
+              </code>
+              .
+            </p>
+          </header>
 
-      {detect?.configured ? (
-        <div className="text-sm bg-emerald-50 border border-emerald-200 text-emerald-800 rounded px-3 py-2">
-          Database is already configured — running against your external
-          PostgreSQL. You can re-run the wizard to change targets, or skip
-          straight to <button
-            type="button"
-            className="underline font-medium"
-            onClick={onContinue}
-          >admin setup</button>.
-        </div>
-      ) : null}
-      {detectErr ? (
-        <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
-          {detectErr}
-        </p>
-      ) : null}
-
-      <fieldset className="space-y-2">
-        <legend className="text-sm font-medium text-neutral-700">
-          Database driver
-        </legend>
-        <DriverRadio
-          checked={driver === "local-socket"}
-          disabled={!hasSockets}
-          onChange={() => setDriver("local-socket")}
-          title="Use my local PostgreSQL"
-          subtitle={
-            hasSockets
-              ? `Detected ${detect?.sockets.length} socket${detect && detect.sockets.length === 1 ? "" : "s"}`
-              : "No local PostgreSQL detected on this machine"
-          }
-        />
-        <DriverRadio
-          checked={driver === "external"}
-          onChange={() => setDriver("external")}
-          title="Use an external PostgreSQL"
-          subtitle="Managed Postgres (Supabase, Neon, RDS, …) or a remote host"
-        />
-        <DriverRadio
-          checked={driver === "embedded"}
-          onChange={() => setDriver("embedded")}
-          // Embedded postgres is a `-tags embed_pg` build option,
-          // intentionally NOT included in release binaries. In
-          // setup-mode we surface the row as disabled so the operator
-          // sees "this exists but I can't pick it" rather than wonders
-          // why their choice silently fails on save.
-          disabled={detect?.current_mode === "setup"}
-          title={
-            detect?.current_mode === "setup"
-              ? "Embedded postgres — not available in this build"
-              : "Keep embedded (development)"
-          }
-          subtitle={
-            detect?.current_mode === "setup"
-              ? "Rebuild with `make build-embed` for the dev-only embedded driver"
-              : "Single-machine dev workflow; data lives under pb_data/postgres/"
-          }
-        />
-      </fieldset>
-
-      {driver === "local-socket" && hasSockets ? (
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <span className="text-sm font-medium text-neutral-700">Socket</span>
-            <div className="grid grid-cols-1 gap-2">
-              {(detect?.sockets ?? []).map((s) => (
-                <label
-                  key={s.dir}
-                  className={`flex items-start gap-2 rounded border px-3 py-2 cursor-pointer ${
-                    pickedSocket === s.dir
-                      ? "border-neutral-900 bg-neutral-50"
-                      : "border-neutral-200"
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="socket"
-                    checked={pickedSocket === s.dir}
-                    onChange={() => setPickedSocket(s.dir)}
-                    className="mt-1"
-                  />
-                  <span>
-                    <span className="block text-sm font-medium">{s.path}</span>
-                    <span className="block text-xs text-neutral-500">
-                      {s.distro}
-                    </span>
-                  </span>
-                </label>
-              ))}
+          {detect?.configured ? (
+            <div className="text-sm bg-emerald-50 border border-emerald-200 text-emerald-800 rounded px-3 py-2">
+              Database is already configured — running against your external
+              PostgreSQL. You can re-run the wizard to change targets, or skip
+              straight to{" "}
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                onClick={onContinue}
+                className="h-auto p-0 underline font-medium"
+              >
+                admin setup
+              </Button>
+              .
             </div>
+          ) : null}
+          {detectErr ? (
+            <p className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded px-3 py-2">
+              {detectErr}
+            </p>
+          ) : null}
+
+          <FormField
+            control={form.control}
+            name="driver"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Database driver</FormLabel>
+                <FormControl>
+                  <RadioGroup
+                    value={field.value}
+                    onValueChange={(v) => {
+                      // The embedded RadioGroupItem is disabled in setup-mode
+                      // builds, but defensive guard kept here so a future
+                      // keyboard-driven activation can't bypass it.
+                      if (v === "embedded" && embeddedDisabled) return;
+                      if (v === "local_socket" && !hasSockets) return;
+                      switchDriver(v as DBStepValues["driver"]);
+                    }}
+                    className="gap-2"
+                  >
+                    <DriverRadio
+                      value="local_socket"
+                      checked={field.value === "local_socket"}
+                      disabled={!hasSockets}
+                      title="Use my local PostgreSQL"
+                      subtitle={
+                        hasSockets
+                          ? `Detected ${detect?.sockets.length} socket${detect && detect.sockets.length === 1 ? "" : "s"}`
+                          : "No local PostgreSQL detected on this machine"
+                      }
+                    />
+                    <DriverRadio
+                      value="external_dsn"
+                      checked={field.value === "external_dsn"}
+                      title="Use an external PostgreSQL"
+                      subtitle="Managed Postgres (Supabase, Neon, RDS, …) or a remote host"
+                    />
+                    <DriverRadio
+                      value="embedded"
+                      checked={field.value === "embedded"}
+                      // Embedded postgres is a `-tags embed_pg` build option,
+                      // intentionally NOT included in release binaries. In
+                      // setup-mode we surface the row as disabled so the
+                      // operator sees "this exists but I can't pick it"
+                      // rather than wonders why their choice silently fails.
+                      disabled={embeddedDisabled}
+                      title={
+                        embeddedDisabled
+                          ? "Embedded postgres — not available in this build"
+                          : "Keep embedded (development)"
+                      }
+                      subtitle={
+                        embeddedDisabled
+                          ? "Rebuild with `make build-embed` for the dev-only embedded driver"
+                          : "Single-machine dev workflow; data lives under pb_data/postgres/"
+                      }
+                    />
+                  </RadioGroup>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          {driver === "local_socket" && hasSockets ? (
+            <div className="space-y-3">
+              <FormField
+                control={form.control}
+                name="socket_dir"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Socket</FormLabel>
+                    <FormControl>
+                      <RadioGroup
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        className="grid grid-cols-1 gap-2"
+                      >
+                        {(detect?.sockets ?? []).map((s) => (
+                          <SocketRadio
+                            key={s.dir}
+                            value={s.dir}
+                            checked={field.value === s.dir}
+                            path={s.path}
+                            distro={s.distro}
+                          />
+                        ))}
+                      </RadioGroup>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <div className="grid grid-cols-2 gap-3">
+                <FormField
+                  control={form.control}
+                  name="username"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Username</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="text"
+                          autoComplete="off"
+                          value={field.value ?? ""}
+                          onInput={(e) =>
+                            field.onChange(e.currentTarget.value)
+                          }
+                          onBlur={field.onBlur}
+                          name={field.name}
+                          ref={field.ref}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="password"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Password (optional)</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="password"
+                          autoComplete="new-password"
+                          value={field.value ?? ""}
+                          onInput={(e) =>
+                            field.onChange(e.currentTarget.value)
+                          }
+                          onBlur={field.onBlur}
+                          name={field.name}
+                          ref={field.ref}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        Leave empty for peer/trust auth (local sockets often
+                        don&apos;t need a password).
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="database"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Database</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="text"
+                          value={field.value ?? ""}
+                          onInput={(e) =>
+                            field.onChange(e.currentTarget.value)
+                          }
+                          onBlur={field.onBlur}
+                          name={field.name}
+                          ref={field.ref}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="sslmode"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>sslmode</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="text"
+                          value={field.value ?? ""}
+                          onInput={(e) =>
+                            field.onChange(e.currentTarget.value)
+                          }
+                          onBlur={field.onBlur}
+                          name={field.name}
+                          ref={field.ref}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <FormField
+                control={form.control}
+                name="create_db"
+                render={({ field }) => (
+                  <FormItem>
+                    <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
+                      <FormControl>
+                        <Checkbox
+                          checked={field.value === true}
+                          onCheckedChange={(v) => field.onChange(v === true)}
+                        />
+                      </FormControl>
+                      Create the database if it doesn&apos;t exist
+                    </label>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+          ) : null}
+
+          {driver === "external_dsn" ? (
+            <FormField
+              control={form.control}
+              name="external_dsn"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>DSN</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="text"
+                      value={field.value ?? ""}
+                      onInput={(e) => field.onChange(e.currentTarget.value)}
+                      onBlur={field.onBlur}
+                      name={field.name}
+                      ref={field.ref}
+                      placeholder="postgres://user:password@host:5432/dbname?sslmode=require"
+                      className="font-mono text-sm"
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    Must start with{" "}
+                    <code className="rb-mono">postgres://</code> or
+                    <code className="rb-mono ml-1">postgresql://</code>.
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          ) : null}
+
+          {driver === "embedded" ? (
+            <div className="text-sm bg-amber-50 border border-amber-200 text-amber-900 rounded px-3 py-2 space-y-1">
+              <p>
+                OK to keep developing locally with embedded postgres. Data
+                lives under{" "}
+                <code className="rb-mono">&lt;dataDir&gt;/postgres/</code>.
+              </p>
+              <p className="text-xs text-amber-700">
+                Not recommended for production — embedded postgres is dev-only.
+                You can re-run the wizard after deploying to point at a managed
+                Postgres without losing application schema (Railbase migrations
+                are re-applied on first boot).
+              </p>
+            </div>
+          ) : null}
+
+          {probe ? <ProbeResult probe={probe} /> : null}
+          {save ? <SaveResult save={save} /> : null}
+          {err ? (
+            <p className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded px-3 py-2">
+              {err}
+            </p>
+          ) : null}
+
+          <div className="flex items-center gap-2 pt-2 border-t">
+            {isEmbedded ? (
+              // "Keep embedded" path is only reachable when embed_pg is
+              // compiled in (driver radio is disabled in setup-mode). The
+              // operator is staying on the current process's DB; admin
+              // create is fine without a restart.
+              <Button type="button" onClick={onContinue}>
+                Continue to admin setup →
+              </Button>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy !== null || save?.ok === true}
+                  onClick={onProbe}
+                >
+                  {busy === "probe" ? "Probing…" : "Probe connection"}
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={busy !== null || save?.ok === true}
+                >
+                  {busy === "save" ? "Saving…" : "Save and restart later"}
+                </Button>
+                {/*
+                  Once save succeeded, the new DSN is on disk but the current
+                  process is still bound to whatever DB it booted with
+                  (setup-mode = no DB, embedded = throwaway dev cluster). An
+                  admin created NOW lands in the wrong place — empty after
+                  the restart in setup-mode, or in the old embedded cluster
+                  that gets shadowed by the new DSN. So we hide the Continue
+                  button entirely and tell the operator to restart.
+                */}
+              </>
+            )}
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <LabeledInput
-              label="Username"
-              value={username}
-              onChange={setUsername}
-              autoComplete="off"
-            />
-            <LabeledInput
-              label="Password (optional)"
-              type="password"
-              value={password}
-              onChange={setPassword}
-              autoComplete="new-password"
-              hint="Leave empty for peer/trust auth (local sockets often don't need a password)."
-            />
-            <LabeledInput
-              label="Database"
-              value={database}
-              onChange={setDatabase}
-            />
-            <LabeledInput
-              label="sslmode"
-              value={sslmode}
-              onChange={setSslmode}
-            />
-          </div>
-          <label className="inline-flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={createDB}
-              onChange={(e) => setCreateDB(e.target.checked)}
-            />
-            Create the database if it doesn&apos;t exist
-          </label>
-        </div>
-      ) : null}
 
-      {driver === "external" ? (
-        <div className="space-y-2">
-          <label className="block">
-            <span className="text-sm font-medium text-neutral-700">
-              DSN
-            </span>
-            <input
-              type="text"
-              value={externalDSN}
-              onChange={(e) => setExternalDSN(e.target.value)}
-              placeholder="postgres://user:password@host:5432/dbname?sslmode=require"
-              className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 text-sm font-mono"
-            />
-            <span className="text-xs text-neutral-500">
-              Must start with <code className="rb-mono">postgres://</code> or
-              <code className="rb-mono ml-1">postgresql://</code>.
-            </span>
-          </label>
-        </div>
-      ) : null}
+          {save?.ok && !isEmbedded && save.restart_required === false ? (
+            // In-process reload path: server is about to swap from
+            // setup-mode to the full boot path on the new DSN. We poll
+            // /readyz in the background and reload the page as soon as the
+            // new server is up — usually under 2s on a local socket.
+            <div className="mt-3 rounded border border-emerald-300 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
+              <strong className="block mb-1 flex items-center gap-2">
+                <span className="inline-block h-3 w-3 rounded-full bg-emerald-500 animate-pulse" />
+                Reloading on your new database…
+              </strong>
+              <span className="block">
+                The server is applying migrations and restarting in-place.
+                This page will refresh automatically once it&apos;s ready — no
+                terminal commands needed.
+              </span>
+            </div>
+          ) : null}
 
-      {driver === "embedded" ? (
-        <div className="text-sm bg-amber-50 border border-amber-200 text-amber-900 rounded px-3 py-2 space-y-1">
-          <p>
-            OK to keep developing locally with embedded postgres. Data lives
-            under <code className="rb-mono">&lt;dataDir&gt;/postgres/</code>.
-          </p>
-          <p className="text-xs text-amber-700">
-            Not recommended for production — embedded postgres is dev-only.
-            You can re-run the wizard after deploying to point at a managed
-            Postgres without losing application schema (Railbase migrations
-            are re-applied on first boot).
-          </p>
-        </div>
-      ) : null}
-
-      {probe ? (
-        <ProbeResult probe={probe} />
-      ) : null}
-      {save ? (
-        <SaveResult save={save} />
-      ) : null}
-      {err ? (
-        <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
-          {err}
-        </p>
-      ) : null}
-
-      <div className="flex items-center gap-2 pt-2 border-t border-neutral-100">
-        {isEmbedded ? (
-          // "Keep embedded" path is only reachable when embed_pg is
-          // compiled in (driver radio is disabled in setup-mode). The
-          // operator is staying on the current process's BD; admin
-          // create is fine without a restart.
-          <button
-            type="button"
-            onClick={onContinue}
-            className="rounded bg-neutral-900 text-white px-4 py-2 text-sm font-medium hover:bg-neutral-800"
-          >
-            Continue to admin setup →
-          </button>
-        ) : (
-          <>
-            <button
-              type="button"
-              disabled={busy !== null || save?.ok === true}
-              onClick={doProbe}
-              className="rounded border border-neutral-300 bg-white px-3 py-2 text-sm hover:bg-neutral-50 disabled:opacity-50"
-            >
-              {busy === "probe" ? "Probing…" : "Probe connection"}
-            </button>
-            <button
-              type="button"
-              disabled={busy !== null || save?.ok === true}
-              onClick={doSave}
-              className="rounded bg-neutral-900 text-white px-3 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
-            >
-              {busy === "save" ? "Saving…" : "Save and restart later"}
-            </button>
-            {/*
-              Once save succeeded, the new DSN is on disk but the current
-              process is still bound to whatever DB it booted with
-              (setup-mode = no DB, embedded = throwaway dev cluster). An
-              admin created NOW lands in the wrong place — empty after
-              the restart in setup-mode, or in the old embedded cluster
-              that gets shadowed by the new DSN. So we hide the Continue
-              button entirely and tell the operator to restart. After
-              the restart, /_bootstrap reports needsBootstrap=true with
-              currentMode=external, the wizard reopens, the database
-              step short-circuits (`configured: true`), and the operator
-              lands on the admin step on a fresh process bound to the
-              real DB.
-            */}
-          </>
-        )}
-      </div>
-
-      {save?.ok && !isEmbedded && save.restart_required === false ? (
-        // In-process reload path: server is about to swap from
-        // setup-mode to the full boot path on the new DSN. We poll
-        // /readyz in the background and reload the page as soon as the
-        // new server is up — usually under 2s on a local socket.
-        <div className="mt-3 rounded border border-emerald-300 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
-          <strong className="block mb-1 flex items-center gap-2">
-            <span className="inline-block h-3 w-3 rounded-full bg-emerald-500 animate-pulse" />
-            Reloading on your new database…
-          </strong>
-          <span className="block">
-            The server is applying migrations and restarting in-place.
-            This page will refresh automatically once it's ready — no
-            terminal commands needed.
-          </span>
-        </div>
-      ) : null}
-
-      {save?.ok && !isEmbedded && save.restart_required === true ? (
-        // Manual-restart path: kept as fallback for the rare case the
-        // backend can't trigger an in-process reload (e.g. invoked
-        // from a normal-boot wizard re-run where the chan is nil).
-        <div className="mt-3 rounded border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900">
-          <strong className="block mb-1">Restart railbase to continue.</strong>
-          <span className="block">
-            The configuration is saved. Re-run the process to pick up
-            the new DSN.
-          </span>
-          <code className="mt-2 block whitespace-pre rounded bg-amber-100 px-2 py-1 text-xs text-amber-900">
-            {`# Ctrl-C in the terminal, then:\n./railbase serve`}
-          </code>
-        </div>
-      ) : null}
-    </form>
+          {save?.ok && !isEmbedded && save.restart_required === true ? (
+            // Manual-restart path: kept as fallback for the rare case the
+            // backend can't trigger an in-process reload (e.g. invoked
+            // from a normal-boot wizard re-run where the chan is nil).
+            <div className="mt-3 rounded border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+              <strong className="block mb-1">
+                Restart railbase to continue.
+              </strong>
+              <span className="block">
+                The configuration is saved. Re-run the process to pick up the
+                new DSN.
+              </span>
+              <code className="mt-2 block whitespace-pre rounded bg-amber-100 px-2 py-1 text-xs text-amber-900">
+                {`# Ctrl-C in the terminal, then:\n./railbase serve`}
+              </code>
+            </div>
+          ) : null}
+        </form>
+      </Form>
+    </Card>
   );
 }
 
 function DriverRadio({
+  value,
   checked,
   disabled,
-  onChange,
   title,
   subtitle,
 }: {
+  value: string;
   checked: boolean;
   disabled?: boolean;
-  onChange: () => void;
   title: string;
   subtitle: string;
 }) {
@@ -570,56 +815,43 @@ function DriverRadio({
     <label
       className={`flex items-start gap-2 rounded border px-3 py-2 ${
         disabled
-          ? "border-neutral-200 bg-neutral-50 opacity-60 cursor-not-allowed"
+          ? "border-input bg-muted opacity-60 cursor-not-allowed"
           : checked
-          ? "border-neutral-900 bg-neutral-50 cursor-pointer"
-          : "border-neutral-200 cursor-pointer"
+            ? "border-neutral-900 bg-muted cursor-pointer"
+            : "border-input cursor-pointer"
       }`}
     >
-      <input
-        type="radio"
-        name="driver"
-        checked={checked}
-        disabled={disabled}
-        onChange={onChange}
-        className="mt-1"
-      />
+      <RadioGroupItem value={value} disabled={disabled} className="mt-1" />
       <span>
         <span className="block text-sm font-medium">{title}</span>
-        <span className="block text-xs text-neutral-500">{subtitle}</span>
+        <span className="block text-xs text-muted-foreground">{subtitle}</span>
       </span>
     </label>
   );
 }
 
-function LabeledInput({
-  label,
+function SocketRadio({
   value,
-  onChange,
-  type,
-  autoComplete,
-  hint,
+  checked,
+  path,
+  distro,
 }: {
-  label: string;
   value: string;
-  onChange: (v: string) => void;
-  type?: string;
-  autoComplete?: string;
-  hint?: string;
+  checked: boolean;
+  path: string;
+  distro: string;
 }) {
   return (
-    <label className="block">
-      <span className="text-sm font-medium text-neutral-700">{label}</span>
-      <input
-        type={type ?? "text"}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        autoComplete={autoComplete}
-        className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 text-sm"
-      />
-      {hint ? (
-        <span className="block text-xs text-neutral-500 mt-1">{hint}</span>
-      ) : null}
+    <label
+      className={`flex items-start gap-2 rounded border px-3 py-2 cursor-pointer ${
+        checked ? "border-neutral-900 bg-muted" : "border-input"
+      }`}
+    >
+      <RadioGroupItem value={value} className="mt-1" />
+      <span>
+        <span className="block text-sm font-medium">{path}</span>
+        <span className="block text-xs text-muted-foreground">{distro}</span>
+      </span>
     </label>
   );
 }
@@ -641,7 +873,7 @@ function ProbeResult({ probe }: { probe: ProbeResponse }) {
     );
   }
   return (
-    <div className="text-sm bg-red-50 border border-red-200 text-red-800 rounded px-3 py-2 space-y-1">
+    <div className="text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded px-3 py-2 space-y-1">
       <p className="font-medium">Connection failed.</p>
       {probe.error ? <p className="font-mono text-xs">{probe.error}</p> : null}
       {probe.hint ? <p className="text-xs">Hint: {probe.hint}</p> : null}
@@ -652,7 +884,7 @@ function ProbeResult({ probe }: { probe: ProbeResponse }) {
 function SaveResult({ save }: { save: SaveResponse }) {
   if (!save.ok) {
     return (
-      <div className="text-sm bg-red-50 border border-red-200 text-red-800 rounded px-3 py-2">
+      <div className="text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded px-3 py-2">
         <p className="font-medium">Save failed.</p>
         <p className="text-xs">{save.note}</p>
       </div>
@@ -672,35 +904,35 @@ function SaveResult({ save }: { save: SaveResponse }) {
   );
 }
 
-// AdminStep is the v0.8 admin-account form, lifted out of the original
-// BootstrapScreen body. Unchanged behaviour — same POST /_bootstrap
-// payload, same redirect to /.
+// AdminStep — second wizard step, owns its own useForm. Submits to
+// /_bootstrap and on success seeds the session token, refreshes the
+// auth context, and redirects to /.
 function AdminStep({ onBack }: { onBack: () => void }) {
   const { refresh } = useAuth();
   const [, navigate] = useLocation();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
+  const form = useForm<AdminStepValues>({
+    resolver: zodResolver(adminStepSchema),
+    defaultValues: { email: "", password: "", confirm: "" },
+    mode: "onSubmit",
+  });
+
+  // Strength meter on confirm mirrors the PRIMARY password value so
+  // the bar doesn't flicker between weak/strong as the operator
+  // re-types the same string. Watch is the canonical RHF-on-Preact
+  // way to subscribe to a single field.
+  const passwordValue = form.watch("password");
+
+  async function onSubmit(values: AdminStepValues) {
     setErr(null);
-    if (password !== confirm) {
-      setErr("Passwords do not match.");
-      return;
-    }
-    if (password.length < 8) {
-      setErr("Password must be at least 8 characters.");
-      return;
-    }
     setBusy(true);
     try {
       const r = await api.request<{ token: string; record: { id: string } }>(
         "POST",
         "/_bootstrap",
-        { body: { email, password } },
+        { body: { email: values.email, password: values.password } },
       );
       api.setToken(r.token);
       await refresh();
@@ -713,84 +945,117 @@ function AdminStep({ onBack }: { onBack: () => void }) {
   }
 
   return (
-    <form
-      onSubmit={onSubmit}
-      className="w-full bg-white rounded-lg shadow border border-neutral-200 p-6 space-y-4"
-    >
-      <header className="space-y-1">
-        <h1 className="text-xl font-semibold">Create the first admin</h1>
-        <p className="text-sm text-neutral-500">
-          Subsequent admins are created via{" "}
-          <code className="rb-mono px-1 py-0.5 bg-neutral-100 rounded">
-            railbase admin create
-          </code>
-          .
-        </p>
-      </header>
+    <Card className="p-6">
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <header className="space-y-1">
+            <h1 className="text-xl font-semibold">Create the first admin</h1>
+            <p className="text-sm text-muted-foreground">
+              Subsequent admins are created via{" "}
+              <code className="rb-mono px-1 py-0.5 bg-muted rounded">
+                railbase admin create
+              </code>
+              .
+            </p>
+          </header>
 
-      <label className="block">
-        <span className="text-sm font-medium text-neutral-700">Email</span>
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-          autoFocus
-          autoComplete="username"
-          className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 text-sm"
-        />
-      </label>
+          <FormField
+            control={form.control}
+            name="email"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Email</FormLabel>
+                <FormControl>
+                  <Input
+                    type="email"
+                    autoComplete="username"
+                    autoFocus
+                    value={field.value}
+                    onInput={(e) => field.onChange(e.currentTarget.value)}
+                    onBlur={field.onBlur}
+                    name={field.name}
+                    ref={field.ref}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
 
-      <label className="block">
-        <span className="text-sm font-medium text-neutral-700">Password</span>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-          minLength={8}
-          autoComplete="new-password"
-          className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 text-sm"
-        />
-        <span className="text-xs text-neutral-500">Minimum 8 characters.</span>
-      </label>
+          <FormField
+            control={form.control}
+            name="password"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Password</FormLabel>
+                <FormControl>
+                  <PasswordInput
+                    showGenerate
+                    showStrength
+                    autoComplete="new-password"
+                    value={field.value}
+                    onInput={(e) => field.onChange(e.currentTarget.value)}
+                    // When the dice generates a value, propagate it into
+                    // BOTH primary and confirm — saves the operator from
+                    // copying it into a password manager AND re-typing.
+                    // The kit's generator only writes to whichever field
+                    // hosts the dice, so the onGenerate callback fans out
+                    // to the confirm field via setValue.
+                    onGenerate={(p) => {
+                      form.setValue("password", p, { shouldValidate: true });
+                      form.setValue("confirm", p, { shouldValidate: true });
+                    }}
+                  />
+                </FormControl>
+                <FormDescription>
+                  Minimum 8 characters. Use the dice to generate a strong one.
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
 
-      <label className="block">
-        <span className="text-sm font-medium text-neutral-700">
-          Confirm password
-        </span>
-        <input
-          type="password"
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          required
-          autoComplete="new-password"
-          className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 text-sm"
-        />
-      </label>
+          <FormField
+            control={form.control}
+            name="confirm"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Confirm password</FormLabel>
+                <FormControl>
+                  <PasswordInput
+                    autoComplete="new-password"
+                    value={field.value}
+                    onInput={(e) => field.onChange(e.currentTarget.value)}
+                    // No generator on confirm. Mirror strength of PRIMARY
+                    // so the bar doesn't flicker between weak/strong as
+                    // the operator types the same string twice.
+                    strengthValue={passwordValue}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
 
-      {err ? (
-        <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
-          {err}
-        </p>
-      ) : null}
+          {err ? (
+            <p className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded px-3 py-2">
+              {err}
+            </p>
+          ) : null}
 
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onBack}
-          className="rounded border border-neutral-300 bg-white px-3 py-2 text-sm hover:bg-neutral-50"
-        >
-          ← Back
-        </button>
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded bg-neutral-900 text-white px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
-        >
-          {busy ? "Creating…" : "Create admin & sign in"}
-        </button>
-      </div>
-    </form>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" onClick={onBack}>
+              ← Back
+            </Button>
+            <Button
+              type="submit"
+              disabled={busy || form.formState.isSubmitting}
+            >
+              {busy ? "Creating…" : "Create admin & sign in"}
+            </Button>
+          </div>
+        </form>
+      </Form>
+    </Card>
   );
 }

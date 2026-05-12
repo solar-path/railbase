@@ -1,6 +1,22 @@
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import type { RealtimeSubscription } from "../api/types";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/lib/ui/card.ui";
+import { Alert, AlertDescription } from "@/lib/ui/alert.ui";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/lib/ui/table.ui";
 
 // Realtime monitor admin screen — read-only snapshot of active SSE
 // subscriptions on the broker. Backend: GET /api/_admin/realtime
@@ -24,16 +40,16 @@ export function RealtimeScreen() {
   const totalDropped = subs.reduce((acc, s) => acc + (s.dropped ?? 0), 0);
 
   return (
-    <div className="space-y-4">
+    <div class="space-y-4">
       <header>
-        <h1 className="text-2xl font-semibold">Realtime monitor</h1>
-        <p className="text-sm text-neutral-500">
+        <h1 class="text-2xl font-semibold">Realtime monitor</h1>
+        <p class="text-sm text-muted-foreground">
           Live snapshot of SSE subscriptions on this replica. Polls every 5 s.
         </p>
       </header>
 
       {/* Stats banner */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <StatCard label="Active subscriptions" value={stats?.subscription_count ?? 0} />
         <StatCard
           label="Total events dropped"
@@ -49,72 +65,81 @@ export function RealtimeScreen() {
 
       {/* Table */}
       {q.isLoading ? (
-        <div className="text-sm text-neutral-500">Loading…</div>
+        <div class="text-sm text-muted-foreground">Loading…</div>
       ) : q.isError ? (
-        <div className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800">
-          Failed to load realtime stats. Is the realtime broker wired? ({String(q.error)})
-        </div>
+        <Alert variant="destructive">
+          <AlertDescription>
+            Failed to load realtime stats. Is the realtime broker wired? ({String(q.error)})
+          </AlertDescription>
+        </Alert>
       ) : subs.length === 0 ? (
-        <div className="rounded border-2 border-dashed border-neutral-300 bg-neutral-50 p-6 text-center text-sm text-neutral-500">
-          No active subscriptions.
-          <div className="mt-1 text-xs text-neutral-400">
-            Connect with{" "}
-            <code className="rb-mono rounded bg-neutral-100 px-1">
-              curl -N {`<host>`}/api/realtime?topics=posts/*
-            </code>{" "}
-            to see one appear here.
-          </div>
-        </div>
+        <Card class="border-dashed bg-muted">
+          <CardContent class="p-6 text-center text-sm text-muted-foreground">
+            No active subscriptions.
+            <div class="mt-1 text-xs">
+              Connect with{" "}
+              <code class="rb-mono rounded bg-card px-1">
+                curl -N {`<host>`}/api/realtime?topics=posts/*
+              </code>{" "}
+              to see one appear here.
+            </div>
+          </CardContent>
+        </Card>
       ) : (
-        <div className="overflow-x-auto rounded border border-neutral-200">
-          <table className="w-full text-sm">
-            <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wide text-neutral-500">
-              <tr>
-                <th className="px-3 py-2">User</th>
-                <th className="px-3 py-2">Tenant</th>
-                <th className="px-3 py-2">Topics</th>
-                <th className="px-3 py-2">Created</th>
-                <th className="px-3 py-2 text-right">Dropped</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-neutral-200">
-              {subs.map((s) => (
-                <tr key={s.id}>
-                  <td className="px-3 py-2 align-top">
-                    <span className="rb-mono text-xs">{shortenID(s.user_id)}</span>
-                  </td>
-                  <td className="px-3 py-2 align-top">
-                    {s.tenant_id ? (
-                      <span className="rb-mono text-xs">{shortenID(s.tenant_id)}</span>
-                    ) : (
-                      <span className="text-xs text-neutral-400">site</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 align-top">
-                    {s.topics.map((t, i) => (
-                      <code
-                        key={`${s.id}-t-${i}`}
-                        className="rb-mono mr-1 inline-block rounded bg-neutral-100 px-1.5 py-0.5 text-xs"
-                      >
-                        {t}
-                      </code>
-                    ))}
-                  </td>
-                  <td className="px-3 py-2 align-top text-xs text-neutral-500">
-                    {relativeTime(s.created_at)}
-                  </td>
-                  <td
-                    className={`px-3 py-2 text-right align-top tabular-nums ${
-                      s.dropped > 0 ? "font-semibold text-red-700" : "text-neutral-500"
-                    }`}
-                  >
-                    {s.dropped}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Card>
+          <CardContent class="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead class="uppercase tracking-wide text-xs">User</TableHead>
+                  <TableHead class="uppercase tracking-wide text-xs">Tenant</TableHead>
+                  <TableHead class="uppercase tracking-wide text-xs">Topics</TableHead>
+                  <TableHead class="uppercase tracking-wide text-xs">Created</TableHead>
+                  <TableHead class="text-right uppercase tracking-wide text-xs">Dropped</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {subs.map((s) => (
+                  <TableRow key={s.id}>
+                    <TableCell class="align-top">
+                      <span class="rb-mono text-xs">{shortenID(s.user_id)}</span>
+                    </TableCell>
+                    <TableCell class="align-top">
+                      {s.tenant_id ? (
+                        <span class="rb-mono text-xs">{shortenID(s.tenant_id)}</span>
+                      ) : (
+                        <span class="text-xs text-muted-foreground">site</span>
+                      )}
+                    </TableCell>
+                    <TableCell class="align-top">
+                      {s.topics.map((t, i) => (
+                        <code
+                          key={`${s.id}-t-${i}`}
+                          class="rb-mono mr-1 inline-block rounded bg-muted px-1.5 py-0.5 text-xs"
+                        >
+                          {t}
+                        </code>
+                      ))}
+                    </TableCell>
+                    <TableCell class="align-top text-xs text-muted-foreground">
+                      {relativeTime(s.created_at)}
+                    </TableCell>
+                    <TableCell
+                      class={
+                        "text-right align-top tabular-nums " +
+                        (s.dropped > 0
+                          ? "font-semibold text-destructive"
+                          : "text-muted-foreground")
+                      }
+                    >
+                      {s.dropped}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       )}
     </div>
   );
@@ -132,23 +157,30 @@ function StatCard({
   hint?: string;
 }) {
   return (
-    <div
-      className={`rounded border p-3 ${
-        warn
-          ? "border-red-300 bg-red-50"
-          : "border-neutral-200 bg-white"
-      }`}
-    >
-      <div className={`text-xs uppercase tracking-wide ${warn ? "text-red-700" : "text-neutral-500"}`}>
-        {label}
-      </div>
-      <div className={`mt-1 text-2xl font-semibold tabular-nums ${warn ? "text-red-700" : ""}`}>
-        {value}
-      </div>
-      {hint ? (
-        <div className="mt-1 text-[11px] text-neutral-400">{hint}</div>
-      ) : null}
-    </div>
+    <Card class={warn ? "border-destructive/50 bg-destructive/5" : undefined}>
+      <CardHeader class="p-3 pb-1 space-y-0">
+        <CardDescription
+          class={
+            "text-xs uppercase tracking-wide " +
+            (warn ? "text-destructive" : "text-muted-foreground")
+          }
+        >
+          {label}
+        </CardDescription>
+      </CardHeader>
+      <CardContent class="p-3 pt-0">
+        <CardTitle
+          class={
+            "text-2xl tabular-nums " + (warn ? "text-destructive" : "")
+          }
+        >
+          {value}
+        </CardTitle>
+        {hint ? (
+          <div class="mt-1 text-[11px] text-muted-foreground">{hint}</div>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 

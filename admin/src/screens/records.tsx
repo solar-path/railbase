@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "wouter";
+import { Link, useParams } from "wouter-preact";
 import { adminAPI, recordsAPI } from "../api/admin";
 import type {
   BatchResponse,
@@ -13,6 +13,19 @@ import {
   renderCell as renderDomainCell,
   renderEditInput as renderDomainEditInput,
 } from "../fields/registry";
+import { Button } from "@/lib/ui/button.ui";
+import { Input } from "@/lib/ui/input.ui";
+import { Label } from "@/lib/ui/label.ui";
+import { Checkbox } from "@/lib/ui/checkbox.ui";
+import { Card } from "@/lib/ui/card.ui";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/lib/ui/table.ui";
 
 // Records list — generic schema-driven table. Pagination is offset-
 // based (page + perPage); cursor pagination + virtualization land
@@ -141,10 +154,10 @@ export function RecordsScreen() {
     },
   });
 
-  if (schemaQ.isLoading) return <p className="text-sm text-neutral-500">Loading…</p>;
+  if (schemaQ.isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
   if (!spec) {
     return (
-      <p className="text-sm text-red-600">
+      <p className="text-sm text-destructive">
         Collection <code className="rb-mono">{name}</code> not found.
       </p>
     );
@@ -163,6 +176,11 @@ export function RecordsScreen() {
   const pageIds = items.map((row) => row.id as string).filter(Boolean);
   const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
   const someOnPageSelected = pageIds.some((id) => selected.has(id));
+  const headerCheckboxState: boolean | "indeterminate" = allOnPageSelected
+    ? true
+    : someOnPageSelected
+      ? "indeterminate"
+      : false;
 
   // Bulk actions are gated for auth collections — the backend would
   // refuse most ops anyway, but disabling the UI keeps the contract
@@ -199,7 +217,7 @@ export function RecordsScreen() {
       <header className="flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold rb-mono">{name}</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-sm text-muted-foreground">
             {total} record{total === 1 ? "" : "s"}
             {spec.auth ? " · auth collection (read-only here)" : ""}
             {spec.tenant ? " · tenant-scoped" : ""}
@@ -207,106 +225,105 @@ export function RecordsScreen() {
         </div>
         <div className="flex items-center gap-2">
           {spec.auth ? null : (
-            <Link
-              href={`/data/${name}/new`}
-              className="rounded bg-neutral-900 text-white px-3 py-1.5 text-sm font-medium hover:bg-neutral-800"
-            >
-              + New
-            </Link>
+            <Button asChild size="sm">
+              <Link href={`/data/${name}/new`}>+ New</Link>
+            </Button>
           )}
           <Pager page={page} totalPages={totalPages} onChange={setPage} />
         </div>
       </header>
 
-      <div className="flex flex-wrap items-end gap-3 rounded border border-neutral-200 bg-white p-3">
-        <label className="block flex-1 min-w-64">
-          <span className="text-xs text-neutral-500">filter</span>
-          <input
-            type="text"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder={`status='published' && @request.auth.id != ''`}
-            className="mt-0.5 w-full rounded border border-neutral-300 px-2 py-1 text-xs rb-mono"
-          />
-        </label>
-        <label className="block">
-          <span className="text-xs text-neutral-500">sort</span>
-          <input
-            type="text"
-            value={sort}
-            onChange={(e) => setSort(e.target.value)}
-            placeholder="-created,name"
-            className="mt-0.5 w-48 rounded border border-neutral-300 px-2 py-1 text-xs rb-mono"
-          />
-        </label>
-      </div>
+      <Card className="p-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="block flex-1 min-w-64 space-y-0.5">
+            <Label htmlFor="records-filter" className="text-xs text-muted-foreground">filter</Label>
+            <Input
+              id="records-filter"
+              type="text"
+              value={filter}
+              onInput={(e) => setFilter(e.currentTarget.value)}
+              placeholder={`status='published' && @request.auth.id != ''`}
+              className="h-8 text-xs rb-mono"
+            />
+          </div>
+          <div className="block space-y-0.5">
+            <Label htmlFor="records-sort" className="text-xs text-muted-foreground">sort</Label>
+            <Input
+              id="records-sort"
+              type="text"
+              value={sort}
+              onInput={(e) => setSort(e.currentTarget.value)}
+              placeholder="-created,name"
+              className="h-8 w-48 text-xs rb-mono"
+            />
+          </div>
+        </div>
+      </Card>
 
       {selected.size > 0 ? (
         <div className="sticky top-0 z-10 flex items-center gap-3 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
           <span className="font-medium text-blue-900">{selected.size} selected</span>
-          <button
+          <Button
             type="button"
+            variant="destructive"
+            size="sm"
             disabled={readOnly || batchDeleteMut.isPending}
             onClick={doBulkDelete}
-            className="rounded bg-red-600 text-white px-2.5 py-1 text-xs font-medium hover:bg-red-700 disabled:opacity-40"
           >
             {batchDeleteMut.isPending ? "Deleting…" : "Delete"}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="link"
+            size="sm"
             onClick={() => {
               setSelected(new Set());
               setBulkBanner(null);
             }}
-            className="text-xs text-blue-700 hover:underline"
+            className="h-auto px-0 text-xs text-blue-700"
           >
             Clear selection
-          </button>
+          </Button>
           {readOnly ? (
-            <span className="text-xs text-neutral-500">(auth collection — bulk delete disabled)</span>
+            <span className="text-xs text-muted-foreground">(auth collection — bulk delete disabled)</span>
           ) : null}
         </div>
       ) : null}
 
       {bulkBanner ? <BulkBanner banner={bulkBanner} onDismiss={() => setBulkBanner(null)} /> : null}
 
-      <div className="rounded border border-neutral-200 bg-white overflow-x-auto">
-        <table className="rb-table">
-          <thead>
-            <tr>
-              <th style={{ width: 28 }}>
-                <input
-                  type="checkbox"
+      <Card className="overflow-x-auto p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead style={{ width: 28 }}>
+                <Checkbox
                   aria-label="Select all on page"
-                  checked={allOnPageSelected}
-                  ref={(el) => {
-                    if (el) el.indeterminate = !allOnPageSelected && someOnPageSelected;
-                  }}
-                  onChange={(e) => toggleAllOnPage(e.target.checked)}
+                  checked={headerCheckboxState}
+                  onCheckedChange={(v) => toggleAllOnPage(v === true)}
                 />
-              </th>
+              </TableHead>
               {columns.map((col) => (
-                <th key={col.key}>{col.key}</th>
+                <TableHead key={col.key}>{col.key}</TableHead>
               ))}
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
+              <TableHead></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {items.map((row, i) => {
               const rowId = (row.id as string) ?? "";
               const isSelected = rowId && selected.has(rowId);
               return (
-                <tr key={rowId || i} className={isSelected ? "bg-blue-50/40" : ""}>
-                  <td>
-                    <input
-                      type="checkbox"
+                <TableRow key={rowId || i} className={isSelected ? "bg-blue-50/40" : ""}>
+                  <TableCell>
+                    <Checkbox
                       aria-label={`Select row ${rowId}`}
                       checked={!!isSelected}
-                      onChange={(e) => toggleRow(rowId, e.target.checked)}
+                      onCheckedChange={(v) => toggleRow(rowId, v === true)}
                     />
-                  </td>
+                  </TableCell>
                   {columns.map((col) => (
-                    <td key={col.key} className={col.cellClass ?? ""}>
+                    <TableCell key={col.key} className={col.cellClass ?? ""}>
                       {col.field && !readOnly && isInlineEditable(col.field.type) && rowId ? (
                         <InlineCell
                           collection={name}
@@ -319,29 +336,29 @@ export function RecordsScreen() {
                       ) : (
                         col.render(row[col.key])
                       )}
-                    </td>
+                    </TableCell>
                   ))}
-                  <td>
+                  <TableCell>
                     <Link
                       href={`/data/${name}/${rowId}`}
-                      className="text-xs text-neutral-700 hover:underline"
+                      className="text-xs text-foreground hover:underline"
                     >
                       Edit
                     </Link>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
             {items.length === 0 ? (
-              <tr>
-                <td colSpan={columns.length + 2} className="text-neutral-400 text-center py-6">
+              <TableRow>
+                <TableCell colSpan={columns.length + 2} className="text-muted-foreground text-center py-6">
                   No records.
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : null}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+      </Card>
     </div>
   );
 }
@@ -358,7 +375,7 @@ function listColumns(spec: CollectionSpec | null): Column[] {
   const cols: Column[] = [];
   cols.push({
     key: "id",
-    cellClass: "rb-mono text-xs text-neutral-500",
+    cellClass: "rb-mono text-xs text-muted-foreground",
     render: (v) => (typeof v === "string" ? v.slice(0, 8) + "…" : "—"),
   });
   for (const f of spec.fields) {
@@ -373,7 +390,7 @@ function listColumns(spec: CollectionSpec | null): Column[] {
   }
   cols.push({
     key: "created",
-    cellClass: "rb-mono text-xs text-neutral-500",
+    cellClass: "rb-mono text-xs text-muted-foreground",
     render: (v) => (typeof v === "string" ? v.slice(0, 19) : "—"),
   });
   return cols;
@@ -445,25 +462,27 @@ function Pager({
 }) {
   return (
     <div className="flex items-center gap-2 text-sm">
-      <button
+      <Button
         type="button"
+        variant="outline"
+        size="sm"
         disabled={page <= 1}
         onClick={() => onChange(page - 1)}
-        className="rounded border border-neutral-300 px-2 py-1 disabled:opacity-30"
       >
         ←
-      </button>
-      <span className="text-neutral-600">
+      </Button>
+      <span className="text-muted-foreground">
         {page} / {totalPages}
       </span>
-      <button
+      <Button
         type="button"
+        variant="outline"
+        size="sm"
         disabled={page >= totalPages}
         onClick={() => onChange(page + 1)}
-        className="rounded border border-neutral-300 px-2 py-1 disabled:opacity-30"
       >
         →
-      </button>
+      </Button>
     </div>
   );
 }
@@ -481,20 +500,19 @@ function BulkBanner({
     | { kind: "error"; message: string };
   onDismiss: () => void;
 }) {
-  const base = "flex items-center justify-between rounded border px-3 py-2 text-sm";
   if (banner.kind === "success") {
     return (
-      <div className={`${base} border-green-200 bg-green-50 text-green-900`}>
+      <div className="flex items-center justify-between rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
         <span>Deleted {banner.count} record{banner.count === 1 ? "" : "s"}.</span>
-        <button type="button" onClick={onDismiss} className="text-xs hover:underline">
+        <Button type="button" variant="link" size="sm" onClick={onDismiss} className="h-auto px-0 text-xs">
           dismiss
-        </button>
+        </Button>
       </div>
     );
   }
   if (banner.kind === "partial") {
     return (
-      <div className={`${base} border-amber-200 bg-amber-50 text-amber-900`}>
+      <div className="flex items-center justify-between rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
         <div>
           <span className="font-medium">
             {banner.ok} ok, {banner.failed.length} failed.
@@ -506,18 +524,18 @@ function BulkBanner({
             hover for details
           </span>
         </div>
-        <button type="button" onClick={onDismiss} className="text-xs hover:underline">
+        <Button type="button" variant="link" size="sm" onClick={onDismiss} className="h-auto px-0 text-xs">
           dismiss
-        </button>
+        </Button>
       </div>
     );
   }
   return (
-    <div className={`${base} border-red-200 bg-red-50 text-red-900`}>
+    <div className="flex items-center justify-between rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
       <span>Batch delete failed: {banner.message}</span>
-      <button type="button" onClick={onDismiss} className="text-xs hover:underline">
+      <Button type="button" variant="link" size="sm" onClick={onDismiss} className="h-auto px-0 text-xs">
         dismiss
-      </button>
+      </Button>
     </div>
   );
 }
@@ -611,11 +629,9 @@ function InlineCell({
   if (field.type === "bool") {
     return (
       <div className="relative">
-        <input
-          type="checkbox"
+        <Checkbox
           checked={!!value}
-          onChange={(e) => void save(e.target.checked)}
-          className="hover:ring-1 hover:ring-neutral-300 rounded"
+          onCheckedChange={(v) => void save(v === true)}
         />
         {err ? <InlineErr msg={err} onDismiss={() => setErr(null)} /> : null}
       </div>
@@ -628,7 +644,7 @@ function InlineCell({
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="block w-full text-left rounded px-1 -mx-1 hover:ring-1 hover:ring-neutral-300 cursor-text"
+          className="block w-full text-left rounded px-1 -mx-1 hover:ring-1 hover:ring-border cursor-text"
         >
           {render(value)}
         </button>
@@ -637,8 +653,9 @@ function InlineCell({
     );
   }
 
-  const commonClass =
-    "w-full rounded px-1 ring-2 ring-blue-500 outline-none text-sm";
+  // Compact in-cell editor classes — kit Input is h-9 by default; we
+  // shrink to h-7 so the cell row doesn't grow when entering edit mode.
+  const commonClass = "h-7 w-full rounded px-1 ring-2 ring-blue-500 outline-none text-sm";
 
   // Domain-type editor — the registry's edit input commits via
   // onChange (the input owns its own validation / coercion). We
@@ -679,7 +696,7 @@ function InlineCell({
           ref={(el) => { inputRef.current = el; }}
           value={draft}
           onChange={(e) => {
-            const v = e.target.value;
+            const v = e.currentTarget.value;
             setDraft(v);
             void save(v);
           }}
@@ -694,7 +711,7 @@ function InlineCell({
     );
   }
 
-  // text / number / email / url / slug / color via <input>.
+  // text / number / email / url / slug / color via <Input>.
   const inputType: string = (() => {
     switch (field.type) {
       case "number": return "number";
@@ -709,11 +726,11 @@ function InlineCell({
 
   return (
     <div className="relative">
-      <input
-        ref={(el) => { inputRef.current = el; }}
+      <Input
+        ref={(el: HTMLInputElement | null) => { inputRef.current = el; }}
         type={inputType}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onInput={(e) => setDraft(e.currentTarget.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -745,7 +762,7 @@ function InlineErr({ msg, onDismiss }: { msg: string; onDismiss: () => void }) {
       type="button"
       onClick={onDismiss}
       title={msg}
-      className="absolute z-10 left-0 mt-0.5 max-w-xs truncate rounded bg-red-600 text-white text-[10px] px-1.5 py-0.5 shadow"
+      className="absolute z-10 left-0 mt-0.5 max-w-xs truncate rounded bg-destructive text-destructive-foreground text-[10px] px-1.5 py-0.5 shadow"
     >
       {msg}
     </button>

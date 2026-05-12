@@ -17,6 +17,7 @@ import (
 	"github.com/railbase/railbase/internal/api/adminapi"
 	authapi "github.com/railbase/railbase/internal/api/auth"
 	notifapi "github.com/railbase/railbase/internal/api/notifications"
+	"github.com/railbase/railbase/internal/api/uiapi"
 	"github.com/railbase/railbase/internal/api/rest"
 	"github.com/railbase/railbase/internal/audit"
 	"github.com/railbase/railbase/internal/compat"
@@ -57,6 +58,8 @@ import (
 
 	"net/http"
 	neturl "net/url"
+	"os/exec"
+	"runtime"
 	"time"
 )
 
@@ -65,10 +68,18 @@ import (
 // EXPERIMENTAL: this surface (App, New, Run) is unstable until v1.
 // Pinning to a released version is fine; vendoring HEAD is not yet safe.
 type App struct {
-	cfg    config.Config
-	log    *slog.Logger
-	pool   *pool.Pool
-	server *server.Server
+	cfg     config.Config
+	log     *slog.Logger
+	logOpts logger.Options
+	pool    *pool.Pool
+	server  *server.Server
+
+	// browserOpened pins the auto-open-on-boot to a single fire per
+	// process. Set by maybeOpenBrowser the first time it runs; later
+	// boots within the same process (setup-mode → normal-mode reload,
+	// or normal-mode → normal-mode DSN swap) skip it because the
+	// operator already has a browser tab open against /_/.
+	browserOpened bool
 
 	// ready flips to true after migrations have been applied. /readyz
 	// returns 503 until then so a load balancer doesn't route traffic
@@ -102,12 +113,85 @@ func (a *App) GoHooks() *hooks.GoHooks {
 
 // New validates cfg and constructs the App without performing I/O.
 // Run starts the actual server.
+//
+// Logging policy: terminal output is intentionally quiet by default
+// — only WARN and above hit stdout, the rest fans out to a date-rotated
+// file under `<DataDir>/logs/railbase-YYYY-MM-DD.log`. This was the
+// "терминал избыточен" complaint from the operator: per-request HTTP
+// INFO lines + boot-time chatter buried the actual problems. Knobs:
+//
+//   - RAILBASE_LOG_LEVEL=debug|info|warn|error  → terminal threshold
+//     (default: warn). Set to "info" or "debug" to bring everything
+//     back on screen for a noisy debugging session.
+//   - RAILBASE_LOG_FILE_DIR=<path>              → override the file
+//     directory. Empty disables file logging entirely (stdout-only).
+//     Defaults to <DataDir>/logs/.
+//   - RAILBASE_LOG_FILE_LEVEL=debug|…           → file threshold,
+//     default: debug (capture everything).
+//   - RAILBASE_LOG_RETENTION_DAYS=14            → purge files older
+//     than N days. 0 disables purging.
 func New(cfg config.Config) (*App, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	log := logger.New(cfg.LogLevel, cfg.LogFormat, os.Stdout)
-	return &App{cfg: cfg, log: log}, nil
+	logOpts := buildLogOptions(cfg)
+	log, _, err := logger.NewWithOptions(logOpts)
+	if err != nil {
+		return nil, fmt.Errorf("logger: %w", err)
+	}
+	app := &App{cfg: cfg, log: log, logOpts: logOpts}
+	return app, nil
+}
+
+// buildLogOptions reads env overrides on top of cfg defaults. Pure —
+// no I/O — so it stays callable from tests / `railbase generate ...`
+// CLI paths that don't run the full Run loop.
+func buildLogOptions(cfg config.Config) logger.Options {
+	// Terminal threshold defaults to "warn" — quiet enough for normal
+	// operation but loud enough that a misconfiguration still surfaces
+	// in the operator's terminal. RAILBASE_LOG_LEVEL keeps the original
+	// override path.
+	termLevel := strings.ToLower(strings.TrimSpace(os.Getenv("RAILBASE_LOG_LEVEL")))
+	if termLevel == "" {
+		termLevel = "warn"
+	}
+	// `cfg.LogLevel` (CLI-flag overlay) wins over the env default —
+	// docs/02 already pins flag > env > default.
+	if cfg.LogLevel != "" && cfg.LogLevel != "info" {
+		// `info` is the Default(); we treat it as "operator didn't
+		// override" so the new quiet-by-default actually kicks in.
+		// Anyone who genuinely wants info-on-terminal sets it explicitly
+		// via env (RAILBASE_LOG_LEVEL=info).
+		termLevel = cfg.LogLevel
+	}
+
+	fileDir := os.Getenv("RAILBASE_LOG_FILE_DIR")
+	if fileDir == "" {
+		fileDir = filepath.Join(cfg.DataDir, "logs")
+	}
+	// Explicit "-" or "off" disables file logging — escape hatch
+	// for containerised deployments that ship logs externally.
+	if fileDir == "-" || fileDir == "off" {
+		fileDir = ""
+	}
+	fileLevel := strings.ToLower(strings.TrimSpace(os.Getenv("RAILBASE_LOG_FILE_LEVEL")))
+	if fileLevel == "" {
+		fileLevel = "debug"
+	}
+	retention := time.Duration(0)
+	if v := os.Getenv("RAILBASE_LOG_RETENTION_DAYS"); v != "" {
+		if d, err := time.ParseDuration(v + "h"); err == nil {
+			retention = d * 24
+		}
+	}
+	return logger.Options{
+		Level:         termLevel,
+		Format:        cfg.LogFormat,
+		Out:           os.Stdout,
+		FileDir:       fileDir,
+		FileLevel:     fileLevel,
+		FileRetention: retention,
+	}
 }
 
 // Run starts the server and blocks until ctx is cancelled or the
@@ -286,8 +370,12 @@ func (a *App) Run(ctx context.Context) error {
 	var logSink *logs.Sink
 	if logsPersistEnabled(ctx, settingsMgr, a.cfg.ProductionMode) {
 		logSink = logs.NewSink(p.Pool, logs.Config{})
-		base := logger.NewHandler(a.cfg.LogLevel, a.cfg.LogFormat, os.Stdout)
-		a.log = slog.New(logs.NewMulti(base, logSink))
+		// Preserve the existing handler chain (terminal + date-rotated
+		// file from buildLogOptions) and add the DB sink as a sibling.
+		// Reusing a.log.Handler() instead of NewHandler() avoids
+		// double-creating the file handler — which would re-open the
+		// daily log file twice and produce duplicate lines.
+		a.log = slog.New(logs.NewMulti(a.log.Handler(), logSink))
 		defer func() {
 			// Bounded final-drain so a slow DB on shutdown doesn't stall
 			// the whole graceful-shutdown grace window. Independent ctx
@@ -749,6 +837,15 @@ func (a *App) Run(ctx context.Context) error {
 		adminDeps.Mount(r)
 	})
 
+	// Public UI-kit registry at /api/_ui/*. Serves the embedded
+	// shadcn-on-Preact source tree to downstream frontend apps the
+	// same way shadcn.com serves its CLI registry — except the
+	// source-of-truth here is in the binary, so an air-gapped install
+	// can still hand out a full UI kit. Endpoints are intentionally
+	// un-authed: this is published-source component code.
+	uiapi.SetFS(adminui.UIKit())
+	uiapi.Mount(a.server.Router())
+
 	// Embedded admin UI at /_/. Serves the React SPA from the
 	// `go:embed`-ed admin/dist/. SPA routing is handled client-side
 	// (wouter), so any deep link falls back to index.html. The /_/
@@ -1000,6 +1097,7 @@ func (a *App) Run(ctx context.Context) error {
 	// human running `./railbase serve` for the first time. Print to stdout
 	// directly (not slog) so it stands out even with log piping on.
 	printReadyBanner(a.cfg, buildinfo.String())
+	a.maybeOpenBrowser()
 
 	select {
 	case err := <-serveErr:
@@ -1008,22 +1106,29 @@ func (a *App) Run(ctx context.Context) error {
 		a.log.Info("shutdown requested", "reason", ctx.Err())
 	case newDSN := <-normalReloadCh:
 		// Operator re-ran the setup wizard from the live admin UI and
-		// saved a new DSN. Graceful-shutdown the current server +
-		// pool + embedded, then recursively re-enter Run() on the new
-		// DSN. The HTTP response from /save-db has already flushed by
-		// the time this case runs (handler writes JSON synchronously
-		// before sending to the chan); 300 ms guard covers the TCP-send
-		// async on slow links.
+		// saved a new DSN. The HTTP response from /save-db has flushed
+		// by now (handler does writeJSON synchronously before sending
+		// to the chan); 300 ms covers any TCP-send async lag on slow
+		// links so the browser sees the JSON before the listener dies.
 		a.log.Info("DSN changed via wizard; reloading in-place",
 			"dsn", redactDSN(newDSN))
 		time.Sleep(300 * time.Millisecond)
 
-		sCtx, sCancel := context.WithTimeout(context.Background(), a.cfg.ShutdownGrace)
-		shutdownErr := a.server.Shutdown(sCtx)
-		sCancel()
+		// Hard-close (NOT graceful Shutdown). Reasoning: the admin SPA
+		// keeps a couple of idle keep-alive connections open after
+		// loading the JS bundle, and Shutdown waits for them to go
+		// idle OR for the context to expire — which is 15 s of
+		// ShutdownGrace. The operator is sitting there watching the
+		// "Reloading…" UI; we'd rather drop a handful of idle conns
+		// than make them wait. The save-db handler's response has
+		// already been flushed; no other in-flight work depends on
+		// connection drain.
+		if err := a.server.Close(); err != nil {
+			a.log.Warn("server close during reload", "err", err)
+		}
 		// Close pool + embedded NOW so the recursive Run can rebind
-		// the port + open a fresh pool without contention. Disable the
-		// deferred closes — otherwise the OUTER frame's deferred
+		// the port + open a fresh pool without contention. Disable
+		// the deferred closes — otherwise the OUTER frame's deferred
 		// p.Close() runs after the recursive call returns, by which
 		// point p is already invalidated.
 		p.Close()
@@ -1034,9 +1139,12 @@ func (a *App) Run(ctx context.Context) error {
 			}
 			stopEmbed = nil
 		}
-		if shutdownErr != nil {
-			return fmt.Errorf("server shutdown during reload: %w", shutdownErr)
-		}
+
+		// Give the OS a beat to release the listening socket. macOS
+		// is usually instant; Linux occasionally holds the port in
+		// TIME_WAIT briefly. 200 ms is well under any human-visible
+		// "still loading?" threshold.
+		time.Sleep(200 * time.Millisecond)
 
 		a.cfg.DSN = newDSN
 		a.cfg.SetupMode = false
@@ -1150,28 +1258,110 @@ func (a *App) runSetupOnly(ctx context.Context) (string, error) {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- a.server.ListenAndServe() }()
 
+	// Open the browser AFTER the listener is up — `open`/`xdg-open`
+	// spawn is async on every OS, so by the time the browser actually
+	// resolves the URL the listener has been ready for ~milliseconds.
+	a.maybeOpenBrowser()
+
 	var newDSN string
 	select {
 	case err := <-serveErr:
 		return "", err
 	case <-ctx.Done():
 		a.log.Info("shutdown requested in setup-mode", "reason", ctx.Err())
+		// Graceful path — operator hit Ctrl-C. Drain in-flight requests
+		// up to ShutdownGrace (default 15s); no idle-keepalive concern
+		// since the operator is leaving anyway.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.ShutdownGrace)
+		defer cancel()
+		if err := a.server.Shutdown(shutdownCtx); err != nil {
+			return "", fmt.Errorf("setup-mode server shutdown: %w", err)
+		}
+		a.log.Info("setup-mode server shut down")
+		return "", nil
 	case newDSN = <-reloadCh:
 		a.log.Info("setup wizard saved DSN; reloading server in-place")
-		// Give the in-flight POST /save-db response time to flush over
-		// the wire before we yank the listener — the response body is
-		// already written, but the underlying TCP send is asynchronous.
-		// 300ms is generous; the response is ~200 bytes.
+		// 300ms covers TCP-send async on the response we just sent.
 		time.Sleep(300 * time.Millisecond)
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.ShutdownGrace)
-	defer cancel()
-	if err := a.server.Shutdown(shutdownCtx); err != nil {
-		return "", fmt.Errorf("setup-mode server shutdown: %w", err)
+	// Reload path: hard-close (not Shutdown) so idle admin-SPA keepalive
+	// conns don't park us in a 15s wait. The /save-db response already
+	// flushed before we got the chan send.
+	if err := a.server.Close(); err != nil {
+		a.log.Warn("setup-mode server close", "err", err)
 	}
-	a.log.Info("setup-mode server shut down")
+	// Brief OS-level port-release window.
+	time.Sleep(200 * time.Millisecond)
+	a.log.Info("setup-mode server closed; switching to normal boot")
 	return newDSN, nil
+}
+
+// maybeOpenBrowser launches the host OS's default browser pointed at the
+// admin UI. Fire-and-forget — if the spawn fails (headless box, no
+// browser registered, locked-down CI) we log at debug level and move on;
+// the operator can always click the URL printed in the banner.
+//
+// Suppression knobs:
+//
+//   - cfg.ProductionMode  — never auto-open. Server software shouldn't
+//     poke at a desktop env on a headless deployment.
+//   - RAILBASE_NO_OPEN env — explicit operator opt-out, value-agnostic
+//     (any non-empty value disables). Useful for `make run-dev` over
+//     SSH where the local Chrome would open instead of the remote one.
+//   - a.browserOpened     — fires once per process lifetime; setup-mode
+//     opens the wizard, the subsequent normal-mode reload after Save
+//     does NOT open a second tab.
+//
+// The actual spawn uses `os/exec` with the platform-native opener
+// (`open` on macOS, `xdg-open` on Linux, `rundll32 url.dll,...` on
+// Windows). All three are spawn-and-detach; we don't wait for the
+// browser process. Errors are best-effort logged.
+func (a *App) maybeOpenBrowser() {
+	if a.browserOpened {
+		return
+	}
+	if a.cfg.ProductionMode {
+		return
+	}
+	if os.Getenv("RAILBASE_NO_OPEN") != "" {
+		return
+	}
+	addr := a.cfg.HTTPAddr
+	port := addr
+	if len(addr) > 0 && addr[0] == ':' {
+		port = addr[1:]
+	}
+	url := "http://localhost:" + port + "/_/"
+
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "linux":
+		// xdg-open is the freedesktop.org standard; falls back to
+		// `sensible-browser` on Debian when xdg-utils isn't installed.
+		// We try xdg-open first since it's the documented entrypoint.
+		cmd = exec.Command("xdg-open", url)
+	case "windows":
+		// `rundll32 url.dll,FileProtocolHandler <url>` is the portable
+		// Windows incantation — works back to XP without depending on
+		// PowerShell or `start` (which is a shell builtin, not an exe).
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		a.log.Debug("auto-open browser failed (this is fine — click the URL in the banner)",
+			"err", err, "url", url)
+		return
+	}
+	// Best practice: detach so we don't leak a zombie if the operator
+	// kills railbase before the browser process exits. cmd.Wait runs in
+	// a goroutine that survives normal shutdown — it costs ~1 goroutine
+	// and ensures no defunct child.
+	go func() { _ = cmd.Wait() }()
+	a.browserOpened = true
 }
 
 // redactDSN strips the password from a postgres:// DSN for logging.
@@ -1205,8 +1395,10 @@ func printSetupBanner(cfg config.Config) {
 	fmt.Fprintln(os.Stdout, "    3. Test the connection")
 	fmt.Fprintln(os.Stdout, "    4. Save the DSN to "+cfg.DataDir+"/.dsn")
 	fmt.Fprintln(os.Stdout)
-	fmt.Fprintln(os.Stdout, "  After save, Ctrl-C this process and run `./railbase serve`")
-	fmt.Fprintln(os.Stdout, "  again — the next boot will use your real database.")
+	fmt.Fprintln(os.Stdout, "  After save, the server reloads in-place — no Ctrl-C needed.")
+	if p := logger.CurrentLogPath(filepath.Join(cfg.DataDir, "logs")); p != "" {
+		fmt.Fprintln(os.Stdout, "  Detailed logs: "+p)
+	}
 	fmt.Fprintln(os.Stdout, "─────────────────────────────────────────────────────────")
 	fmt.Fprintln(os.Stdout)
 }
@@ -1288,6 +1480,9 @@ func printReadyBanner(cfg config.Config, build string) {
 	fmt.Fprintln(os.Stdout, "  REST API : "+base+"/api/")
 	fmt.Fprintln(os.Stdout, "  Health   : "+base+"/healthz · "+base+"/readyz")
 	fmt.Fprintln(os.Stdout, "  Data dir : "+cfg.DataDir)
+	if p := logger.CurrentLogPath(filepath.Join(cfg.DataDir, "logs")); p != "" {
+		fmt.Fprintln(os.Stdout, "  Logs     : "+p+"  (tail -f to follow)")
+	}
 	if build != "" {
 		fmt.Fprintln(os.Stdout, "  Version  : "+build)
 	}

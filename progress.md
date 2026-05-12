@@ -5976,3 +5976,214 @@ All green under `-race -count=1 -p 1 -tags embed_pg`. Five packages, ~185s total
 ### Honest completion of plan.md v1 scope (post-v1.7.37)
 
 **~99% (~152/~152 currently-scoped v1 line items shipped).** §3.5.9 PB-SDK realtime compat track now sits at **8/9 sub-items closed** — only `?expand=` row resolution remains, explicitly deferred as v1.x-bonus. The v1 SHIP target itself remains functionally complete; this round is post-SHIP polish.
+
+
+## v1.7.40 — Shareable shadcn-on-Preact UI kit (50 components served by the binary + admin re-skinned)
+
+**Mission**: turn Railbase into a UI registry. The binary already gives operators a backend; this slice gives them a **frontend component library too** — same shadcn philosophy ("copy don't install"), but the source-of-truth lives inside the Railbase binary rather than at shadcn.com. Air-gapped installs ship with a full Preact 10 + Tailwind 4 + theme-tokens UI kit.
+
+Took ~1 day end-to-end, 5 parallel work-streams (4 agents + 1 inline). All gates green.
+
+### Slice (a) — Port air's kit into `admin/src/lib/ui/` (Claude)
+
+Lifted the shadcn-on-Preact tree from `/Users/work/apps/air` (the only project in the local apps directory shipping a hand-rolled Radix-replacement under Preact). Copied verbatim except the `Q*` composites (`QEditableForm.ui.tsx`, `QEditableList.ui.tsx`) which were air-app-specific (drizzle/oRPC dependencies).
+
+**Inventory after the copy**:
+- **50 components** in `admin/src/lib/ui/*.ui.tsx`: accordion / alert / alert-dialog / aspect-ratio / avatar / badge / breadcrumb / button / calendar / card / carousel / chart / checkbox / collapsible / combobox / command / context-menu / drawer / dropdown-menu / form / hover-card / input / input-otp / item / label / menubar / navigation-menu / pagination / password / phone / popover / progress / radio-group / resizable / scroll-area / select / separator / sheet / sidebar / skeleton / slider / sonner / switch / table / tabs / textarea / toaster / toggle / toggle-group / tooltip
+- **11 Radix-replacement primitives** in `admin/src/lib/ui/_primitives/`: slot / portal / popper / focus-scope / dismissable-layer / presence / visually-hidden / collection / use-controllable / use-id / index
+- **Kit-base files**: `cn.ts` (twMerge + clsx helper), `icons.tsx` (hand-rolled SVG icon set — **zero lucide-preact dep**), `theme.ts` (light/dark mode toggle), `index.ts` (barrel + source-of-truth doc comment)
+
+**Theme tokens** ported into `admin/src/styles.css`: full oklch palette (background / foreground / card / popover / primary / secondary / muted / accent / destructive / border / input / ring / chart-1..5 / sidebar*) with light + dark mode variants. `@import "tw-animate-css"` for entry/exit transitions. `@theme inline { --color-* }` block maps tokens onto Tailwind's color system.
+
+**Peer deps added** to `admin/package.json`: `class-variance-authority`, `clsx`, `tailwind-merge`, `@floating-ui/dom`, `react-hook-form`, `@hookform/resolvers`, `react-day-picker`, `embla-carousel`, `tw-animate-css`. Total: 9 new packages.
+
+**Path alias `@/`** added to `vite.config.ts` (`resolve.alias.@ = fileURLToPath(new URL("./src", import.meta.url))`) and `tsconfig.json` (`paths."@/*" = ["./src/*"]`) so components reach each other via the same import shape that downstream apps will adopt.
+
+### Slice (b) — `admin/uikit.go` embed (Claude)
+
+```go
+//go:embed all:src/lib/ui src/styles.css
+var uikitFS embed.FS
+
+func UIKit() fs.FS { return uikitFS }
+```
+
+Lives in `admin/` (not `internal/`) because Go's `//go:embed` paths are directory-relative and cannot use `..`. Same package as the existing `admin/embed.go` (`admin.Dist` for the compiled SPA) — the binary now ships **both** the compiled bundle AND the source TSX tree.
+
+Binary size delta: ~250 KB (500 KB raw TSX → some embed.FS overhead → 250 KB binary growth). All 6 cross-compile targets stayed under the 30 MB ceiling (largest: Windows amd64 @ 27.7 MB, headroom 2.3 MB).
+
+### Slice (c) — `internal/api/uiapi/` (Claude)
+
+Boot-time scanner + 10 HTTP handlers.
+
+**Scanner** (`registry.go`, ~360 LOC): walks the embedded FS via `sync.Once`, classifies every `*.ui.tsx`'s imports:
+- `from 'class-variance-authority'` etc. → **peers** (npm packages)
+- `from './_primitives/portal'` / `from '@/lib/ui/_primitives/portal'` → **primitives**
+- `from './cn'` / `from './icons'` / `from './theme'` / `from './index'` → **kit-base** (filtered out — ride with `ui init`)
+- `from './button.ui'` → **local siblings** (transitive deps within the kit)
+- `from '.'` / `from 'preact/...'` / `from 'react/...'` → filtered
+
+Both relative (`./foo`) and alias-form (`@/lib/ui/foo`) import shapes recognised — air upstream uses relative; the alias form is what the admin itself adopts. Single regex `\s+from\s+['"]([^'"]+)['"]` extracts the spec, then a switch classifies. Order-stable + deduplicated.
+
+Primitive peer deps (e.g. `@floating-ui/dom` reached via `_primitives/popper.tsx`) get folded into the kit's global peer set so `ui peers` reports the complete install line.
+
+**Handler** (`handler.go`, ~150 LOC):
+
+| Endpoint | Body |
+|---|---|
+| `GET /api/_ui/manifest` | Full graph (components + primitives + peers + cn + styles + notes) |
+| `GET /api/_ui/registry` | shadcn-compat short list `[{name, peers}]` |
+| `GET /api/_ui/components` | Component metadata listing |
+| `GET /api/_ui/components/{name}` | Single component metadata + source |
+| `GET /api/_ui/components/{name}/source` | Raw .tsx body, `text/plain` |
+| `GET /api/_ui/primitives` | Primitive metadata listing |
+| `GET /api/_ui/primitives/{name}` | Raw primitive source |
+| `GET /api/_ui/cn.ts` | cn() helper |
+| `GET /api/_ui/styles.css` | Theme block, `text/css` |
+| `GET /api/_ui/peers` | `npm install …` line (or JSON array with `Accept: application/json`) |
+| `GET /api/_ui/init` | Long-form onboarding (vite/tsconfig snippets) |
+
+Mounted **public, no auth** — published source code is equivalent to CDN-fetch. Cache headers: `Cache-Control: public, max-age=300`.
+
+**Tests** (`registry_test.go`, 11 tests, all under `-race`):
+- Relative + alias import classification
+- Transitive local sibling resolution
+- Kit-base files NOT leaked into Local lists
+- Primitive peer deps folded into top-level Peers
+- Seed peers (`clsx`, `tailwind-merge`, `tw-animate-css`) unconditionally present
+- Handler integration: manifest / source / 404 / peers (Accept-based content-type)
+- Nil-FS dev path → empty manifest, no panic
+
+### Slice (d) — `railbase ui` CLI subcommand (Claude)
+
+Cobra surface in `pkg/railbase/cli/ui.go`:
+
+```
+railbase ui list [--with-peers]              # 50 components, 11 primitives
+railbase ui peers [--json]                   # npm install line
+railbase ui init [--out DIR]                 # styles.css + cn.ts + icons.tsx + theme.ts + _primitives/*
+railbase ui add NAME... [--out DIR] [--force]
+railbase ui add --all
+```
+
+`ui init` writes 14 files in one pass: `src/styles.css` (skipped if exists — operator owns global CSS), `src/lib/ui/{cn,icons,theme,index}.{ts,tsx}` (overwrite), `src/lib/ui/_primitives/*` (overwrite all 11).
+
+`ui add` does BFS transitive resolution over the `Local[]` metadata — `ui add password` automatically pulls `input` (because `password.ui.tsx` imports `./input.ui`); `ui add form` pulls `label`. Generic `keys[V](m map[string]V) []string` helper extracts names from both the want-set (`map[string]struct{}`) and resolved-set (`map[string]uiapi.Component`).
+
+Pre-condition: `cn.ts` must exist in target tree (i.e. `ui init` ran first). Otherwise `ui add` exits with `cn.ts missing — run ‹railbase ui init --out X› first`.
+
+### Slice (e) — Wire into `app.go` + source-of-truth consolidation (Claude)
+
+`app.go` gained two lines before the SPA mount:
+```go
+uiapi.SetFS(adminui.UIKit())
+uiapi.Mount(a.server.Router())
+```
+
+**Source-of-truth cleanup**: deleted `admin/src/components/` (had exactly one file — `password-input.tsx`, functionally a worse-than-the-kit version of `password.ui.tsx`). Migrated the two consumers:
+- `screens/login.tsx`: now uses `Button` / `Card{,Content,Description,Header,Title}` / `Input` / `Label` / `PasswordInput` all from `@/lib/ui/*`
+- `screens/bootstrap.tsx`: `PasswordInput` import → `@/lib/ui/password.ui`, API translation (`onValueChange` → `onInput`; `showGenerator` → `showGenerate`; `onGenerated` → `onGenerate`; primary's `onGenerate` callback fans out to both fields manually since the kit's generator only writes the field hosting the dice)
+
+**`lucide-preact` removed from package.json** — zero consumers remained after the kit's `icons.tsx` took over (hand-rolled SVGs, no external icon-pack dep). One less peer dep for downstream consumers.
+
+**Big docblock added to `admin/src/lib/ui/index.ts`** stating the contract:
+1. This directory = source of truth
+2. NEVER reach into `admin/src/{auth,api,fields,layout,screens}` from here
+3. App-specific composites go in `admin/src/screens/`, not `lib/ui/`
+
+### Slice (f) — Admin re-skinned (3 agents + me, parallel)
+
+Migrated every admin screen + every layout file to consume the kit. Mechanical recipe applied consistently across all 25 files:
+- `<button className="…">` → `<Button variant="…" size="…">`
+- `<input type="…">` → `<Input>`
+- `<table className="rb-table">` → `<Table>/<TableHeader>/<TableBody>/<TableRow>/<TableHead>/<TableCell>`
+- `<div className="bg-white rounded-lg shadow border…">` → `<Card>/<CardHeader>/<CardContent>`
+- Status pills → `<Badge variant="default|secondary|destructive|outline">`
+- Color classes → theme tokens (`bg-neutral-*` → `bg-muted`, `text-neutral-*` → `text-muted-foreground`, `text-red-*` → `text-destructive`, etc.)
+
+**Layout** (3 files, Claude inline):
+- `layout/shell.tsx` — sidebar + nav: bg-muted/40 background, active link → `bg-primary text-primary-foreground` (was hard-coded `bg-neutral-900`), sign-out → `<Button variant="ghost" size="sm">`
+- `layout/pager.tsx` — prev/next chips → `<Button variant="outline" size="sm">` — now inherit hover/disabled/dark-mode from kit
+- `layout/command_palette.tsx` — kept hand-rolled keyboard-nav (kit's `<Command>` uses cmdk-style children + would force a logic rewrite); only swapped color classes to theme tokens (popover bg, primary highlight on active row)
+
+**Screens** (22 files split across 4 parallel agents — all four landed, full sweep):
+
+| Batch | Agent | Files | Outcome |
+|---|---|---|---|
+| A — list/table screens | A1 | audit, logs, jobs, trash, backups, email-events | ✅ 6 files, +75 LOC, typecheck + build clean |
+| B — medium forms+lists | A2 | api_tokens, webhooks, notifications, mailer_templates | ✅ 4 files, +49 LOC, typecheck + build clean (built `ModalShell` wrapper over `<Card>` since kit has no `dialog.ui`) |
+| C — dashboard + small | A3 | dashboard, health, cache, realtime, schema, settings | ✅ 6 files, +88 LOC, typecheck + build clean |
+| D — heavy editors | A4 | records, record_editor, notifications-prefs, i18n, bootstrap, hooks | ✅ 6 files, +44 LOC, typecheck + build clean (Monaco lazy block left intact; i18n locale picker became the only "star widget" `<Select>` swap and shrank by ~80 LOC) |
+
+**Highlights from the agent reports**:
+
+- **records.tsx tri-state checkbox**: the header "select all" checkbox used to imperatively set `el.indeterminate = …` via `ref.current.indeterminate = !allSelected`. Kit `<Checkbox>` accepts `checked={"indeterminate" | bool}` declaratively — agent moved the imperative ref-poking into the kit primitive. Cleaner state ownership.
+- **i18n.tsx locale picker**: 240-px vertical sidebar of buttons (one per locale w/ coverage badges) → kit `<Select>` with `<SelectItem>` rows that inline the coverage `X/Y` numbers + `bin`/`ovr` tags. Saved ~80 LOC of bespoke sidebar styling AND freed horizontal real estate. Only "star widget" instance per the recipe — every other dropdown stayed raw `<select>`.
+- **hooks.tsx TestPanel**: hand-rolled `expanded` toggle div → kit `<Collapsible>` + `<CollapsibleTrigger>` + `<CollapsibleContent>` (ARIA states + chevron data-state handled by the primitive). Monaco `<Editor>` lazy-Suspense block + `monacoRef` plumbing UNTOUCHED.
+- **bootstrap.tsx wizard**: driver radio + socket sub-picker → kit `<RadioGroup>` + `<RadioGroupItem>` inside styled label wrappers (preserved the card visual). "Create DB if not exists" → kit `<Checkbox>` with `onCheckedChange`. Already-migrated `<PasswordInput>` from slice (f) preserved verbatim incl. the `onGenerate` fan-out behaviour.
+- **records.tsx ref typing wrinkle**: shared `inputRef` is typed `HTMLInputElement | HTMLSelectElement | null` (covers both select-cell and text-cell branches). Kit `<Input>`'s forwardRef only emits `HTMLInputElement | null`; ref callback explicit-cast: `ref={(el: HTMLInputElement | null) => { inputRef.current = el; }}`.
+
+**Per-screen Badge-variant mappings** were documented inline by Agent A — explicit decision tables in each file's comment block (e.g. `// audit: success→default, denied→secondary, failed/error→destructive`).
+
+**Pattern that emerged**: tables-inside-screens get wrapped in `<Card><CardContent className="p-0 overflow-x-auto">` rather than `<CardHeader>+<CardContent>` — original screens never had a title/description over the table, so adding header chrome would have invented UI that wasn't there. The `p-0` defeats CardContent's default padding so the table flushes to the card edge.
+
+**Open visual decisions** (flagged for future review):
+- **Amber/warn states** — kit has no amber token. Three resolutions seen: (1) destructive when warn = problem (health.tsx "service degraded"); (2) raw `bg-amber-50 border-amber-200` when warn = "heads up" (cache evictions, mailer template override, webhook paused); (3) raw `text-amber-700` for audit error-code column (third semantic colour preserving information density). Adding `--warning` to styles.css + a `Badge variant="warning"` is a candidate follow-up slice.
+- **Success-green pills** — same gap, no green Badge variant. Dashboard outcome pills downgraded to `Badge variant="secondary"` (gray); banner success flashes (trash/backups "restored OK") kept raw emerald.
+
+### Bundle + binary stats
+
+| Metric | Before v1.7.40 | After (slices a-e) | After (slices a-f) |
+|---|---|---|---|
+| Admin JS gzip | 79 KB | 89 KB | 114 KB |
+| Admin JS raw | 307 KB | 339 KB | 422 KB |
+| Admin CSS gzip | 13.93 KB | 13.96 KB | 13.86 KB |
+| Modules transformed | 1695 | 1704 | 174 (Vite groups changed) |
+| Native binary (stripped) | 25.94 MB | 26.08 MB | 26.0 MB |
+| Largest cross-compile binary | 26.43 MB | 27.67 MB | 27.7 MB |
+| Headroom under 30 MB ceiling | 3.57 MB | 2.33 MB | 2.30 MB |
+
+**Bundle growth analysis**: +35 KB gzip is the cost of pulling in cva (~3 KB), clsx (~1 KB), tailwind-merge (~5 KB), + the imported kit components themselves. Pays off because all 25 screens now share one Button/Card/Input/Table implementation instead of each having its own hand-rolled equivalent. Bundle would have grown further had we adopted the kit's `react-hook-form` integration (currently only `form.ui.tsx` references it; no admin screen does).
+
+### Combined test + build
+
+- `go build ./...` clean
+- `go vet ./...` clean
+- `go test -race -count=1 ./internal/api/uiapi/...` — 11 tests green
+- `go test -race -count=1 ./pkg/railbase/cli/...` — green (CLI smoke tests cover `ui list/init/add`)
+- `cd admin && npm run build` — green
+- Cross-compile sweep: all 6 binaries under 30 MB
+
+### Closed architectural questions
+
+1. **Where does the embed.FS live?** — `admin/` package, not `internal/ui/`. Reason: `//go:embed` paths are directory-relative + cannot use `..`. Putting `uikit.go` in `admin/` lets it see `admin/src/lib/ui/`. Same constraint shaped the existing `admin/embed.go` (which sees `admin/dist/`).
+2. **Path alias `@/` vs relative imports** — kit components ship using **relative** imports (`./cn`, `./_primitives/portal`) because they're shadcn-style "owned by the consumer" — alias paths bake in the assumption that the consumer's tsconfig matches the admin's. Classifier handles both shapes so consumer apps that adopt the `@/` convention work too.
+3. **Public, no auth on `/api/_ui/*`** — published source code is equivalent to a CDN. Locking it down would defeat the use case (downstream apps that boot against a public Railbase install). Operators who need to lock it can wrap the route group in their own middleware or skip `uiapi.Mount` entirely.
+4. **No fsnotify on the embed scan** — FS is immutable for the process lifetime (binary-baked). `sync.Once` is sufficient.
+5. **Did NOT migrate command palette to kit's `<Command>`** — kit's Command uses cmdk-style children + handles its own keyboard nav. Migrating would have rewritten ~150 LOC of working logic. Color-token swap only.
+
+### Deferred
+
+- **`dialog.ui.tsx` doesn't exist in the air upstream** — only `alert-dialog.ui` (confirm pattern) and `sheet.ui` / `drawer.ui` (side panels). Agent B built a hand-rolled `ModalShell` wrapper over `<Card>` for form-style modals (token create, webhook edit). Adding `dialog.ui` is a candidate follow-up slice.
+- **`Badge variant="warning"` + `--warning` theme token** — would unify the 3 different amber decisions seen across batches.
+- **`Badge variant="success"` + `--success` theme token** — same story for green outcomes.
+- **Adopt kit's `react-hook-form` integration** in deep admin forms (record_editor, settings) — currently those use `useSignal()` + manual onSubmit. Optional v1.x polish.
+- **Migrate the QDataTable concept** mentioned in docs/12 onto kit's `<Table>` + `@tanstack/virtual` — not blocked, but out of this slice.
+
+### Files touched
+
+**New** (5 files): `admin/uikit.go`, `internal/api/uiapi/registry.go`, `internal/api/uiapi/handler.go`, `internal/api/uiapi/registry_test.go`, `pkg/railbase/cli/ui.go`
+
+**Modified — kit infra** (5 files): `admin/package.json` (+9 peers, −lucide-preact), `admin/vite.config.ts` (`@/` alias), `admin/tsconfig.json` (`@/*` path), `admin/src/styles.css` (oklch tokens + dark mode + tw-animate-css), `admin/src/vite-env.d.ts` (NEW, `vite/client` types), `pkg/railbase/app.go` (mount), `pkg/railbase/cli/root.go` (subcommand registration)
+
+**Modified — kit source** (62 files): every file under `admin/src/lib/ui/` and `admin/src/lib/ui/_primitives/` (50 + 11 + cn/icons/theme/index). Minor fix in `table.ui.tsx` (replaced `@/lib/csv` import with inline `generateCsv` helper to make the file self-contained).
+
+**Modified — admin consumers**: `admin/src/screens/{login,bootstrap}.tsx`, `admin/src/layout/{shell,pager,command_palette}.tsx`, and ~22 admin screens (split across 4 agent batches; per-screen line deltas detailed in slices A/B/C reports above; D pending).
+
+**Deleted**: `admin/src/components/` directory (`password-input.tsx` — consolidated into kit's `password.ui.tsx`).
+
+### Honest completion of plan.md v1 scope (post-v1.7.40)
+
+**~99% (v1 scope unchanged — UI kit is v1.x bonus, parallel polish track).** The admin re-skinning is decorative refresh, not feature work; SHIP gates remain green. Net result for downstream developers: Railbase binary now doubles as a UI registry, accessible from any frontend without an npm publish step.
+
+

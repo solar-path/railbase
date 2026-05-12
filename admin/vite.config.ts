@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
+import preact from "@preact/preset-vite";
 import tailwindcss from "@tailwindcss/vite";
+import { fileURLToPath, URL } from "node:url";
 
 // Vite config for Railbase's embedded admin UI.
 //
@@ -10,9 +11,32 @@ import tailwindcss from "@tailwindcss/vite";
 // HTML works whether served from the Go binary or from the Vite
 // dev server (when dev server is on a different port the proxy
 // rewrites /api/_admin/* to the running Railbase backend).
+//
+// Stack: Preact 10 + @preact/signals. The `react` / `react-dom`
+// aliases below are *only* there to satisfy React-only dependencies
+// (@tanstack/react-query, @monaco-editor/react) — they get a
+// preact/compat shim and behave like React. Our own code (in admin/src)
+// imports directly from "preact" / "preact/hooks" / "@preact/signals"
+// for the smaller bundle and the fine-grained reactivity from signals.
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [preact(), tailwindcss()],
   base: "/_/",
+  resolve: {
+    alias: {
+      // Map React-only deps onto Preact's compat layer. preact/compat
+      // is ~5 KB and re-exports the React API surface that
+      // @tanstack/react-query and @monaco-editor/react expect.
+      react: "preact/compat",
+      "react-dom/test-utils": "preact/test-utils",
+      "react-dom": "preact/compat",
+      "react/jsx-runtime": "preact/jsx-runtime",
+      // Path alias for the shadcn-on-Preact UI kit at admin/src/lib/ui/.
+      // Components reference each other and the cn() helper as
+      // `@/lib/ui/...`; tsconfig has the matching paths entry so editor
+      // tooling resolves the same way.
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    },
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,

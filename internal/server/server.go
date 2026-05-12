@@ -136,6 +136,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
 }
 
+// Close shuts the listener down immediately, terminating any in-flight
+// connections without waiting for handlers to complete. Used by the
+// in-process reload path in pkg/railbase/app.go where we'd otherwise
+// have to wait out the full ShutdownGrace for idle keep-alive
+// connections from the admin UI assets to drain.
+//
+// Safe to call after Shutdown has already returned.
+func (s *Server) Close() error {
+	return s.server.Close()
+}
+
 func probeHandler(probe func(ctx context.Context) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// 2s ceiling so a hung probe can't pin a goroutine forever.

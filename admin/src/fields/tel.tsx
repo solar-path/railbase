@@ -149,7 +149,7 @@ export function TelInput({
           type="tel"
           value={draft}
           onChange={(e) => {
-            setDraft(e.target.value);
+            setDraft(e.currentTarget.value);
             setErr(null);
           }}
           onBlur={() => {

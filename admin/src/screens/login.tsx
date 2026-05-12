@@ -1,94 +1,161 @@
-import { useState, type FormEvent } from "react";
-import { useAuth } from "../auth/context";
+import { useSignal } from "@preact/signals";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { signin } from "../auth/context";
 import { isAPIError } from "../api/client";
+import { Button } from "@/lib/ui/button.ui";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/lib/ui/card.ui";
+import { Input } from "@/lib/ui/input.ui";
+import { PasswordInput } from "@/lib/ui/password.ui";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/lib/ui/form.ui";
 
-// Login screen — minimal: email + password + sign-in button.
+// Login screen — first admin consumer of kit's <Form> + react-hook-form
+// pattern (v1.7.41). Reference implementation for downstream apps that
+// lift the kit: this is what a "shadcn-style form on Preact" looks like.
 //
-// 2FA / WebAuthn / OAuth providers all land in v1.1 (depend on the
-// mailer + provider configs). Until then this is the entire admin
-// authentication surface.
+// The setup:
+//   - Schema declared with zod; type comes from z.infer<typeof schema>
+//   - useForm() owns form state (replaces useSignal() per-field)
+//   - <Form {...form}> + <FormField name=... render={({field}) => ...}>
+//     gives each input access to the RHF context (error tracking, dirty
+//     flags, focus management, ARIA wiring)
+//   - <FormMessage/> renders zod errors automatically — no manual error
+//     state plumbing
+//   - busy / err remain as useSignal() — they're transient UX state, not
+//     form state, and don't belong in the form schema
+//
+// Preact compat note: react-hook-form wires onChange handlers. Preact-
+// native onChange fires on blur, BUT preact/compat patches it to React-
+// style on-input semantics. We pass field.value + field.onChange through
+// the {...field} spread for Input; PasswordInput keeps the explicit
+// `onInput → field.onChange(value)` wiring because its onInput handler
+// expects raw events and PasswordInput's signature is more verbose than
+// plain Input.
+
+const loginSchema = z.object({
+  email: z.string().email("Enter a valid email"),
+  password: z.string().min(1, "Password required"),
+});
+
+type LoginValues = z.infer<typeof loginSchema>;
 
 export function LoginScreen() {
-  const { signin } = useAuth();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const busy = useSignal(false);
+  const err = useSignal<string | null>(null);
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    setErr(null);
-    setBusy(true);
+  const form = useForm<LoginValues>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: { email: "", password: "" },
+    mode: "onSubmit",
+  });
+
+  async function onSubmit(values: LoginValues) {
+    err.value = null;
+    busy.value = true;
     try {
-      await signin(email, password);
+      await signin(values.email, values.password);
     } catch (e) {
-      setErr(isAPIError(e) ? e.message : "Sign-in failed.");
+      err.value = isAPIError(e) ? e.message : "Sign-in failed.";
     } finally {
-      setBusy(false);
+      busy.value = false;
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-neutral-100 p-6">
-      <form
-        onSubmit={onSubmit}
-        className="w-full max-w-sm bg-white rounded-lg shadow border border-neutral-200 p-6 space-y-4"
-      >
-        <header className="space-y-1">
-          <h1 className="text-xl font-semibold">Railbase admin</h1>
-          <p className="text-sm text-neutral-500">Sign in to continue.</p>
-        </header>
+    <div class="min-h-screen flex items-center justify-center bg-muted p-6">
+      <Card class="w-full max-w-sm">
+        <CardHeader class="space-y-1">
+          <CardTitle class="text-xl">Railbase admin</CardTitle>
+          <CardDescription>Sign in to continue.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} class="space-y-4">
+              <FormField
+                control={form.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Email</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="email"
+                        autoComplete="username"
+                        autoFocus
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-        <label className="block">
-          <span className="text-sm font-medium text-neutral-700">Email</span>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            autoFocus
-            autoComplete="username"
-            className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900"
-          />
-        </label>
+              <FormField
+                control={form.control}
+                name="password"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Password</FormLabel>
+                    <FormControl>
+                      <PasswordInput
+                        autoComplete="current-password"
+                        value={field.value}
+                        onInput={(e) =>
+                          field.onChange(e.currentTarget.value)
+                        }
+                        // Sign-in form: eye toggle only — no
+                        // showStrength / showGenerate. Operator is
+                        // typing a value they already chose; second-
+                        // guessing it adds friction.
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-        <label className="block">
-          <span className="text-sm font-medium text-neutral-700">Password</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            autoComplete="current-password"
-            className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900"
-          />
-        </label>
+              {err.value ? (
+                <p
+                  role="alert"
+                  class="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded px-3 py-2"
+                >
+                  {err.value}
+                </p>
+              ) : null}
 
-        {err ? (
-          <p
-            role="alert"
-            className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2"
-          >
-            {err}
-          </p>
-        ) : null}
+              <Button
+                type="submit"
+                disabled={busy.value || form.formState.isSubmitting}
+                class="w-full"
+              >
+                {busy.value ? "Signing in…" : "Sign in"}
+              </Button>
 
-        <button
-          type="submit"
-          disabled={busy}
-          className="w-full rounded bg-neutral-900 text-white px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
-        >
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
-
-        <p className="text-xs text-neutral-500">
-          No admins yet? Create one with{" "}
-          <code className="rb-mono px-1 py-0.5 bg-neutral-100 rounded">
-            railbase admin create &lt;email&gt;
-          </code>
-          {" "}or use the bootstrap wizard.
-        </p>
-      </form>
+              <p class="text-xs text-muted-foreground">
+                No admins yet? Create one with{" "}
+                <code class="rb-mono px-1 py-0.5 bg-muted rounded">
+                  railbase admin create &lt;email&gt;
+                </code>
+                {" "}or use the bootstrap wizard.
+              </p>
+            </form>
+          </Form>
+        </CardContent>
+      </Card>
     </div>
   );
 }

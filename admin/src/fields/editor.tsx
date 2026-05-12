@@ -71,7 +71,7 @@ function Input({ field, value, onChange }: Props) {
         <input
           type={t}
           value={typeof value === "string" ? value : ""}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => onChange(e.currentTarget.value)}
           minLength={field.min_len ?? undefined}
           maxLength={field.max_len ?? undefined}
           required={field.required}
@@ -86,7 +86,7 @@ function Input({ field, value, onChange }: Props) {
       return (
         <textarea
           value={typeof value === "string" ? value : ""}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => onChange(e.currentTarget.value)}
           rows={6}
           required={field.required}
           className={cls + " rb-mono"}
@@ -100,7 +100,7 @@ function Input({ field, value, onChange }: Props) {
           type="number"
           value={value == null ? "" : String(value)}
           onChange={(e) => {
-            const v = e.target.value;
+            const v = e.currentTarget.value;
             if (v === "") {
               onChange(field.required ? 0 : null);
               return;
@@ -122,7 +122,7 @@ function Input({ field, value, onChange }: Props) {
           <input
             type="checkbox"
             checked={!!value}
-            onChange={(e) => onChange(e.target.checked)}
+            onChange={(e) => onChange(e.currentTarget.checked)}
           />
           <span>{value ? "true" : "false"}</span>
         </label>
@@ -133,7 +133,7 @@ function Input({ field, value, onChange }: Props) {
         <input
           type="datetime-local"
           value={toLocalDatetime(value)}
-          onChange={(e) => onChange(fromLocalDatetime(e.target.value))}
+          onChange={(e) => onChange(fromLocalDatetime(e.currentTarget.value))}
           required={field.required}
           className={cls + " rb-mono"}
         />
@@ -150,7 +150,7 @@ function Input({ field, value, onChange }: Props) {
         <textarea
           value={text}
           onChange={(e) => {
-            const v = e.target.value;
+            const v = e.currentTarget.value;
             if (v.trim() === "") {
               onChange(null);
               return;
@@ -175,7 +175,7 @@ function Input({ field, value, onChange }: Props) {
       return (
         <select
           value={typeof value === "string" ? value : ""}
-          onChange={(e) => onChange(e.target.value || null)}
+          onChange={(e) => onChange(e.currentTarget.value || null)}
           required={field.required}
           className={cls}
         >
@@ -198,7 +198,7 @@ function Input({ field, value, onChange }: Props) {
                   type="checkbox"
                   checked={checked}
                   onChange={(e) => {
-                    if (e.target.checked) onChange([...arr, opt]);
+                    if (e.currentTarget.checked) onChange([...arr, opt]);
                     else onChange(arr.filter((v) => v !== opt));
                   }}
                 />
@@ -217,7 +217,7 @@ function Input({ field, value, onChange }: Props) {
         <input
           type="text"
           value={typeof value === "string" ? value : ""}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => onChange(e.currentTarget.value)}
           placeholder="storage path"
           className={cls + " rb-mono text-xs"}
         />
@@ -230,9 +230,9 @@ function Input({ field, value, onChange }: Props) {
           value={value == null ? "[]" : JSON.stringify(value, null, 2)}
           onChange={(e) => {
             try {
-              onChange(JSON.parse(e.target.value));
+              onChange(JSON.parse(e.currentTarget.value));
             } catch {
-              onChange(e.target.value);
+              onChange(e.currentTarget.value);
             }
           }}
           rows={3}
@@ -246,7 +246,7 @@ function Input({ field, value, onChange }: Props) {
         <input
           type="text"
           value={typeof value === "string" ? value : ""}
-          onChange={(e) => onChange(e.target.value || null)}
+          onChange={(e) => onChange(e.currentTarget.value || null)}
           placeholder="uuid"
           className={cls + " rb-mono text-xs"}
           required={field.required}
@@ -265,7 +265,7 @@ function Input({ field, value, onChange }: Props) {
           }
           onChange={(e) =>
             onChange(
-              e.target.value
+              e.currentTarget.value
                 .split("\n")
                 .map((s) => s.trim())
                 .filter(Boolean),
@@ -282,7 +282,7 @@ function Input({ field, value, onChange }: Props) {
         <input
           type="password"
           value={typeof value === "string" ? value : ""}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => onChange(e.currentTarget.value)}
           minLength={field.password_min_len ?? 8}
           required={field.required}
           className={cls}
@@ -300,7 +300,7 @@ function Input({ field, value, onChange }: Props) {
         <input
           type="text"
           value={typeof value === "string" ? value : ""}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => onChange(e.currentTarget.value)}
           className={cls}
         />
       );

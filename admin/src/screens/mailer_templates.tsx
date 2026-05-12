@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
+import { Button } from "@/lib/ui/button.ui";
+import { Badge } from "@/lib/ui/badge.ui";
+import { Card, CardContent, CardHeader, CardTitle } from "@/lib/ui/card.ui";
 
 // Mailer templates admin screen — read-only viewer over the 8
 // built-in email templates plus any operator overrides on disk.
@@ -28,28 +31,32 @@ export function MailerTemplatesScreen() {
     <div className="space-y-4">
       <header>
         <h1 className="text-2xl font-semibold">Mailer templates</h1>
-        <p className="text-sm text-neutral-500">
+        <p className="text-sm text-muted-foreground">
           Read-only viewer for the built-in email templates plus operator
           overrides.
         </p>
       </header>
 
-      <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-        Read-only viewer. To override a built-in, write the markdown to{" "}
-        <code className="rb-mono">pb_data/email_templates/&lt;kind&gt;.md</code>
-        ; the Mailer picks it up on next send (or after restart pending
-        v1.0.1 hot-reload).
-      </div>
+      <Card className="border-amber-200 bg-amber-50">
+        <CardContent className="px-3 py-2 text-sm text-amber-800">
+          Read-only viewer. To override a built-in, write the markdown to{" "}
+          <code className="rb-mono">pb_data/email_templates/&lt;kind&gt;.md</code>
+          ; the Mailer picks it up on next send (or after restart pending
+          v1.0.1 hot-reload).
+        </CardContent>
+      </Card>
 
       {listQ.isLoading ? (
-        <div className="text-sm text-neutral-500">Loading…</div>
+        <div className="text-sm text-muted-foreground">Loading…</div>
       ) : listQ.isError ? (
-        <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          Failed to load:{" "}
-          <span className="rb-mono">
-            {(listQ.error as { message?: string } | null)?.message ?? "unknown error"}
-          </span>
-        </div>
+        <Card className="border-destructive/30 bg-destructive/10">
+          <CardContent className="px-3 py-2 text-sm text-destructive">
+            Failed to load:{" "}
+            <span className="rb-mono">
+              {(listQ.error as { message?: string } | null)?.message ?? "unknown error"}
+            </span>
+          </CardContent>
+        </Card>
       ) : (
         <div className="grid grid-cols-[18rem,1fr] gap-4">
           <KindList
@@ -76,24 +83,23 @@ function KindList({ items, selected, onSelect }: KindListProps) {
       {items.map((it) => {
         const active = it.kind === selected;
         return (
-          <button
+          <Button
             key={it.kind}
-            type="button"
+            variant={active ? "secondary" : "ghost"}
+            size="sm"
             onClick={() => onSelect(it.kind)}
-            className={
-              "text-left px-2 py-1 rounded text-sm flex items-center justify-between gap-2 " +
-              (active
-                ? "bg-sky-50 text-sky-700"
-                : "text-neutral-700 hover:bg-neutral-100")
-            }
+            className="justify-between gap-2"
           >
             <span className="rb-mono">{it.kind}</span>
             {it.override_exists ? (
-              <span className="inline-block bg-emerald-50 text-emerald-700 border border-emerald-200 rounded px-1.5 py-0.5 text-xs">
+              <Badge
+                variant="outline"
+                className="border-emerald-200 bg-emerald-50 text-emerald-700"
+              >
                 Override
-              </span>
+              </Badge>
             ) : null}
-          </button>
+          </Button>
         );
       })}
     </aside>
@@ -113,23 +119,27 @@ function ViewerPane({ kind }: { kind: string | null }) {
 
   if (!kind) {
     return (
-      <div className="rounded border border-dashed border-neutral-300 bg-neutral-50 px-4 py-12 text-center text-sm text-neutral-500">
-        Pick a template kind from the left to view its current content.
-      </div>
+      <Card className="border-dashed bg-muted">
+        <CardContent className="px-4 py-12 text-center text-sm text-muted-foreground">
+          Pick a template kind from the left to view its current content.
+        </CardContent>
+      </Card>
     );
   }
 
   if (viewQ.isLoading) {
-    return <div className="text-sm text-neutral-500">Loading…</div>;
+    return <div className="text-sm text-muted-foreground">Loading…</div>;
   }
   if (viewQ.isError || !viewQ.data) {
     return (
-      <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-        Failed to load template:{" "}
-        <span className="rb-mono">
-          {(viewQ.error as { message?: string } | null)?.message ?? "unknown error"}
-        </span>
-      </div>
+      <Card className="border-destructive/30 bg-destructive/10">
+        <CardContent className="px-3 py-2 text-sm text-destructive">
+          Failed to load template:{" "}
+          <span className="rb-mono">
+            {(viewQ.error as { message?: string } | null)?.message ?? "unknown error"}
+          </span>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -139,21 +149,21 @@ function ViewerPane({ kind }: { kind: string | null }) {
     : "(built-in default)";
 
   return (
-    <section className="rounded border border-neutral-200 bg-white">
-      <header className="border-b border-neutral-200 px-4 py-3">
+    <Card className="p-0">
+      <CardHeader className="border-b p-4 space-y-0">
         <div className="flex items-baseline justify-between gap-3">
-          <h2 className="rb-mono text-base font-semibold">{view.kind}</h2>
+          <CardTitle className="rb-mono text-base">{view.kind}</CardTitle>
           <span
             className={
               "text-xs " +
-              (view.override_exists ? "text-emerald-700" : "text-neutral-500")
+              (view.override_exists ? "text-emerald-700" : "text-muted-foreground")
             }
           >
             {sourceLabel}
           </span>
         </div>
         {view.override_exists ? (
-          <p className="mt-1 text-xs text-neutral-500">
+          <p className="mt-1 text-xs text-muted-foreground">
             {humanSize(view.override_size_bytes)}
             {view.override_modified ? (
               <>
@@ -165,13 +175,13 @@ function ViewerPane({ kind }: { kind: string | null }) {
             ) : null}
           </p>
         ) : (
-          <p className="mt-1 text-xs text-neutral-500">
+          <p className="mt-1 text-xs text-muted-foreground">
             No override on disk — Mailer renders the embedded built-in.
           </p>
         )}
-      </header>
+      </CardHeader>
 
-      <div className="flex border-b border-neutral-200 px-2 pt-2 text-sm">
+      <div className="flex border-b px-2 pt-2 text-sm">
         <TabButton active={mode === "raw"} onClick={() => setMode("raw")}>
           Raw markdown
         </TabButton>
@@ -180,16 +190,16 @@ function ViewerPane({ kind }: { kind: string | null }) {
         </TabButton>
       </div>
 
-      <div className="p-4">
+      <CardContent className="p-4">
         {mode === "raw" ? (
-          <pre className="rb-mono text-xs whitespace-pre-wrap text-neutral-800">
+          <pre className="rb-mono text-xs whitespace-pre-wrap text-foreground">
             {view.source || "(empty)"}
           </pre>
         ) : (
           <>
-            <p className="mb-2 text-xs text-neutral-500">Rendered HTML</p>
+            <p className="mb-2 text-xs text-muted-foreground">Rendered HTML</p>
             <div
-              className="prose prose-sm max-w-none bg-white border border-neutral-200 rounded p-4"
+              className="prose prose-sm max-w-none bg-background border rounded p-4"
               // Safe: html comes from the trusted built-in markdown
               // renderer (internal/mailer/markdown.go), which is a
               // fixed allowlist. No user input reaches this surface.
@@ -197,8 +207,8 @@ function ViewerPane({ kind }: { kind: string | null }) {
             />
           </>
         )}
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -219,7 +229,7 @@ function TabButton({
         "px-3 py-1.5 -mb-px " +
         (active
           ? "border-b-2 border-sky-500 text-sky-700 font-medium"
-          : "text-neutral-600 hover:text-neutral-900")
+          : "text-muted-foreground hover:text-foreground")
       }
     >
       {children}

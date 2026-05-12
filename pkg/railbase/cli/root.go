@@ -102,6 +102,12 @@ func newRoot(includeInit bool) *cobra.Command {
 		// a Go coverprofile and a Vitest c8 JSON into a single
 		// self-contained HTML report. Closes the last §3.12 item.
 		newCoverageCmd(),
+		// v1.7.40 — `railbase ui` (Preact + shadcn component registry).
+		// Surfaces the embedded UI kit so downstream frontend apps
+		// can lift components into their own tree without an npm
+		// publish step; mirrors shadcn's "copy, don't install" model
+		// against an in-binary source-of-truth.
+		newUICmd(),
 	)
 	if includeInit {
 		root.AddCommand(newInitCmd())

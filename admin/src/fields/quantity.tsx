@@ -107,12 +107,12 @@ export function QuantityInput({
           inputMode="decimal"
           value={valStr}
           onChange={(e) => {
-            setValStr(e.target.value);
+            setValStr(e.currentTarget.value);
             setErr(null);
           }}
           onBlur={() => commit(valStr, unit)}
           placeholder="0.0"
-          spellCheck={false}
+          spellcheck={false}
           autoCorrect="off"
           className={
             "mt-1 flex-1 rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +
@@ -124,7 +124,7 @@ export function QuantityInput({
         <select
           value={unit}
           onChange={(e) => {
-            const u = e.target.value;
+            const u = e.currentTarget.value;
             setUnit(u);
             commit(valStr, u);
           }}

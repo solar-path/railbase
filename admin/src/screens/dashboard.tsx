@@ -1,6 +1,22 @@
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
-import { Link } from "wouter";
+import { Link } from "wouter-preact";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/lib/ui/card.ui";
+import { Badge } from "@/lib/ui/badge.ui";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/lib/ui/table.ui";
 
 // Dashboard — minimal v0.8 cut: collection count, recent audit
 // events, links to deep screens. The "stats cards / health checks /
@@ -15,65 +31,60 @@ export function DashboardScreen() {
   });
 
   return (
-    <div className="space-y-6">
+    <div class="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <p className="text-sm text-neutral-500">Quick health overview.</p>
+        <h1 class="text-2xl font-semibold">Dashboard</h1>
+        <p class="text-sm text-muted-foreground">Quick health overview.</p>
       </header>
 
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Card label="Collections" value={schemaQ.data?.count ?? "—"} href="/schema" />
-        <Card label="Audit events" value={auditQ.data?.totalItems ?? "—"} href="/audit" />
-        <Card label="Settings" value="↗" href="/settings" />
-        <Card label="Docs" value="↗" href="https://github.com/railbase/railbase" external />
+      <section class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard label="Collections" value={schemaQ.data?.count ?? "—"} href="/schema" />
+        <StatCard label="Audit events" value={auditQ.data?.totalItems ?? "—"} href="/audit" />
+        <StatCard label="Settings" value="↗" href="/settings" />
+        <StatCard label="Docs" value="↗" href="https://github.com/railbase/railbase" external />
       </section>
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium text-neutral-700">Recent audit events</h2>
-        <div className="rounded border border-neutral-200 bg-white">
-          <table className="rb-table">
-            <thead>
-              <tr>
-                <th>seq</th>
-                <th>event</th>
-                <th>outcome</th>
-                <th>at</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(auditQ.data?.items ?? []).slice(0, 10).map((e) => (
-                <tr key={e.seq}>
-                  <td className="rb-mono">{e.seq}</td>
-                  <td className="rb-mono">{e.event}</td>
-                  <td>
-                    <span
-                      className={
-                        "rounded px-1.5 py-0.5 text-xs " +
-                        outcomeColor(e.outcome)
-                      }
-                    >
-                      {e.outcome}
-                    </span>
-                  </td>
-                  <td className="rb-mono text-neutral-500">{e.at}</td>
-                </tr>
-              ))}
-              {auditQ.data?.items.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="text-neutral-400 text-center py-4">
-                    No events yet.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+      <section class="space-y-2">
+        <h2 class="text-sm font-medium text-foreground">Recent audit events</h2>
+        <Card>
+          <CardContent class="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>seq</TableHead>
+                  <TableHead>event</TableHead>
+                  <TableHead>outcome</TableHead>
+                  <TableHead>at</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(auditQ.data?.items ?? []).slice(0, 10).map((e) => (
+                  <TableRow key={e.seq}>
+                    <TableCell class="rb-mono">{e.seq}</TableCell>
+                    <TableCell class="rb-mono">{e.event}</TableCell>
+                    <TableCell>
+                      <Badge variant={outcomeVariant(e.outcome)}>{e.outcome}</Badge>
+                    </TableCell>
+                    <TableCell class="rb-mono text-muted-foreground">{e.at}</TableCell>
+                  </TableRow>
+                ))}
+                {auditQ.data?.items.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={4} class="text-muted-foreground text-center py-4">
+                      No events yet.
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       </section>
     </div>
   );
 }
 
-function Card({
+function StatCard({
   label,
   value,
   href,
@@ -85,10 +96,14 @@ function Card({
   external?: boolean;
 }) {
   const inner = (
-    <div className="rounded border border-neutral-200 bg-white p-3 hover:border-neutral-300 transition-colors">
-      <div className="text-xs text-neutral-500">{label}</div>
-      <div className="text-2xl font-semibold mt-1">{value}</div>
-    </div>
+    <Card class="transition-colors hover:border-ring">
+      <CardHeader class="p-3 pb-1 space-y-0">
+        <CardDescription class="text-xs">{label}</CardDescription>
+      </CardHeader>
+      <CardContent class="p-3 pt-1">
+        <CardTitle class="text-2xl">{value}</CardTitle>
+      </CardContent>
+    </Card>
   );
   if (external) {
     return (
@@ -100,12 +115,12 @@ function Card({
   return <Link href={href}>{inner}</Link>;
 }
 
-function outcomeColor(o: string): string {
+function outcomeVariant(o: string): "default" | "secondary" | "destructive" | "outline" {
   switch (o) {
-    case "success": return "bg-emerald-50 text-emerald-700 border border-emerald-200";
-    case "denied":  return "bg-amber-50 text-amber-700 border border-amber-200";
-    case "failed":  return "bg-red-50 text-red-700 border border-red-200";
-    case "error":   return "bg-red-50 text-red-700 border border-red-200";
-    default:        return "bg-neutral-50 text-neutral-700 border border-neutral-200";
+    case "success": return "secondary";
+    case "denied":  return "outline";
+    case "failed":  return "destructive";
+    case "error":   return "destructive";
+    default:        return "outline";
   }
 }

@@ -110,7 +110,7 @@ export function AddressInput({
         <input
           type="text"
           value={draft.street ?? ""}
-          onChange={(e) => onField("street", e.target.value)}
+          onChange={(e) => onField("street", e.currentTarget.value)}
           onBlur={onBlurCommit}
           placeholder="1600 Amphitheatre Pkwy"
           className={txt}
@@ -121,7 +121,7 @@ export function AddressInput({
         <input
           type="text"
           value={draft.street2 ?? ""}
-          onChange={(e) => onField("street2", e.target.value)}
+          onChange={(e) => onField("street2", e.currentTarget.value)}
           onBlur={onBlurCommit}
           placeholder="apt / suite"
           className={txt}
@@ -133,7 +133,7 @@ export function AddressInput({
           <input
             type="text"
             value={draft.city ?? ""}
-            onChange={(e) => onField("city", e.target.value)}
+            onChange={(e) => onField("city", e.currentTarget.value)}
             onBlur={onBlurCommit}
             placeholder="Mountain View"
             className={txt}
@@ -144,7 +144,7 @@ export function AddressInput({
           <input
             type="text"
             value={draft.region ?? ""}
-            onChange={(e) => onField("region", e.target.value)}
+            onChange={(e) => onField("region", e.currentTarget.value)}
             onBlur={onBlurCommit}
             placeholder="CA"
             className={txt}
@@ -155,7 +155,7 @@ export function AddressInput({
           <input
             type="text"
             value={draft.postal ?? ""}
-            onChange={(e) => onField("postal", e.target.value)}
+            onChange={(e) => onField("postal", e.currentTarget.value)}
             onBlur={onBlurCommit}
             placeholder="94043"
             className={txt}

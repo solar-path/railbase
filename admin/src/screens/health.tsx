@@ -1,5 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/lib/ui/card.ui";
+import { Alert, AlertDescription } from "@/lib/ui/alert.ui";
 
 // Health / metrics admin dashboard — read-only snapshot of runtime,
 // DB pool, jobs queue, audit, logs, realtime, backups, and schema
@@ -18,29 +26,31 @@ export function HealthScreen() {
   });
 
   if (q.isLoading) {
-    return <div className="text-sm text-neutral-500">Loading…</div>;
+    return <div class="text-sm text-muted-foreground">Loading…</div>;
   }
   if (q.isError || !q.data) {
     return (
-      <div className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800">
-        Failed to load health metrics: {String(q.error)}
-      </div>
+      <Alert variant="destructive">
+        <AlertDescription>
+          Failed to load health metrics: {String(q.error)}
+        </AlertDescription>
+      </Alert>
     );
   }
   const h = q.data;
 
   return (
-    <div className="space-y-6">
+    <div class="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold">Health &amp; metrics</h1>
-        <p className="text-sm text-neutral-500">
+        <h1 class="text-2xl font-semibold">Health &amp; metrics</h1>
+        <p class="text-sm text-muted-foreground">
           Live snapshot of runtime, DB pool, jobs, audit, logs, realtime,
           and backups. Polls every 5&nbsp;s.
         </p>
       </header>
 
       {/* Row 1 — runtime / pool / memory */}
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
           label="Uptime"
           value={formatDuration(h.uptime_sec)}
@@ -66,7 +76,7 @@ export function HealthScreen() {
       </section>
 
       {/* Row 2 — jobs / audit / logs / realtime */}
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
           label="Jobs"
           value={`${h.jobs.pending + h.jobs.running}`}
@@ -93,7 +103,7 @@ export function HealthScreen() {
       </section>
 
       {/* Row 3 — backups / schema */}
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <section class="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <StatCard
           label="Backups"
           value={h.backups.count}
@@ -111,16 +121,18 @@ export function HealthScreen() {
       </section>
 
       {/* Footer — version */}
-      <footer className="rounded border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-500">
-        <div>
-          <span className="font-medium text-neutral-700">Railbase {h.version}</span>{" "}
-          · {h.go_version}
-        </div>
-        <div className="mt-1">
-          Started at <code className="rounded bg-white px-1 py-0.5">{h.started_at}</code>{" "}
-          · now <code className="rounded bg-white px-1 py-0.5">{h.now}</code>
-        </div>
-      </footer>
+      <Card class="bg-muted">
+        <CardContent class="p-3 text-xs text-muted-foreground">
+          <div>
+            <span class="font-medium text-foreground">Railbase {h.version}</span>{" "}
+            · {h.go_version}
+          </div>
+          <div class="mt-1">
+            Started at <code class="rounded bg-card px-1 py-0.5">{h.started_at}</code>{" "}
+            · now <code class="rounded bg-card px-1 py-0.5">{h.now}</code>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -137,27 +149,30 @@ function StatCard({
   hint?: string;
 }) {
   return (
-    <div
-      className={`rounded border p-3 ${
-        warn ? "border-red-300 bg-red-50" : "border-neutral-200 bg-white"
-      }`}
-    >
-      <div
-        className={`text-xs uppercase tracking-wide ${
-          warn ? "text-red-700" : "text-neutral-500"
-        }`}
-      >
-        {label}
-      </div>
-      <div
-        className={`mt-1 text-2xl font-semibold tabular-nums ${
-          warn ? "text-red-700" : ""
-        }`}
-      >
-        {value}
-      </div>
-      {hint ? <div className="mt-1 text-[11px] text-neutral-400">{hint}</div> : null}
-    </div>
+    <Card class={warn ? "border-destructive/50 bg-destructive/5" : undefined}>
+      <CardHeader class="p-3 pb-1 space-y-0">
+        <CardDescription
+          class={
+            "text-xs uppercase tracking-wide " +
+            (warn ? "text-destructive" : "text-muted-foreground")
+          }
+        >
+          {label}
+        </CardDescription>
+      </CardHeader>
+      <CardContent class="p-3 pt-0">
+        <CardTitle
+          class={
+            "text-2xl tabular-nums " + (warn ? "text-destructive" : "")
+          }
+        >
+          {value}
+        </CardTitle>
+        {hint ? (
+          <div class="mt-1 text-[11px] text-muted-foreground">{hint}</div>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -185,4 +200,3 @@ function formatRelative(iso: string): string {
   const secondsAgo = Math.max(0, (Date.now() - d.getTime()) / 1000);
   return formatDuration(secondsAgo) + " ago";
 }
-

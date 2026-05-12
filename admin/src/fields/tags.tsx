@@ -127,11 +127,11 @@ export function TagsInput({
       <input
         type="text"
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => setDraft(e.currentTarget.value)}
         onKeyDown={onKey}
         onBlur={addDraft}
         placeholder={tags.length === 0 ? "tag, tag, tag…" : ""}
-        spellCheck={false}
+        spellcheck={false}
         className="flex-1 min-w-[6rem] border-0 px-1 py-0.5 text-sm focus:outline-none"
       />
     </div>

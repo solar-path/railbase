@@ -1,5 +1,5 @@
-import { Route, Switch, Router } from "wouter";
-import { useBrowserLocation } from "wouter/use-browser-location";
+import { Route, Switch, Router } from "wouter-preact";
+import { useBrowserLocation } from "wouter-preact/use-browser-location";
 import { AuthProvider, useAuth } from "./auth/context";
 import { LoginScreen } from "./screens/login";
 import { BootstrapScreen } from "./screens/bootstrap";

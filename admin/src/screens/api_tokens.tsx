@@ -1,8 +1,33 @@
 import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { adminAPI } from "../api/admin";
 import type { APIToken } from "../api/types";
 import { Pager } from "../layout/pager";
+import { Button } from "@/lib/ui/button.ui";
+import { Input } from "@/lib/ui/input.ui";
+import { Badge } from "@/lib/ui/badge.ui";
+import { Checkbox } from "@/lib/ui/checkbox.ui";
+import { Card, CardContent } from "@/lib/ui/card.ui";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/lib/ui/table.ui";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/lib/ui/form.ui";
 
 // API tokens admin screen — paginated browser over `_api_tokens` with
 // create / revoke / rotate affordances. Backend endpoint family:
@@ -23,6 +48,22 @@ const TTL_SECONDS: Record<TTLPreset, number | undefined> = {
   "90d": 90 * 24 * 60 * 60,
   never: undefined,
 };
+
+const TTL_PRESETS = ["1h", "24h", "30d", "90d", "never"] as const;
+
+// Create-token form schema (kit's <Form> + RHF + zod pattern, mirrors
+// login.tsx). Scopes are stored as a string[] in form state; the
+// CSV-style text input is split on submit. ttl is a preset key that we
+// map to seconds via TTL_SECONDS at mutation time.
+const createTokenSchema = z.object({
+  name: z.string().min(1, "Name required"),
+  owner_id: z.string().min(1, "Owner ID required"),
+  owner_collection: z.string().min(1, "Owner collection required"),
+  scopes: z.array(z.string()),
+  ttl: z.enum(TTL_PRESETS),
+});
+
+type CreateTokenValues = z.infer<typeof createTokenSchema>;
 
 export function APITokensScreen() {
   const qc = useQueryClient();
@@ -99,7 +140,7 @@ export function APITokensScreen() {
       <header className="flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">API tokens</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-sm text-muted-foreground">
             {total} token{total === 1 ? "" : "s"} total. Long-lived bearer
             credentials for service-to-service auth. Raw values are shown
             exactly once on create / rotate — copy them then.
@@ -107,13 +148,7 @@ export function APITokensScreen() {
         </div>
         <div className="flex items-center gap-2">
           <Pager page={page} totalPages={totalPages} onChange={setPage} />
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            className="rounded bg-neutral-900 px-3 py-1 text-sm text-white hover:bg-neutral-800"
-          >
-            + Create token
-          </button>
+          <Button onClick={() => setCreateOpen(true)}>+ Create token</Button>
         </div>
       </header>
 
@@ -128,149 +163,148 @@ export function APITokensScreen() {
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <label className="flex items-center gap-1">
-          <span className="text-neutral-600">owner</span>
-          <input
+          <span className="text-muted-foreground">owner</span>
+          <Input
             type="text"
             value={ownerInput}
-            onChange={(e) => setOwnerInput(e.target.value)}
+            onInput={(e) => setOwnerInput(e.currentTarget.value)}
             placeholder="UUID"
-            className="rounded border border-neutral-300 px-2 py-1 w-72 rb-mono text-xs"
+            className="w-72 h-8 rb-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={includeRevoked}
-            onChange={(e) => setIncludeRevoked(e.target.checked)}
+            onCheckedChange={(c) => setIncludeRevoked(c === true)}
           />
-          <span className="text-neutral-600">include revoked</span>
+          <span className="text-muted-foreground">include revoked</span>
         </label>
         {ownerInput || includeRevoked ? (
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => {
               setOwnerInput("");
               setOwner("");
               setIncludeRevoked(false);
             }}
-            className="rounded border border-neutral-300 px-2 py-1 text-neutral-600 hover:bg-neutral-100"
           >
             clear
-          </button>
+          </Button>
         ) : null}
       </div>
 
-      <div className="rounded border border-neutral-200 bg-white overflow-x-auto">
-        <table className="rb-table">
-          <thead>
-            <tr>
-              <th>name</th>
-              <th>owner</th>
-              <th>fingerprint</th>
-              <th>scopes</th>
-              <th>last used</th>
-              <th>expires</th>
-              <th>status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(q.data?.items ?? []).map((t) => {
-              const status = tokenStatus(t);
-              const isOpen = expandedId === t.id;
-              return (
-                <Fragment key={t.id}>
-                  <tr
-                    onClick={() => setExpandedId(isOpen ? null : t.id)}
-                    className="cursor-pointer"
-                  >
-                    <td className="font-medium">{t.name}</td>
-                    <td className="rb-mono text-xs text-neutral-600 whitespace-nowrap">
-                      {t.owner_collection}/{t.owner_id.slice(0, 8)}…
-                    </td>
-                    <td className="rb-mono text-xs">{t.fingerprint || "—"}</td>
-                    <td className="rb-mono text-xs text-neutral-600">
-                      {t.scopes.length === 0
-                        ? <span className="text-neutral-400">(owner-bounded)</span>
-                        : t.scopes.join(",")}
-                    </td>
-                    <td className="rb-mono text-xs text-neutral-500 whitespace-nowrap">
-                      {t.last_used_at ?? "—"}
-                    </td>
-                    <td className="rb-mono text-xs text-neutral-500 whitespace-nowrap">
-                      {t.expires_at ?? "never"}
-                    </td>
-                    <td>
-                      <span className={"rounded px-1.5 py-0.5 text-xs " + statusColor(status)}>
-                        {status}
-                      </span>
-                    </td>
-                    <td className="text-right whitespace-nowrap">
-                      <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                        {status === "active" ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => setRotateFor(t)}
-                              className="rounded border border-neutral-300 px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100"
-                            >
-                              rotate
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (window.confirm(`Revoke "${t.name}"? Existing clients using this token will lose access immediately.`)) {
-                                  revokeM.mutate(t.id);
-                                }
-                              }}
-                              className="rounded border border-red-300 bg-red-50 px-2 py-0.5 text-xs text-red-700 hover:bg-red-100"
-                            >
-                              revoke
-                            </button>
-                          </>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                  {isOpen ? (
-                    <tr>
-                      <td colSpan={8} className="bg-neutral-50">
-                        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 p-3 text-xs">
-                          <dt className="text-neutral-500">id</dt>
-                          <dd className="rb-mono">{t.id}</dd>
-                          <dt className="text-neutral-500">owner_id</dt>
-                          <dd className="rb-mono">{t.owner_id}</dd>
-                          <dt className="text-neutral-500">created_at</dt>
-                          <dd className="rb-mono">{t.created_at}</dd>
-                          <dt className="text-neutral-500">last_used_at</dt>
-                          <dd className="rb-mono">{t.last_used_at ?? "—"}</dd>
-                          <dt className="text-neutral-500">expires_at</dt>
-                          <dd className="rb-mono">{t.expires_at ?? "never"}</dd>
-                          <dt className="text-neutral-500">revoked_at</dt>
-                          <dd className="rb-mono">{t.revoked_at ?? "—"}</dd>
-                          <dt className="text-neutral-500">rotated_from</dt>
-                          <dd className="rb-mono">{t.rotated_from ?? "—"}</dd>
-                          <dt className="text-neutral-500">scopes</dt>
-                          <dd className="rb-mono">
-                            {t.scopes.length === 0 ? "(owner-bounded)" : t.scopes.join(", ")}
-                          </dd>
-                        </dl>
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              );
-            })}
-            {q.data?.items.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="text-neutral-400 text-center py-4">
-                  No tokens.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+      <Card>
+        <CardContent className="p-0 overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>name</TableHead>
+                <TableHead>owner</TableHead>
+                <TableHead>fingerprint</TableHead>
+                <TableHead>scopes</TableHead>
+                <TableHead>last used</TableHead>
+                <TableHead>expires</TableHead>
+                <TableHead>status</TableHead>
+                <TableHead></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(q.data?.items ?? []).map((t) => {
+                const status = tokenStatus(t);
+                const isOpen = expandedId === t.id;
+                return (
+                  <Fragment key={t.id}>
+                    <TableRow
+                      onClick={() => setExpandedId(isOpen ? null : t.id)}
+                      className="cursor-pointer"
+                    >
+                      <TableCell className="font-medium">{t.name}</TableCell>
+                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                        {t.owner_collection}/{t.owner_id.slice(0, 8)}…
+                      </TableCell>
+                      <TableCell className="rb-mono text-xs">{t.fingerprint || "—"}</TableCell>
+                      <TableCell className="rb-mono text-xs text-muted-foreground">
+                        {t.scopes.length === 0
+                          ? <span className="text-muted-foreground/60">(owner-bounded)</span>
+                          : t.scopes.join(",")}
+                      </TableCell>
+                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                        {t.last_used_at ?? "—"}
+                      </TableCell>
+                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                        {t.expires_at ?? "never"}
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge status={status} />
+                      </TableCell>
+                      <TableCell className="text-right whitespace-nowrap">
+                        <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                          {status === "active" ? (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setRotateFor(t)}
+                              >
+                                rotate
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => {
+                                  if (window.confirm(`Revoke "${t.name}"? Existing clients using this token will lose access immediately.`)) {
+                                    revokeM.mutate(t.id);
+                                  }
+                                }}
+                              >
+                                revoke
+                              </Button>
+                            </>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                    {isOpen ? (
+                      <TableRow>
+                        <TableCell colSpan={8} className="bg-muted">
+                          <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 p-3 text-xs">
+                            <dt className="text-muted-foreground">id</dt>
+                            <dd className="rb-mono">{t.id}</dd>
+                            <dt className="text-muted-foreground">owner_id</dt>
+                            <dd className="rb-mono">{t.owner_id}</dd>
+                            <dt className="text-muted-foreground">created_at</dt>
+                            <dd className="rb-mono">{t.created_at}</dd>
+                            <dt className="text-muted-foreground">last_used_at</dt>
+                            <dd className="rb-mono">{t.last_used_at ?? "—"}</dd>
+                            <dt className="text-muted-foreground">expires_at</dt>
+                            <dd className="rb-mono">{t.expires_at ?? "never"}</dd>
+                            <dt className="text-muted-foreground">revoked_at</dt>
+                            <dd className="rb-mono">{t.revoked_at ?? "—"}</dd>
+                            <dt className="text-muted-foreground">rotated_from</dt>
+                            <dd className="rb-mono">{t.rotated_from ?? "—"}</dd>
+                            <dt className="text-muted-foreground">scopes</dt>
+                            <dd className="rb-mono">
+                              {t.scopes.length === 0 ? "(owner-bounded)" : t.scopes.join(", ")}
+                            </dd>
+                          </dl>
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+              {q.data?.items.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="text-muted-foreground text-center py-4">
+                    No tokens.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
 
       {createOpen ? (
         <CreateModal
@@ -321,53 +355,57 @@ function CreatedBanner({
     }
   };
   return (
-    <div className="rounded border-2 border-emerald-300 bg-emerald-50 p-4 space-y-2">
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="font-semibold text-emerald-900">
-            Token {context === "create" ? "created" : "rotated"} — copy now, it won't be shown again.
+    <Card className="border-2 border-emerald-300 bg-emerald-50">
+      <CardContent className="p-4 space-y-2">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="font-semibold text-emerald-900">
+              Token {context === "create" ? "created" : "rotated"} — copy now, it won't be shown again.
+            </div>
+            <div className="text-xs text-emerald-800 mt-1">
+              <span className="rb-mono">{record.name}</span>
+              {" — "}
+              fingerprint <span className="rb-mono">{record.fingerprint || "—"}</span>
+              {record.expires_at ? (
+                <>
+                  {" — expires "}
+                  <span className="rb-mono">{record.expires_at}</span>
+                </>
+              ) : (
+                <span> — non-expiring</span>
+              )}
+            </div>
           </div>
-          <div className="text-xs text-emerald-800 mt-1">
-            <span className="rb-mono">{record.name}</span>
-            {" — "}
-            fingerprint <span className="rb-mono">{record.fingerprint || "—"}</span>
-            {record.expires_at ? (
-              <>
-                {" — expires "}
-                <span className="rb-mono">{record.expires_at}</span>
-              </>
-            ) : (
-              <span> — non-expiring</span>
-            )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onDismiss}
+            className="text-emerald-700 hover:text-emerald-900"
+          >
+            dismiss
+          </Button>
+        </div>
+        <div className="flex items-stretch gap-2">
+          <code className="flex-1 rounded border border-emerald-300 bg-background px-3 py-2 rb-mono text-xs break-all">
+            {token}
+          </code>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={copy}
+            className="border-emerald-400 bg-background text-emerald-800 hover:bg-emerald-100"
+          >
+            {copied ? "Copied!" : "Copy"}
+          </Button>
+        </div>
+        {context === "rotate" ? (
+          <div className="text-xs text-emerald-800">
+            The predecessor is still active. Once the successor is deployed,
+            revoke the predecessor explicitly.
           </div>
-        </div>
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="text-emerald-700 hover:text-emerald-900 text-sm"
-        >
-          dismiss
-        </button>
-      </div>
-      <div className="flex items-stretch gap-2">
-        <code className="flex-1 rounded border border-emerald-300 bg-white px-3 py-2 rb-mono text-xs break-all">
-          {token}
-        </code>
-        <button
-          type="button"
-          onClick={copy}
-          className="rounded border border-emerald-400 bg-white px-3 py-1 text-sm text-emerald-800 hover:bg-emerald-100"
-        >
-          {copied ? "Copied!" : "Copy"}
-        </button>
-      </div>
-      {context === "rotate" ? (
-        <div className="text-xs text-emerald-800">
-          The predecessor is still active. Once the successor is deployed,
-          revoke the predecessor explicitly.
-        </div>
-      ) : null}
-    </div>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -388,113 +426,169 @@ function CreateModal({
     ttl_seconds?: number;
   }) => void;
 }) {
-  const [name, setName] = useState("");
-  const [ownerID, setOwnerID] = useState("");
-  const [ownerCollection, setOwnerCollection] = useState("users");
-  const [scopesCSV, setScopesCSV] = useState("");
-  const [ttl, setTTL] = useState<TTLPreset>("30d");
+  // Kit's <Form> + react-hook-form + zod (mirrors login.tsx). Scopes
+  // are held as string[] in form state; the visible <Input> reflects a
+  // comma-joined view and onInput re-splits + filters empties. ttl is
+  // a preset key mapped to seconds at submit-time via TTL_SECONDS.
+  const form = useForm<CreateTokenValues>({
+    resolver: zodResolver(createTokenSchema),
+    defaultValues: {
+      name: "",
+      owner_id: "",
+      owner_collection: "users",
+      scopes: [],
+      ttl: "30d",
+    },
+    mode: "onSubmit",
+  });
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const scopes = scopesCSV
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+  function handleSubmit(values: CreateTokenValues) {
     onSubmit({
-      name: name.trim(),
-      owner_id: ownerID.trim(),
-      owner_collection: ownerCollection.trim() || "users",
-      scopes: scopes.length > 0 ? scopes : undefined,
-      ttl_seconds: TTL_SECONDS[ttl],
+      name: values.name.trim(),
+      owner_id: values.owner_id.trim(),
+      owner_collection: values.owner_collection.trim() || "users",
+      scopes: values.scopes.length > 0 ? values.scopes : undefined,
+      ttl_seconds: TTL_SECONDS[values.ttl],
     });
-  };
+  }
 
   return (
     <ModalShell onClose={onClose} title="Create API token">
-      <form onSubmit={submit} className="space-y-3">
-        <ModalField label="Name (required)">
-          <input
-            autoFocus
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="CI deploy bot"
-            className="w-full rounded border border-neutral-300 px-2 py-1 text-sm"
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-3">
+          <FormField
+            control={form.control}
+            name="name"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Name (required)</FormLabel>
+                <FormControl>
+                  <Input
+                    autoFocus
+                    type="text"
+                    placeholder="CI deploy bot"
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
           />
-        </ModalField>
-        <ModalField label="Owner ID (UUID, required)">
-          <input
-            type="text"
-            value={ownerID}
-            onChange={(e) => setOwnerID(e.target.value)}
-            placeholder="019e8a72-…"
-            className="w-full rounded border border-neutral-300 px-2 py-1 text-sm rb-mono"
+          <FormField
+            control={form.control}
+            name="owner_id"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Owner ID (UUID, required)</FormLabel>
+                <FormControl>
+                  <Input
+                    type="text"
+                    placeholder="019e8a72-…"
+                    className="rb-mono"
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
           />
-        </ModalField>
-        <ModalField label="Owner collection">
-          <input
-            type="text"
-            value={ownerCollection}
-            onChange={(e) => setOwnerCollection(e.target.value)}
-            placeholder="users"
-            className="w-full rounded border border-neutral-300 px-2 py-1 text-sm rb-mono"
+          <FormField
+            control={form.control}
+            name="owner_collection"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Owner collection</FormLabel>
+                <FormControl>
+                  <Input
+                    type="text"
+                    placeholder="users"
+                    className="rb-mono"
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
           />
-        </ModalField>
-        <ModalField label="Scopes (comma-separated, optional)">
-          <input
-            type="text"
-            value={scopesCSV}
-            onChange={(e) => setScopesCSV(e.target.value)}
-            placeholder="post.create, post.read"
-            className="w-full rounded border border-neutral-300 px-2 py-1 text-sm rb-mono"
+          <FormField
+            control={form.control}
+            name="scopes"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Scopes (comma-separated, optional)</FormLabel>
+                <FormControl>
+                  <Input
+                    type="text"
+                    placeholder="post.create, post.read"
+                    className="rb-mono"
+                    value={field.value.join(", ")}
+                    onInput={(e) => {
+                      const raw = e.currentTarget.value;
+                      const parsed = raw
+                        .split(",")
+                        .map((s) => s.trim())
+                        .filter((s) => s.length > 0);
+                      field.onChange(parsed);
+                    }}
+                    onBlur={field.onBlur}
+                    name={field.name}
+                    ref={field.ref}
+                  />
+                </FormControl>
+                <FormDescription className="text-[11px]">
+                  Advisory in v1 — token authenticates as the owner with full owner permissions.
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
           />
-          <div className="text-[11px] text-neutral-500 mt-1">
-            Advisory in v1 — token authenticates as the owner with full owner permissions.
-          </div>
-        </ModalField>
-        <ModalField label="TTL">
-          <div className="flex flex-wrap gap-1">
-            {(["1h", "24h", "30d", "90d", "never"] as const).map((p) => (
-              <button
-                type="button"
-                key={p}
-                onClick={() => setTTL(p)}
-                className={
-                  "rounded px-2 py-1 text-xs border " +
-                  (ttl === p
-                    ? "bg-neutral-900 text-white border-neutral-900"
-                    : "bg-white text-neutral-700 border-neutral-300 hover:bg-neutral-100")
-                }
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-        </ModalField>
+          <FormField
+            control={form.control}
+            name="ttl"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>TTL</FormLabel>
+                <FormControl>
+                  <div className="flex flex-wrap gap-1">
+                    {TTL_PRESETS.map((p) => (
+                      <Button
+                        key={p}
+                        type="button"
+                        variant={field.value === p ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => field.onChange(p)}
+                      >
+                        {p}
+                      </Button>
+                    ))}
+                  </div>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
 
-        {error ? (
-          <div className="rounded border border-red-300 bg-red-50 p-2 text-xs text-red-700">
-            {error}
-          </div>
-        ) : null}
+          {error ? (
+            <Card className="border-destructive/30 bg-destructive/10">
+              <CardContent className="p-2 text-xs text-destructive">
+                {error}
+              </CardContent>
+            </Card>
+          ) : null}
 
-        <div className="flex justify-end gap-2 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded border border-neutral-300 px-3 py-1 text-sm text-neutral-700 hover:bg-neutral-100"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={pending || !name.trim() || !ownerID.trim()}
-            className="rounded bg-neutral-900 px-3 py-1 text-sm text-white hover:bg-neutral-800 disabled:opacity-50"
-          >
-            {pending ? "Creating…" : "Create"}
-          </button>
-        </div>
-      </form>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              disabled={pending || form.formState.isSubmitting}
+            >
+              {pending ? "Creating…" : "Create"}
+            </Button>
+          </div>
+        </form>
+      </Form>
     </ModalShell>
   );
 }
@@ -524,61 +618,45 @@ function RotateModal({
   return (
     <ModalShell onClose={onClose} title={`Rotate "${record.name}"`}>
       <form onSubmit={submit} className="space-y-3">
-        <div className="text-sm text-neutral-600">
+        <div className="text-sm text-muted-foreground">
           The predecessor will stay active until you revoke it explicitly.
           Distribute the successor first, then revoke this row.
         </div>
         <ModalField label="TTL for the new token">
           <div className="flex flex-wrap gap-1">
-            <button
-              type="button"
+            <Button
+              variant={ttl === "inherit" ? "default" : "outline"}
+              size="sm"
               onClick={() => setTTL("inherit")}
-              className={
-                "rounded px-2 py-1 text-xs border " +
-                (ttl === "inherit"
-                  ? "bg-neutral-900 text-white border-neutral-900"
-                  : "bg-white text-neutral-700 border-neutral-300 hover:bg-neutral-100")
-              }
             >
               inherit
-            </button>
+            </Button>
             {(["1h", "24h", "30d", "90d", "never"] as const).map((p) => (
-              <button
-                type="button"
+              <Button
                 key={p}
+                variant={ttl === p ? "default" : "outline"}
+                size="sm"
                 onClick={() => setTTL(p)}
-                className={
-                  "rounded px-2 py-1 text-xs border " +
-                  (ttl === p
-                    ? "bg-neutral-900 text-white border-neutral-900"
-                    : "bg-white text-neutral-700 border-neutral-300 hover:bg-neutral-100")
-                }
               >
                 {p}
-              </button>
+              </Button>
             ))}
           </div>
         </ModalField>
         {error ? (
-          <div className="rounded border border-red-300 bg-red-50 p-2 text-xs text-red-700">
-            {error}
-          </div>
+          <Card className="border-destructive/30 bg-destructive/10">
+            <CardContent className="p-2 text-xs text-destructive">
+              {error}
+            </CardContent>
+          </Card>
         ) : null}
         <div className="flex justify-end gap-2 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded border border-neutral-300 px-3 py-1 text-sm text-neutral-700 hover:bg-neutral-100"
-          >
+          <Button variant="outline" onClick={onClose}>
             Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={pending}
-            className="rounded bg-neutral-900 px-3 py-1 text-sm text-white hover:bg-neutral-800 disabled:opacity-50"
-          >
+          </Button>
+          <Button type="submit" disabled={pending}>
             {pending ? "Rotating…" : "Rotate"}
-          </button>
+          </Button>
         </div>
       </form>
     </ModalShell>
@@ -599,23 +677,26 @@ function ModalShell({
       className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4"
       onClick={onClose}
     >
-      <div
-        className="bg-white rounded-lg p-6 max-w-md w-full shadow-xl"
+      <Card
+        className="max-w-md w-full shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">{title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-neutral-400 hover:text-neutral-700 text-xl leading-none"
-            aria-label="Close"
-          >
-            ×
-          </button>
-        </div>
-        {children}
-      </div>
+        <CardContent className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">{title}</h2>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onClose}
+              aria-label="Close"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              ×
+            </Button>
+          </div>
+          {children}
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -629,7 +710,7 @@ function ModalField({
 }) {
   return (
     <label className="block">
-      <div className="text-xs font-medium text-neutral-700 mb-1">{label}</div>
+      <div className="text-xs font-medium text-foreground mb-1">{label}</div>
       {children}
     </label>
   );
@@ -644,10 +725,31 @@ function tokenStatus(t: APIToken): "active" | "revoked" | "expired" {
   return "active";
 }
 
-function statusColor(s: "active" | "revoked" | "expired"): string {
-  switch (s) {
-    case "active":  return "bg-emerald-50 text-emerald-700 border border-emerald-200";
-    case "revoked": return "bg-neutral-100 text-neutral-600 border border-neutral-300";
-    case "expired": return "bg-amber-50 text-amber-700 border border-amber-200";
+function StatusBadge({ status }: { status: "active" | "revoked" | "expired" }) {
+  switch (status) {
+    case "active":
+      return (
+        <Badge
+          variant="outline"
+          className="border-emerald-200 bg-emerald-50 text-emerald-700"
+        >
+          active
+        </Badge>
+      );
+    case "revoked":
+      return (
+        <Badge variant="outline" className="border-input bg-muted text-muted-foreground">
+          revoked
+        </Badge>
+      );
+    case "expired":
+      return (
+        <Badge
+          variant="outline"
+          className="border-amber-200 bg-amber-50 text-amber-700"
+        >
+          expired
+        </Badge>
+      );
   }
 }

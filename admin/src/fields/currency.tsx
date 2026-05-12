@@ -107,14 +107,14 @@ export function CurrencyInput({
       <input
         type="text"
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) => setQuery(e.currentTarget.value)}
         placeholder="Search code or name…"
         className="w-full rounded border border-neutral-300 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-neutral-900"
       />
       <select
         value={selected}
         onChange={(e) => {
-          const v = e.target.value;
+          const v = e.currentTarget.value;
           setSelected(v);
           onChange(v || null);
         }}

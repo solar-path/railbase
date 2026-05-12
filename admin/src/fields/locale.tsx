@@ -45,7 +45,7 @@ export function LocaleInput({
         type="text"
         value={draft}
         onChange={(e) => {
-          setDraft(e.target.value);
+          setDraft(e.currentTarget.value);
           setErr(null);
         }}
         onBlur={() => {
@@ -64,7 +64,7 @@ export function LocaleInput({
           onChange(normed);
         }}
         placeholder="en-US"
-        spellCheck={false}
+        spellcheck={false}
         autoCorrect="off"
         className={
           "mt-1 w-full rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +

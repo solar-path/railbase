@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # v1 SHIP gate companion — docs/17 #1 ≤30 MB binary check.
 #
-# Walks every binary under bin/release/ (produced by `make cross-compile`
+# Walks every binary under bin/dist/ (produced by `make cross-compile`
 # or `goreleaser release --snapshot`) and fails if any exceeds 30 MB.
 # Run after a cross-compile sweep to enforce the size budget.
 #
 # Usage:
-#   scripts/check-binary-size.sh            # uses bin/release/
-#   scripts/check-binary-size.sh dist/      # for goreleaser output
+#   scripts/check-binary-size.sh            # uses bin/dist/
+#   scripts/check-binary-size.sh dist/      # for top-level goreleaser output
 #
 # Exit codes: 0 pass · 1 over budget · 2 no binaries found.
 
 set -euo pipefail
 
-DIR="${1:-bin/release}"
+DIR="${1:-bin/dist}"
 LIMIT_MB="${RAILBASE_BIN_LIMIT_MB:-30}"
 
 if [[ ! -d "$DIR" ]]; then

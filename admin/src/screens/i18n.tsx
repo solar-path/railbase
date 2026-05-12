@@ -1,8 +1,37 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { adminAPI } from "../api/admin";
 import { APIError, isAPIError } from "../api/client";
 import type { I18nCoverage, I18nLocalesResponse } from "../api/types";
+import { Button } from "@/lib/ui/button.ui";
+import { Input } from "@/lib/ui/input.ui";
+import { Card } from "@/lib/ui/card.ui";
+import { Badge } from "@/lib/ui/badge.ui";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormMessage,
+} from "@/lib/ui/form.ui";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/lib/ui/select.ui";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/lib/ui/table.ui";
 
 // Translations editor admin screen (v1.7.20 §3.11). Closes one of the
 // remaining §3.11 admin-UI surfaces — operators can audit per-locale
@@ -11,17 +40,20 @@ import type { I18nCoverage, I18nLocalesResponse } from "../api/types";
 //
 // Layout:
 //
-//   ┌──── 240px ────┬───────────────────────────────────┐
-//   │ Locale picker │ Stats card: X of Y · Z missing    │
-//   │  en  (42/42)  │ ─────────────────────────────────── │
-//   │  ru  (40/42)  │ [Save] [Delete] [+ New locale]    │
-//   │  fr  ( 8/42)  │ ─────────────────────────────────── │
-//   │               │ ┌─ Key ──────────┬─ Translation ─┐│
-//   │               │ │ auth.signin    │ [Iniciar…]    ││
-//   │               │ │ errors.required│ [empty…]      ││
-//   │               │ │   (hint: «…»)  │               ││
-//   │               │ └────────────────┴───────────────┘│
-//   └───────────────┴───────────────────────────────────┘
+//   ┌─────────────────────────────────────────────────────┐
+//   │ Locale: [ en  (42/42) ▾ ]   [Save] [Delete] [+ New] │
+//   │ ───────────────────────────────────────────────────── │
+//   │ ┌─ Key ──────────┬─ Translation ─┐                  │
+//   │ │ auth.signin    │ [Iniciar…]    │                  │
+//   │ │ errors.required│ [empty…]      │                  │
+//   │ │   (hint: «…»)  │               │                  │
+//   │ └────────────────┴───────────────┘                  │
+//   └─────────────────────────────────────────────────────┘
+//
+// v1.7.40 — switched the sidebar locale list to a kit <Select>
+// popover. The coverage badge moves inside the SelectItem so the
+// dropdown shows the same at-a-glance translated/total numbers the
+// sidebar did, just on a more compact surface.
 //
 // The locale picker is mass-edit by design: the operator changes many
 // rows at once, then clicks Save. Auto-save is deferred — surprise
@@ -37,11 +69,6 @@ const LOCALE_REGEX = /^[a-z]{2,3}(-[A-Z]{2})?$/;
 export function I18nScreen() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<string | null>(null);
-  // Local edit buffer keyed by translation key. Separate from the
-  // server snapshot so the operator can mass-edit without each
-  // keystroke triggering a query refetch.
-  const [buffer, setBuffer] = useState<Record<string, string>>({});
-  const [savedBuffer, setSavedBuffer] = useState<Record<string, string>>({});
   const [toast, setToast] = useState<{
     kind: "success" | "error";
     msg: string;
@@ -60,6 +87,55 @@ export function I18nScreen() {
     staleTime: Infinity,
   });
 
+  const coverage: I18nCoverage | undefined = selected
+    ? localesQ.data?.coverage[selected]
+    : undefined;
+
+  // Reference key universe + current override keys + coverage's
+  // missing_keys. Sorted for stable rendering. Computed before the
+  // form because the dynamic zod schema's shape depends on it.
+  const rows = useMemo(() => {
+    const keys = new Set<string>();
+    if (fileQ.data?.embedded) {
+      for (const k of Object.keys(fileQ.data.embedded)) keys.add(k);
+    }
+    if (fileQ.data?.override) {
+      for (const k of Object.keys(fileQ.data.override)) keys.add(k);
+    }
+    if (coverage?.missing_keys) {
+      for (const k of coverage.missing_keys) keys.add(k);
+    }
+    return Array.from(keys).sort();
+  }, [fileQ.data, coverage]);
+
+  // Dynamic zod schema built from the current key set. Every key is a
+  // free-form string; the backend does the heavy lifting (placeholder
+  // validation against the reference). Schema identity changes only
+  // when the key set does, so the resolver isn't re-built per keystroke.
+  const schema = useMemo(() => {
+    const shape: Record<string, z.ZodTypeAny> = {};
+    for (const key of rows) shape[key] = z.string();
+    return z.object(shape);
+  }, [rows]);
+
+  // Default values for the form: effective override bundle when one
+  // exists, else the embedded reference (so a brand-new locale shows
+  // the reference values pre-filled for inline translation).
+  const defaultValues = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    const source = fileQ.data?.override ?? fileQ.data?.embedded ?? {};
+    for (const key of rows) {
+      out[key] = source[key] ?? "";
+    }
+    return out;
+  }, [rows, fileQ.data]);
+
+  const form = useForm<Record<string, string>>({
+    resolver: zodResolver(schema),
+    defaultValues,
+    mode: "onSubmit",
+  });
+
   // Auto-select the default locale (typically "en") once the listing
   // resolves. We only do this if the user hasn't picked anything yet —
   // a manual selection should survive a query refetch.
@@ -69,17 +145,16 @@ export function I18nScreen() {
     setSelected(localesQ.data.default);
   }, [localesQ.data, selected]);
 
-  // Sync the fetched file's effective bundle into the edit buffer on
-  // file switch. The effective bundle is the override if present, else
-  // the embedded reference — operators editing a brand-new locale see
-  // the reference values pre-filled and translate in place.
+  // Re-seed the form when the loaded file changes (locale switch /
+  // post-save invalidation). reset() resets dirty + errors too, which
+  // matches the v1.7.20 buffer/savedBuffer pair this replaces.
   useEffect(() => {
     if (!fileQ.data) return;
     if (fileQ.data.locale !== selected) return;
-    const effective: Record<string, string> = fileQ.data.override ?? {};
-    setBuffer({ ...effective });
-    setSavedBuffer({ ...effective });
-  }, [fileQ.data, selected]);
+    form.reset(defaultValues);
+    // form is stable; reset only when the loaded data changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileQ.data, selected, defaultValues]);
 
   const saveM = useMutation({
     mutationFn: ({
@@ -90,12 +165,42 @@ export function I18nScreen() {
       entries: Record<string, string>;
     }) => adminAPI.i18nFilePut(locale, entries),
     onSuccess: (_data, vars) => {
-      setSavedBuffer({ ...vars.entries });
+      // The reset in the effect above runs after the query refetch
+      // settles. Pre-emptively snapshot what we just saved so the
+      // dirty flag clears immediately rather than after the round-trip.
+      form.reset(vars.entries);
       setToast({ kind: "success", msg: "Saved" });
       void qc.invalidateQueries({ queryKey: ["i18n-locales"] });
       void qc.invalidateQueries({ queryKey: ["i18n-file", vars.locale] });
     },
     onError: (err) => {
+      // 422 with field-level errors → setError per key. Otherwise toast.
+      if (
+        isAPIError(err) &&
+        err.status === 422 &&
+        err.body.details &&
+        typeof err.body.details === "object"
+      ) {
+        const details = err.body.details as { fields?: unknown };
+        if (details.fields && typeof details.fields === "object") {
+          let mapped = 0;
+          for (const [k, v] of Object.entries(
+            details.fields as Record<string, unknown>,
+          )) {
+            if (rows.includes(k)) {
+              form.setError(k, {
+                type: "server",
+                message: typeof v === "string" ? v : String(v),
+              });
+              mapped++;
+            }
+          }
+          if (mapped > 0) {
+            setToast({ kind: "error", msg: "Validation errors — see fields." });
+            return;
+          }
+        }
+      }
       const msg = err instanceof Error ? err.message : String(err);
       setToast({ kind: "error", msg: `Error: ${msg}` });
     },
@@ -122,18 +227,22 @@ export function I18nScreen() {
     return () => window.clearTimeout(id);
   }, [toast]);
 
-  const handleSave = useCallback(() => {
-    if (selected === null) return;
-    // Strip empty values: a row left blank is "not translated" and
-    // should not be persisted as `"key": ""`. The backend coverage
-    // computation already treats empty strings as missing, but
-    // pruning here keeps the on-disk file tidy.
-    const entries: Record<string, string> = {};
-    for (const [k, v] of Object.entries(buffer)) {
-      if (v !== "") entries[k] = v;
-    }
-    saveM.mutate({ locale: selected, entries });
-  }, [selected, buffer, saveM]);
+  const handleSave = useCallback(
+    () =>
+      form.handleSubmit((values) => {
+        if (selected === null) return;
+        // Strip empty values: a row left blank is "not translated" and
+        // should not be persisted as `"key": ""`. The backend coverage
+        // computation already treats empty strings as missing, but
+        // pruning here keeps the on-disk file tidy.
+        const entries: Record<string, string> = {};
+        for (const [k, v] of Object.entries(values)) {
+          if (v !== "") entries[k] = v;
+        }
+        saveM.mutate({ locale: selected, entries });
+      })(),
+    [selected, form, saveM],
+  );
 
   const handleDelete = useCallback(() => {
     if (selected === null) return;
@@ -168,73 +277,13 @@ export function I18nScreen() {
     ) {
       return;
     }
-    // Seed the new locale with the embedded reference values so the
-    // operator translates inline rather than copy-pasting keys.
+    // The fileQ refetch + the rows/defaultValues memo will seed the
+    // form from the embedded reference once the new locale loads.
     setSelected(trimmed);
-    // The fileQ will refetch + the effect above repopulates the buffer.
-    // For a brand-new locale (no embedded, no override) we still want
-    // a list of keys to translate, so prefill from the reference here.
-    if (fileQ.data && fileQ.data.locale === trimmed && fileQ.data.embedded) {
-      setBuffer({ ...fileQ.data.embedded });
-      setSavedBuffer({});
-    }
-  }, [localesQ.data, fileQ.data]);
-
-  // For a brand-new locale that doesn't exist as an override yet, the
-  // edit buffer should default to the embedded reference values so the
-  // operator translates in place. We watch fileQ and seed the buffer
-  // when there's no override but the user picked this locale fresh.
-  useEffect(() => {
-    if (!fileQ.data) return;
-    if (fileQ.data.locale !== selected) return;
-    if (fileQ.data.override !== null) return;
-    // No override on disk → seed from embedded if present, else from
-    // the reference (en) embedded. We don't have the reference in
-    // hand without a second fetch, but the listing query carries the
-    // missing_keys list — for a brand-new locale every reference key
-    // is missing, so we use the embedded data (may be empty).
-    setBuffer({ ...fileQ.data.embedded });
-    setSavedBuffer({});
-  }, [fileQ.data, selected]);
-
-  const dirty = useMemo(() => {
-    if (Object.keys(buffer).length !== Object.keys(savedBuffer).length) {
-      return true;
-    }
-    for (const [k, v] of Object.entries(buffer)) {
-      if (savedBuffer[k] !== v) return true;
-    }
-    return false;
-  }, [buffer, savedBuffer]);
-
-  const coverage: I18nCoverage | undefined = selected
-    ? localesQ.data?.coverage[selected]
-    : undefined;
-
-  // The reference key universe = embedded en bundle. We use the
-  // missing_keys list from the listing plus the embedded keys to build
-  // the row set. When the listing isn't loaded yet, fall back to the
-  // file's embedded map directly.
-  const rows = useMemo(() => {
-    // Build the key set: union of reference keys (from coverage's
-    // missing + translated counts via the file's embedded) and the
-    // current override keys (so an over-translation key the operator
-    // added survives in the editor).
-    const keys = new Set<string>();
-    if (fileQ.data?.embedded) {
-      for (const k of Object.keys(fileQ.data.embedded)) keys.add(k);
-    }
-    for (const k of Object.keys(buffer)) keys.add(k);
-    // missing_keys carries reference keys not covered by *this*
-    // locale's effective bundle — include them so a brand-new locale
-    // with no embedded shows the full reference set as empty rows.
-    if (coverage?.missing_keys) {
-      for (const k of coverage.missing_keys) keys.add(k);
-    }
-    return Array.from(keys).sort();
-  }, [fileQ.data, buffer, coverage]);
+  }, [localesQ.data]);
 
   const referenceMap = fileQ.data?.embedded ?? {};
+  const dirty = form.formState.isDirty;
 
   // Unavailable detection runs LAST: every hook above must dispatch
   // on every render so React's hook-order invariant holds even when
@@ -250,61 +299,60 @@ export function I18nScreen() {
       <header className="flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Translations</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-sm text-muted-foreground">
             Edit per-locale override bundles in{" "}
             <span className="rb-mono">pb_data/i18n/</span>. Embedded
             defaults ship in the binary; overrides win when present.
           </p>
         </div>
-        <button
+        <Button
           type="button"
+          size="sm"
           onClick={handleNewLocale}
-          className="rounded bg-neutral-900 px-3 py-1 text-sm text-white hover:bg-neutral-800"
         >
           + New locale
-        </button>
+        </Button>
       </header>
 
-      <div className="flex gap-4">
-        <LocalePicker
-          data={localesQ.data}
-          loading={localesQ.isLoading}
-          selected={selected}
-          onSelect={(l) => setSelected(l)}
-        />
+      <div className="space-y-3">
+        {selected === null ? (
+          <EmptyState />
+        ) : (
+          <>
+            <StatsHeader
+              locale={selected}
+              data={localesQ.data}
+              coverage={coverage}
+              dirty={dirty}
+              pending={saveM.isPending}
+              hasOverride={fileQ.data?.override !== null}
+              onSelect={(l) => setSelected(l)}
+              onSave={handleSave}
+              onDelete={handleDelete}
+            />
 
-        <div className="flex-1 min-w-0 space-y-3">
-          {selected === null ? (
-            <EmptyState />
-          ) : (
-            <>
-              <StatsHeader
-                locale={selected}
-                coverage={coverage}
-                dirty={dirty}
-                pending={saveM.isPending}
-                hasOverride={fileQ.data?.override !== null}
-                onSave={handleSave}
-                onDelete={handleDelete}
-              />
-
-              {fileQ.isLoading ? (
-                <div className="rounded border border-neutral-200 bg-white p-6 text-sm text-neutral-500">
-                  Loading…
-                </div>
-              ) : (
-                <TranslationsTable
-                  rows={rows}
-                  buffer={buffer}
-                  reference={referenceMap}
-                  onChange={(k, v) =>
-                    setBuffer((prev) => ({ ...prev, [k]: v }))
-                  }
-                />
-              )}
-            </>
-          )}
-        </div>
+            {fileQ.isLoading ? (
+              <Card className="p-6 text-sm text-muted-foreground">
+                Loading…
+              </Card>
+            ) : (
+              <Form {...form}>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSave();
+                  }}
+                >
+                  <TranslationsTable
+                    rows={rows}
+                    control={form.control}
+                    reference={referenceMap}
+                  />
+                </form>
+              </Form>
+            )}
+          </>
+        )}
       </div>
 
       {toast ? (
@@ -313,7 +361,7 @@ export function I18nScreen() {
             "fixed bottom-4 right-4 z-50 rounded border px-3 py-2 text-sm shadow-lg " +
             (toast.kind === "success"
               ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-              : "border-red-200 bg-red-50 text-red-800")
+              : "border-destructive/30 bg-destructive/10 text-destructive")
           }
         >
           {toast.msg}
@@ -323,152 +371,90 @@ export function I18nScreen() {
   );
 }
 
-function LocalePicker({
+// LocaleSelectItem renders one row inside the kit <Select> dropdown.
+// Mirrors the sidebar-list affordance from the pre-v1.7.40 layout:
+// monospace locale code, bin/ovr tags, coverage numbers.
+function LocaleSelectItem({
+  locale,
   data,
-  loading,
-  selected,
-  onSelect,
 }: {
+  locale: string;
   data: I18nLocalesResponse | undefined;
-  loading: boolean;
-  selected: string | null;
-  onSelect: (locale: string) => void;
 }) {
-  const supported = data?.supported ?? [];
+  const cov = data?.coverage[locale];
+  const isOverride = data?.overrides.includes(locale) ?? false;
+  const isEmbedded = data?.embedded.includes(locale) ?? false;
   return (
-    <div className="w-[240px] shrink-0 rounded border border-neutral-200 bg-white">
-      <div className="px-3 py-2 border-b border-neutral-200">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
-          Locales
-        </span>
-      </div>
-      <div className="py-1 max-h-[480px] overflow-y-auto">
-        {loading ? (
-          <div className="px-3 py-2 text-xs text-neutral-500">Loading…</div>
-        ) : supported.length === 0 ? (
-          <div className="px-3 py-2 text-xs text-neutral-500">
-            No locales yet.
-          </div>
-        ) : (
-          supported.map((l) => {
-            const active = l === selected;
-            const cov = data?.coverage[l];
-            const isOverride = data?.overrides.includes(l) ?? false;
-            const isEmbedded = data?.embedded.includes(l) ?? false;
-            return (
-              <button
-                key={l}
-                type="button"
-                onClick={() => onSelect(l)}
-                className={
-                  "w-full flex items-center justify-between px-3 py-1.5 text-sm " +
-                  (active
-                    ? "bg-neutral-900 text-white"
-                    : "text-neutral-700 hover:bg-neutral-100")
-                }
-              >
-                <span className="flex items-center gap-2">
-                  <span className="rb-mono">{l}</span>
-                  {isEmbedded ? (
-                    <span
-                      title="Ships in the binary"
-                      className={
-                        "text-[9px] uppercase tracking-wide rounded px-1 " +
-                        (active
-                          ? "bg-neutral-700 text-neutral-200"
-                          : "bg-neutral-200 text-neutral-600")
-                      }
-                    >
-                      bin
-                    </span>
-                  ) : null}
-                  {isOverride ? (
-                    <span
-                      title="Has on-disk override"
-                      className={
-                        "text-[9px] uppercase tracking-wide rounded px-1 " +
-                        (active
-                          ? "bg-amber-600 text-amber-50"
-                          : "bg-amber-100 text-amber-700")
-                      }
-                    >
-                      ovr
-                    </span>
-                  ) : null}
-                </span>
-                {cov ? (
-                  <CoverageBadge
-                    coverage={cov}
-                    inverted={active}
-                  />
-                ) : null}
-              </button>
-            );
-          })
-        )}
-      </div>
-    </div>
-  );
-}
-
-function CoverageBadge({
-  coverage,
-  inverted,
-}: {
-  coverage: I18nCoverage;
-  inverted: boolean;
-}) {
-  const pct =
-    coverage.total_keys === 0
-      ? 100
-      : Math.round((coverage.translated / coverage.total_keys) * 100);
-  // Threshold colours: full (100%), partial (>=50%), low (<50%).
-  let cls = "";
-  if (inverted) {
-    cls = "text-neutral-300";
-  } else if (pct === 100) {
-    cls = "text-emerald-700";
-  } else if (pct >= 50) {
-    cls = "text-amber-700";
-  } else {
-    cls = "text-red-600";
-  }
-  return (
-    <span
-      title={`${coverage.translated} of ${coverage.total_keys} keys translated`}
-      className={"text-[11px] rb-mono " + cls}
-    >
-      {coverage.translated}/{coverage.total_keys}
-    </span>
+    <SelectItem value={locale}>
+      <span class="flex items-center gap-2">
+        <span className="rb-mono">{locale}</span>
+        {isEmbedded ? (
+          <Badge variant="secondary" className="text-[9px] px-1 py-0">
+            bin
+          </Badge>
+        ) : null}
+        {isOverride ? (
+          <Badge
+            variant="outline"
+            className="text-[9px] px-1 py-0 border-amber-200 bg-amber-50 text-amber-700"
+          >
+            ovr
+          </Badge>
+        ) : null}
+        {cov ? (
+          <span className="text-[11px] rb-mono text-muted-foreground ml-1">
+            {cov.translated}/{cov.total_keys}
+          </span>
+        ) : null}
+      </span>
+    </SelectItem>
   );
 }
 
 function StatsHeader({
   locale,
+  data,
   coverage,
   dirty,
   pending,
   hasOverride,
+  onSelect,
   onSave,
   onDelete,
 }: {
   locale: string;
+  data: I18nLocalesResponse | undefined;
   coverage: I18nCoverage | undefined;
   dirty: boolean;
   pending: boolean;
   hasOverride: boolean;
+  onSelect: (locale: string) => void;
   onSave: () => void;
   onDelete: () => void;
 }) {
+  const supported = data?.supported ?? [];
   return (
-    <div className="rounded border border-neutral-200 bg-white p-4">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <div className="text-sm text-neutral-500">Editing locale</div>
-          <div className="text-xl rb-mono">{locale}</div>
+    <Card className="p-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="space-y-1 min-w-0">
+          <div className="text-sm text-muted-foreground">Editing locale</div>
+          <div className="flex items-center gap-3">
+            <Select value={locale} onValueChange={onSelect}>
+              <SelectTrigger className="w-[260px]">
+                <SelectValue>
+                  <span className="rb-mono">{locale}</span>
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {supported.map((l) => (
+                  <LocaleSelectItem key={l} locale={l} data={data} />
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           {coverage ? (
-            <div className="mt-1 text-xs text-neutral-600">
-              <span className="font-medium text-neutral-800">
+            <div className="mt-1 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">
                 {coverage.translated} of {coverage.total_keys}
               </span>{" "}
               keys translated ·{" "}
@@ -486,25 +472,22 @@ function StatsHeader({
         </div>
         <div className="flex items-center gap-2">
           {dirty ? (
-            <span className="rounded border border-neutral-300 bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-700">
+            <Badge variant="secondary" className="text-[11px]">
               unsaved
-            </span>
+            </Badge>
           ) : null}
-          <button
+          <Button
             type="button"
+            size="sm"
             onClick={onSave}
             disabled={!dirty || pending}
-            className={
-              "rounded px-3 py-1 text-sm text-white " +
-              (!dirty || pending
-                ? "bg-neutral-400"
-                : "bg-neutral-900 hover:bg-neutral-800")
-            }
           >
             {pending ? "Saving…" : "Save"}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             onClick={onDelete}
             disabled={!hasOverride}
             title={
@@ -513,92 +496,100 @@ function StatsHeader({
                 : "No override file to delete"
             }
             className={
-              "rounded border px-3 py-1 text-sm " +
-              (hasOverride
-                ? "border-red-300 bg-white text-red-700 hover:bg-red-50"
-                : "border-neutral-200 bg-white text-neutral-400")
+              hasOverride
+                ? "border-destructive/30 text-destructive hover:bg-destructive/10"
+                : ""
             }
           >
             Delete override
-          </button>
+          </Button>
         </div>
       </div>
-    </div>
+    </Card>
   );
 }
 
 function TranslationsTable({
   rows,
-  buffer,
+  control,
   reference,
-  onChange,
 }: {
   rows: string[];
-  buffer: Record<string, string>;
+  control: ReturnType<typeof useForm<Record<string, string>>>["control"];
   reference: Record<string, string>;
-  onChange: (key: string, value: string) => void;
 }) {
   if (rows.length === 0) {
     return (
-      <div className="rounded border border-neutral-200 bg-white p-6 text-sm text-neutral-500">
+      <Card className="p-6 text-sm text-muted-foreground">
         No translation keys yet. The reference (en) bundle is empty.
-      </div>
+      </Card>
     );
   }
   return (
-    <div className="rounded border border-neutral-200 bg-white overflow-hidden">
-      <table className="w-full text-sm">
-        <thead className="bg-neutral-50 border-b border-neutral-200">
-          <tr>
-            <th className="text-left px-3 py-2 font-medium text-neutral-600 w-[40%]">
-              Key
-            </th>
-            <th className="text-left px-3 py-2 font-medium text-neutral-600">
-              Translation
-            </th>
-          </tr>
-        </thead>
-        <tbody>
+    <Card className="overflow-hidden p-0">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[40%]">Key</TableHead>
+            <TableHead>Translation</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {rows.map((k) => {
-            const v = buffer[k] ?? "";
             const ref = reference[k];
-            const showHint = (v === "" || v === undefined) && ref;
             return (
-              <tr
-                key={k}
-                className="border-b border-neutral-100 last:border-b-0"
-              >
-                <td className="px-3 py-2 align-top rb-mono text-[12px] text-neutral-700 break-all">
+              <TableRow key={k}>
+                <TableCell className="align-top rb-mono text-[12px] text-foreground break-all">
                   {k}
-                </td>
-                <td className="px-3 py-2 align-top">
-                  <input
-                    type="text"
-                    value={v}
-                    onChange={(e) => onChange(k, e.target.value)}
-                    placeholder={ref ?? ""}
-                    className="w-full rounded border border-neutral-300 px-2 py-1 text-sm focus:border-neutral-500 focus:outline-none"
+                </TableCell>
+                <TableCell className="align-top">
+                  <FormField
+                    control={control}
+                    // Translation keys may contain dots ("auth.signin"),
+                    // which RHF treats as nested paths. Cast through
+                    // `as string` per the kit's dynamic-keys recipe — the
+                    // schema's flat z.object() shape matches the flat
+                    // accessor RHF uses when the name string is treated
+                    // as a single literal key.
+                    name={k as string}
+                    render={({ field }) => {
+                      const v = field.value ?? "";
+                      const showHint = (v === "" || v === undefined) && ref;
+                      return (
+                        <FormItem>
+                          <FormControl>
+                            <Input
+                              type="text"
+                              placeholder={ref ?? ""}
+                              className="h-8 text-sm"
+                              {...field}
+                            />
+                          </FormControl>
+                          {showHint ? (
+                            <div className="mt-1 text-[11px] text-muted-foreground rb-mono break-all">
+                              reference: {ref}
+                            </div>
+                          ) : null}
+                          <FormMessage />
+                        </FormItem>
+                      );
+                    }}
                   />
-                  {showHint ? (
-                    <div className="mt-1 text-[11px] text-neutral-400 rb-mono break-all">
-                      reference: {ref}
-                    </div>
-                  ) : null}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             );
           })}
-        </tbody>
-      </table>
-    </div>
+        </TableBody>
+      </Table>
+    </Card>
   );
 }
 
 function EmptyState() {
   return (
-    <div className="rounded border border-dashed border-neutral-300 bg-neutral-50 p-6 text-sm text-neutral-500">
-      Pick a locale from the sidebar.
-    </div>
+    <Card className="border-dashed p-6 text-sm text-muted-foreground">
+      Pick a locale from the dropdown.
+    </Card>
   );
 }
 
@@ -607,7 +598,7 @@ function UnavailableState() {
     <div className="space-y-4">
       <header>
         <h1 className="text-2xl font-semibold">Translations</h1>
-        <p className="text-sm text-neutral-500">
+        <p className="text-sm text-muted-foreground">
           Per-locale override bundles for the i18n catalog.
         </p>
       </header>

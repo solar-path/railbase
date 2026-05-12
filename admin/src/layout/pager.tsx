@@ -1,9 +1,15 @@
+import { Button } from "@/lib/ui/button.ui";
+
 // Shared paginator chip used by the audit / logs / jobs viewers.
 //
 // Three call sites end up with the same prev/next + "page N / M"
 // affordance. v1.7.7 extracted it here so the look stays consistent
 // — the previous TODO comments in logs.tsx / audit.tsx flagged the
 // duplication.
+//
+// v1.7.40: migrated to the shared kit (`Button` from @/lib/ui), so
+// the prev/next chips inherit the same hover/disabled states as every
+// other button in the app.
 
 export function Pager({
   page,
@@ -16,25 +22,27 @@ export function Pager({
 }) {
   return (
     <div className="flex items-center gap-2 text-sm">
-      <button
+      <Button
         type="button"
+        variant="outline"
+        size="sm"
         disabled={page <= 1}
         onClick={() => onChange(page - 1)}
-        className="rounded border border-neutral-300 px-2 py-1 disabled:opacity-30"
       >
         ← prev
-      </button>
-      <span className="text-neutral-600">
+      </Button>
+      <span className="text-muted-foreground">
         page {page} / {totalPages}
       </span>
-      <button
+      <Button
         type="button"
+        variant="outline"
+        size="sm"
         disabled={page >= totalPages}
         onClick={() => onChange(page + 1)}
-        className="rounded border border-neutral-300 px-2 py-1 disabled:opacity-30"
       >
         next →
-      </button>
+      </Button>
     </div>
   );
 }

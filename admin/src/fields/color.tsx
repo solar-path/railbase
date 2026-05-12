@@ -71,7 +71,7 @@ export function ColorInput({
           type="color"
           value={pickerValue}
           onChange={(e) => {
-            const next = e.target.value.toLowerCase();
+            const next = e.currentTarget.value.toLowerCase();
             setDraft(next);
             setErr(null);
             onChange(next);
@@ -83,7 +83,7 @@ export function ColorInput({
           type="text"
           value={draft}
           onChange={(e) => {
-            setDraft(e.target.value);
+            setDraft(e.currentTarget.value);
             setErr(null);
           }}
           onBlur={() => {
@@ -92,7 +92,7 @@ export function ColorInput({
             if (!e) onChange(draft === "" ? null : draft.toLowerCase());
           }}
           placeholder="#a1b2c3"
-          spellCheck={false}
+          spellcheck={false}
           autoCapitalize="off"
           autoCorrect="off"
           className={

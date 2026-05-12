@@ -75,7 +75,7 @@ export function LanguageInput({
         value={draft}
         onChange={(e) => {
           // Strip to lowercase letters only, cap at 2 chars.
-          const v = e.target.value.toLowerCase().replace(/[^a-z]/g, "").slice(0, 2);
+          const v = e.currentTarget.value.toLowerCase().replace(/[^a-z]/g, "").slice(0, 2);
           setDraft(v);
           setResolved(null);
         }}
@@ -85,7 +85,7 @@ export function LanguageInput({
         }}
         placeholder="en"
         maxLength={2}
-        spellCheck={false}
+        spellcheck={false}
         autoCapitalize="off"
         autoCorrect="off"
         className={

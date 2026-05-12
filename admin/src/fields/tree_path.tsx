@@ -56,7 +56,7 @@ export function TreePathInput({
         type="text"
         value={draft}
         onChange={(e) => {
-          setDraft(e.target.value);
+          setDraft(e.currentTarget.value);
           setErr(null);
         }}
         onBlur={() => {
@@ -65,7 +65,7 @@ export function TreePathInput({
           if (!e) onChange(draft === "" ? null : draft);
         }}
         placeholder="top.science.physics"
-        spellCheck={false}
+        spellcheck={false}
         autoCapitalize="off"
         autoCorrect="off"
         className={
