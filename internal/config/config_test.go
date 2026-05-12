@@ -26,12 +26,18 @@ func TestValidate_RequiresDSNOrEmbed(t *testing.T) {
 	}
 }
 
-// Load() auto-flips EmbedPostgres=true in dev mode когда DSN
-// отсутствует — это "zero-config UX" гарантия из v1.4.3.
-// v1.7.38 рассматривал авто-выбор local-PG сокета, но это
-// hard-codes db-name + auth-user, что должно остаться за
-// оператором — выбор делает setup wizard (v1.7.39).
-func TestLoad_AutoEnablesEmbedInDev(t *testing.T) {
+// Load() in dev mode with no DSN must auto-flip ONE of two fallbacks:
+//   - EmbedPostgres=true if embed_pg is compiled in (zero-config UX,
+//     v1.4.3)
+//   - SetupMode=true otherwise (release binary first-boot wizard
+//     fallback, post-v1.7.39 patch — without this the binary would
+//     hard-fail with "embedded postgres not compiled in" instead of
+//     pointing the operator at the wizard).
+//
+// The test runs without the embed_pg tag so it exercises the
+// SetupMode branch. The embed_pg tag's branch is exercised by
+// `go test -tags embed_pg ./...` (CI matrix).
+func TestLoad_AutoFallbackInDev(t *testing.T) {
 	t.Setenv("RAILBASE_DSN", "")
 	t.Setenv("RAILBASE_EMBED_POSTGRES", "")
 	t.Setenv("RAILBASE_PROD", "")
@@ -39,8 +45,11 @@ func TestLoad_AutoEnablesEmbedInDev(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !c.EmbedPostgres {
-		t.Errorf("expected EmbedPostgres=true after dev Load(), got false")
+	if !c.EmbedPostgres && !c.SetupMode {
+		t.Errorf("Load() must auto-flip EmbedPostgres or SetupMode in dev with no DSN; got both false")
+	}
+	if c.EmbedPostgres && c.SetupMode {
+		t.Errorf("Load() must not flip BOTH fallbacks at once; got embed=true setup=true")
 	}
 }
 
@@ -193,9 +202,11 @@ func TestLoad_EnvDSNBeatsPersistedFile(t *testing.T) {
 	}
 }
 
-// No .dsn → fall through to the v1.4.3 zero-config embedded-postgres
-// path. Pins the precedence ordering.
-func TestLoad_AbsentPersistedFile_FallsThroughToEmbedded(t *testing.T) {
+// No .dsn → fall through to the zero-config fallback. The exact flag
+// flipped depends on whether embed_pg is compiled in (see
+// TestLoad_AutoFallbackInDev for the choice logic). DSN stays empty
+// either way — we only auto-FILL on env override, never on auto-flip.
+func TestLoad_AbsentPersistedFile_FallsThroughToFallback(t *testing.T) {
 	dir := t.TempDir() // no .dsn seeded
 	t.Setenv("RAILBASE_DSN", "")
 	t.Setenv("RAILBASE_EMBED_POSTGRES", "")
@@ -209,8 +220,8 @@ func TestLoad_AbsentPersistedFile_FallsThroughToEmbedded(t *testing.T) {
 	if c.DSN != "" {
 		t.Errorf("DSN: want empty with no .dsn + no env, got %q", c.DSN)
 	}
-	if !c.EmbedPostgres {
-		t.Errorf("EmbedPostgres: want true (zero-config fallback), got false")
+	if !c.EmbedPostgres && !c.SetupMode {
+		t.Errorf("fallback: want EmbedPostgres or SetupMode, got both false")
 	}
 }
 

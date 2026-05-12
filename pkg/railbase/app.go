@@ -56,6 +56,7 @@ import (
 	"github.com/google/uuid"
 
 	"net/http"
+	neturl "net/url"
 	"time"
 )
 
@@ -130,8 +131,58 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 
+	// Setup-mode fallback (production binaries without embed_pg, no
+	// DSN provided, no persisted `.dsn`): boot a minimal HTTP server
+	// that only exposes the admin SPA + the first-run wizard endpoints
+	// (`/api/_admin/_setup/*`). Every other route returns 503 with a
+	// pointer to the wizard.
+	//
+	// When the operator saves a DSN via /_setup/save-db, runSetupOnly
+	// shuts the minimal server down + returns the new DSN. We then
+	// fall through to the regular boot path WITHOUT exiting the
+	// process — no Ctrl-C, no manual `./railbase serve` re-run, no
+	// port re-bind dance. If runSetupOnly returns ("", nil) the
+	// operator hit Ctrl-C / SIGTERM and we exit normally.
+	//
+	// Why a separate method instead of inline gating: the normal Run
+	// path constructs ~30 subsystems (pool, audit, sessions, jobs,
+	// realtime, hooks, mailer…) all of which assume a database. Adding
+	// nil-guards in every one of those would balloon the surface area
+	// and risk silent half-init bugs. A separate boot path is the
+	// safer split.
+	if a.cfg.SetupMode {
+		newDSN, err := a.runSetupOnly(ctx)
+		if err != nil {
+			return err
+		}
+		if newDSN == "" {
+			// Operator hit Ctrl-C without finishing setup — clean exit.
+			return nil
+		}
+		// Setup wizard finished. Flip cfg, log the transition, and
+		// continue into the normal boot path below — same goroutine,
+		// same process, same port (now free since runSetupOnly did a
+		// graceful shutdown before returning).
+		a.cfg.SetupMode = false
+		a.cfg.DSN = newDSN
+		a.log.Info("setup wizard complete; entering normal boot",
+			"dsn_redacted", redactDSN(newDSN))
+		// Re-run preflight in case the OS held the listener briefly.
+		if err := preflightBindCheck(a.cfg.HTTPAddr); err != nil {
+			return err
+		}
+	}
+
 	dsn := a.cfg.DSN
 	var stopEmbed embedded.StopFunc
+
+	// In-process reload channel for the NORMAL boot path. When the
+	// admin re-runs the setup wizard from the running server and saves
+	// a new DSN, the setup-db handler pushes the DSN through here; the
+	// listener loop below picks it up, tears down THIS process's
+	// server+pool+embedded, and recursively re-enters Run() on the new
+	// DSN. Buffered 1 so the handler's send is non-blocking.
+	normalReloadCh := make(chan string, 1)
 
 	if a.cfg.EmbedPostgres {
 		var err error
@@ -158,7 +209,15 @@ func (a *App) Run(ctx context.Context) error {
 		return fmt.Errorf("db pool: %w", err)
 	}
 	a.pool = p
-	defer p.Close()
+	// poolClosed lets the in-process reload path close the pool early
+	// and disable the deferred close so we don't double-Close (pgxpool
+	// tolerates that today, but pinning the guard is cheap insurance).
+	poolClosed := false
+	defer func() {
+		if !poolClosed {
+			p.Close()
+		}
+	}()
 
 	sys, err := migrate.Discover(migrate.Source{FS: sysmigrations.FS, Prefix: "."})
 	if err != nil {
@@ -282,6 +341,15 @@ func (a *App) Run(ctx context.Context) error {
 		HooksDir:  filepath.Join(a.cfg.DataDir, "hooks"),
 		I18nDir:   filepath.Join(a.cfg.DataDir, "i18n"),
 		StartedAt: time.Now(),
+		// In-process reload channel — when the operator re-runs the
+		// setup wizard from the normal-boot admin UI (changing the DSN
+		// after first install), the save-db handler pushes the new
+		// DSN through here. Run() below picks it up, gracefully tears
+		// down THIS pool + server, and re-enters Run() on the new DSN
+		// — same goroutine, same process, same port. Buffered 1 so
+		// the handler's send doesn't block. The setup-mode path wires
+		// its own dedicated chan in runSetupOnly().
+		SetupReload: normalReloadCh,
 	}
 	// Realtime broker wired into the admin surface AFTER it's created
 	// below. (Deps struct ships before broker; we mutate the pointer
@@ -938,6 +1006,42 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		a.log.Info("shutdown requested", "reason", ctx.Err())
+	case newDSN := <-normalReloadCh:
+		// Operator re-ran the setup wizard from the live admin UI and
+		// saved a new DSN. Graceful-shutdown the current server +
+		// pool + embedded, then recursively re-enter Run() on the new
+		// DSN. The HTTP response from /save-db has already flushed by
+		// the time this case runs (handler writes JSON synchronously
+		// before sending to the chan); 300 ms guard covers the TCP-send
+		// async on slow links.
+		a.log.Info("DSN changed via wizard; reloading in-place",
+			"dsn", redactDSN(newDSN))
+		time.Sleep(300 * time.Millisecond)
+
+		sCtx, sCancel := context.WithTimeout(context.Background(), a.cfg.ShutdownGrace)
+		shutdownErr := a.server.Shutdown(sCtx)
+		sCancel()
+		// Close pool + embedded NOW so the recursive Run can rebind
+		// the port + open a fresh pool without contention. Disable the
+		// deferred closes — otherwise the OUTER frame's deferred
+		// p.Close() runs after the recursive call returns, by which
+		// point p is already invalidated.
+		p.Close()
+		poolClosed = true
+		if stopEmbed != nil {
+			if err := stopEmbed(); err != nil {
+				a.log.Warn("embedded postgres stop failed during reload", "err", err)
+			}
+			stopEmbed = nil
+		}
+		if shutdownErr != nil {
+			return fmt.Errorf("server shutdown during reload: %w", shutdownErr)
+		}
+
+		a.cfg.DSN = newDSN
+		a.cfg.SetupMode = false
+		a.cfg.EmbedPostgres = false
+		return a.Run(ctx)
 	}
 
 	// Detach from the cancelled parent context for shutdown so we
@@ -962,9 +1066,157 @@ func (a *App) readinessProbe(ctx context.Context) error {
 	return a.pool.Ping(ctx)
 }
 
+// runSetupOnly boots a minimal HTTP server for the first-run setup
+// wizard. Returns:
+//
+//   - ("", nil)        operator hit Ctrl-C / ctx cancelled — exit normally
+//   - (dsn, nil)       wizard finished, DSN persisted to `<DataDir>/.dsn`;
+//                      caller is expected to re-enter the regular boot
+//                      path on the new DSN
+//   - ("", err)        listener / shutdown error
+//
+// Mounted endpoints:
+//
+//   - GET  /healthz                       — always ok
+//   - GET  /readyz                        — 503 (no db yet)
+//   - GET  /api/_admin/_bootstrap         — stub: needsBootstrap=true
+//   - GET  /api/_admin/_setup/detect      — wizard probe (env + sockets)
+//   - POST /api/_admin/_setup/probe-db    — DSN dry-run via pgx.Connect
+//   - POST /api/_admin/_setup/save-db     — write `<DataDir>/.dsn` AND
+//                                           signal the reload channel
+//   - GET  /_/...                         — admin SPA static files
+//   - everything else                     — 503 + JSON pointer to the wizard
+//
+// In-process reload via SetupReload channel: when /save-db succeeds it
+// pushes the new DSN; we read it off the channel, gracefully shut down
+// the setup-mode listener (so the port is free), and return the DSN to
+// Run(). Run() then enters its normal boot path on the same process,
+// same goroutine, same port — operator never has to Ctrl-C.
+func (a *App) runSetupOnly(ctx context.Context) (string, error) {
+	a.log.Warn("railbase is in setup mode",
+		"reason", "no DSN configured and embedded postgres not compiled in",
+		"hint", "open the admin UI to configure your database",
+		"url", "http://localhost"+a.cfg.HTTPAddr+"/_/")
+
+	a.server = server.New(server.Config{
+		Addr:  a.cfg.HTTPAddr,
+		Log:   a.log,
+		Build: buildinfo.String(),
+		Probes: server.Probes{
+			Live: func(_ context.Context) error { return nil },
+			// Stay un-ready until the operator finishes the wizard. A
+			// load balancer routing to a setup-mode binary would just
+			// produce confusing 503s on every request.
+			Ready: func(_ context.Context) error {
+				return errors.New("railbase is in setup mode: open /_/ to configure your database")
+			},
+		},
+		// No SecurityHeaders / IPFilter / RateLimiter / AntiBot in
+		// setup mode — the surface is intentionally minimal and the
+		// wizard is operator-only, accessed locally on first boot.
+	})
+
+	// Buffered chan so the save-db handler's send doesn't block on the
+	// main goroutine still being in `select`. Capacity 1 — only one
+	// DSN ever flows through here per process.
+	reloadCh := make(chan string, 1)
+	setupDeps := &adminapi.Deps{
+		Log:         a.log,
+		Production:  a.cfg.ProductionMode,
+		SetupReload: reloadCh,
+	}
+	a.server.Router().Route("/api/_admin", func(r chi.Router) {
+		setupDeps.MountSetupOnly(r)
+	})
+
+	// Admin SPA — same as the normal boot path. The wizard's
+	// `_setup/detect` returns `current_mode: "setup"` so the frontend
+	// can show the appropriate first-step screen.
+	a.server.Router().Mount("/_", adminui.Handler("/_"))
+
+	// Catch-all 503 for every other route, with a structured JSON body
+	// pointing the operator at the wizard.
+	a.server.Router().NotFound(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"code":"setup_required","message":"Railbase is in setup mode. Open ` +
+			`/_/ in your browser to configure the database.","setup_url":"/_/"}` + "\n"))
+	})
+
+	printSetupBanner(a.cfg)
+
+	// Spawn the listener; main goroutine blocks on EITHER listener
+	// error, OR ctx cancellation, OR a DSN landing on reloadCh.
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- a.server.ListenAndServe() }()
+
+	var newDSN string
+	select {
+	case err := <-serveErr:
+		return "", err
+	case <-ctx.Done():
+		a.log.Info("shutdown requested in setup-mode", "reason", ctx.Err())
+	case newDSN = <-reloadCh:
+		a.log.Info("setup wizard saved DSN; reloading server in-place")
+		// Give the in-flight POST /save-db response time to flush over
+		// the wire before we yank the listener — the response body is
+		// already written, but the underlying TCP send is asynchronous.
+		// 300ms is generous; the response is ~200 bytes.
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.ShutdownGrace)
+	defer cancel()
+	if err := a.server.Shutdown(shutdownCtx); err != nil {
+		return "", fmt.Errorf("setup-mode server shutdown: %w", err)
+	}
+	a.log.Info("setup-mode server shut down")
+	return newDSN, nil
+}
+
+// redactDSN strips the password from a postgres:// DSN for logging.
+// Best-effort — falls back to the raw string when the URL parser
+// can't make sense of it. Never panics.
+func redactDSN(dsn string) string {
+	u, err := neturl.Parse(dsn)
+	if err != nil || u.User == nil {
+		return dsn
+	}
+	if _, hasPw := u.User.Password(); hasPw {
+		u.User = neturl.UserPassword(u.User.Username(), "***")
+	}
+	return u.String()
+}
+
+// printSetupBanner writes the operator banner shown when the binary
+// boots into setup-mode (no DSN + no embed_pg). Mirrors the regular
+// `printBanner` shape so the visual layout is consistent.
+func printSetupBanner(cfg config.Config) {
+	fmt.Fprintln(os.Stdout)
+	fmt.Fprintln(os.Stdout, "─────────────────────────────────────────────────────────")
+	fmt.Fprintln(os.Stdout, "  Railbase is in SETUP MODE — no database configured yet")
+	fmt.Fprintln(os.Stdout, "─────────────────────────────────────────────────────────")
+	fmt.Fprintln(os.Stdout, "  Open this URL to finish setup:")
+	fmt.Fprintln(os.Stdout, "    http://localhost"+cfg.HTTPAddr+"/_/")
+	fmt.Fprintln(os.Stdout)
+	fmt.Fprintln(os.Stdout, "  The wizard will:")
+	fmt.Fprintln(os.Stdout, "    1. Detect local PostgreSQL sockets (Homebrew / system)")
+	fmt.Fprintln(os.Stdout, "    2. Let you pick a database name + username")
+	fmt.Fprintln(os.Stdout, "    3. Test the connection")
+	fmt.Fprintln(os.Stdout, "    4. Save the DSN to "+cfg.DataDir+"/.dsn")
+	fmt.Fprintln(os.Stdout)
+	fmt.Fprintln(os.Stdout, "  After save, Ctrl-C this process and run `./railbase serve`")
+	fmt.Fprintln(os.Stdout, "  again — the next boot will use your real database.")
+	fmt.Fprintln(os.Stdout, "─────────────────────────────────────────────────────────")
+	fmt.Fprintln(os.Stdout)
+}
+
 // dbModeLabel produces a short human label для startup banner so
 // operators see at a glance which Postgres backend is in use.
 func dbModeLabel(cfg config.Config) string {
+	if cfg.SetupMode {
+		return "setup-mode (no database configured yet)"
+	}
 	if cfg.EmbedPostgres {
 		return "embedded"
 	}

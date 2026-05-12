@@ -41,6 +41,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/railbase/railbase/internal/config"
+	"github.com/railbase/railbase/internal/db/embedded"
 	rerr "github.com/railbase/railbase/internal/errors"
 )
 
@@ -136,6 +137,56 @@ func (d *Deps) mountSetupDB(r chi.Router) {
 	r.Post("/_setup/save-db", d.setupSaveDBHandler)
 }
 
+// MountSetupOnly registers JUST the wizard endpoints, without any
+// dependency on Deps.Pool / Audit / Sessions / etc. Used by the
+// setup-mode boot path in pkg/railbase/app.go (production binary booted
+// with no DSN + no embed_pg). The three setup handlers (`detect`,
+// `probe-db`, `save-db`) pull data from env vars + filesystem +
+// short-lived `pgx.Connect` only, so a bare `&Deps{Log: log}` is
+// enough to wire them.
+//
+// Public counterpart of mountSetupDB so callers outside this package
+// can compose it onto their own routers without going through the full
+// Mount() that requires a populated Deps.
+//
+// Also wires a stub `/_bootstrap` GET that the admin SPA probes on
+// first paint (`/_/`). The real bootstrap handler requires `d.Admins`
+// (nil in setup-mode); the stub returns `{needsBootstrap: true,
+// currentMode: "setup"}` so the SPA opens its BootstrapScreen — which
+// internally calls `/_setup/detect` and switches to the database-config
+// step when current_mode == "setup". POSTing to `/_bootstrap` in
+// setup-mode is refused with a typed 409 so a misclick on the admin-
+// creation form (which is impossible to reach normally — the wizard
+// blocks the admin step) doesn't crash silently.
+func (d *Deps) MountSetupOnly(r chi.Router) {
+	r.Get("/_bootstrap", setupBootstrapStubHandler)
+	r.Post("/_bootstrap", setupBootstrapRefuseHandler)
+	d.mountSetupDB(r)
+}
+
+// setupBootstrapStubHandler returns the admin-SPA-compatible probe
+// shape so the LoginGate component routes to BootstrapScreen. The
+// `currentMode` field is a hint — the SPA's BootstrapScreen calls
+// `/_setup/detect` anyway for the authoritative state.
+func setupBootstrapStubHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"needsBootstrap": true,
+		"adminCount":     0,
+		"currentMode":    "setup",
+		"note":           "Database not configured yet. Complete the setup wizard before creating an admin.",
+	})
+}
+
+// setupBootstrapRefuseHandler is the POST counterpart — explicit 409
+// so a stray admin-creation submit in setup-mode produces a clear
+// "database first" error rather than a confusing 500.
+func setupBootstrapRefuseHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	_, _ = w.Write([]byte(`{"code":"setup_required","message":"Database is not configured. Run the setup wizard at /_/ first, then restart railbase."}` + "\n"))
+}
+
 // setupDetectHandler — GET /api/_admin/_setup/detect.
 //
 // Reports the current boot mode + any detected local PG sockets + a
@@ -179,8 +230,17 @@ func (d *Deps) setupDetectHandler(w http.ResponseWriter, _ *http.Request) {
 // canonical "already configured" signal.
 //
 //	external     — <DataDir>/.dsn exists and is non-empty
-//	embedded     — no .dsn (zero-config dev mode is active)
+//	embedded     — no .dsn AND embed_pg is compiled in (dev build,
+//	               zero-config UX active)
+//	setup        — no .dsn AND embed_pg NOT compiled in (production
+//	               binary on its first boot — the wizard is the only
+//	               surface that works; everything else 503s)
 //	unconfigured — DataDir itself can't be resolved (shouldn't happen)
+//
+// The frontend wizard branches on this: "embedded" renders the cold-
+// boot intro with a note that data lives in a throwaway dev cluster;
+// "setup" renders the same intro but flags that nothing else will
+// work until DB config is saved + the process restarted.
 func setupCurrentMode(dataDir string) string {
 	if dataDir == "" {
 		return "unconfigured"
@@ -189,7 +249,10 @@ func setupCurrentMode(dataDir string) string {
 	if persisted != "" {
 		return "external"
 	}
-	return "embedded"
+	if embedded.Available() {
+		return "embedded"
+	}
+	return "setup"
 }
 
 // setupProbeDBHandler — POST /api/_admin/_setup/probe-db.
@@ -319,6 +382,32 @@ func (d *Deps) setupSaveDBHandler(w http.ResponseWriter, r *http.Request) {
 	if err := os.WriteFile(dsnPath, []byte(dsn+"\n"), 0o600); err != nil {
 		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "write dsn file"))
 		return
+	}
+
+	// If running in setup-mode, signal the main Run loop to reload
+	// THE SAME PROCESS onto the new DSN. The HTTP response flushes
+	// BEFORE the reload kicks in (writeJSON does the write here);
+	// the listener tears down a few hundred ms after — the browser
+	// gets the JSON, the operator sees the "Reloading..." UI from
+	// the frontend, and a window.location.reload() in 2s lands on
+	// the now-fully-booted server. No Ctrl-C, no manual restart.
+	//
+	// Outside setup-mode (regular wizard re-run) the channel is nil
+	// and we fall back to "restart manually" which is still correct.
+	if d.SetupReload != nil {
+		select {
+		case d.SetupReload <- dsn:
+			writeJSON(w, http.StatusOK, setupSaveResponse{
+				OK:              true,
+				DSN:             dsn,
+				RestartRequired: false,
+				Note:            "Configuration saved. Reloading on the new database — refresh this page in a moment.",
+			})
+			return
+		default:
+			// Channel full somehow — already triggered? Fall through
+			// to the manual-restart path so we still respond ok.
+		}
 	}
 
 	writeJSON(w, http.StatusOK, setupSaveResponse{

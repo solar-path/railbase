@@ -72,3 +72,8 @@ func start(_ context.Context, cfg Config) (string, StopFunc, error) {
 	)
 	return dsn, pg.Stop, nil
 }
+
+// Available reports whether this binary was built with `-tags embed_pg`.
+// Returns true in the embed_pg build. See start_disabled.go for the
+// default-build counterpart.
+func Available() bool { return true }

@@ -76,6 +76,17 @@ type Deps struct {
 	// interface as notifications.Mailer so a single adapter works in
 	// both seams.
 	Mailer notifications.Mailer
+
+	// SetupReload is wired ONLY in the setup-mode boot path
+	// (pkg/railbase/app.go::runSetupOnly). When the operator finishes
+	// the wizard via POST /_setup/save-db, the handler pushes the new
+	// DSN onto this channel; the main Run loop tears down the
+	// setup-mode HTTP server and re-enters the normal boot path in
+	// the SAME process, so the operator never has to hit Ctrl-C and
+	// re-run `./railbase serve`. Nil in the regular boot path — the
+	// save handler then falls back to the old "Restart railbase to
+	// apply" UX (still correct, just less convenient).
+	SetupReload chan<- string
 }
 
 // Mount wires every /api/_admin/* route onto r. Caller is expected to

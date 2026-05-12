@@ -21,3 +21,9 @@ var ErrNotCompiledIn = errors.New(
 func start(_ context.Context, _ Config) (string, StopFunc, error) {
 	return "", nil, ErrNotCompiledIn
 }
+
+// Available reports whether this binary was built with `-tags embed_pg`.
+// Returns false in the default (production) build so callers — notably
+// pkg/railbase/app.Run — can pick the setup-only fallback path instead
+// of trying to spawn an embedded subprocess that isn't linked in.
+func Available() bool { return false }

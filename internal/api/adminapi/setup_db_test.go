@@ -110,14 +110,19 @@ func TestSetupDB_Detect_ShapeIsCorrect(t *testing.T) {
 		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
 	}
 
-	// current_mode: with no .dsn under DataDir, must be "embedded"
-	// (the zero-config-UX path).
-	if resp.CurrentMode != "embedded" {
-		t.Errorf("current_mode: want embedded with no .dsn, got %q", resp.CurrentMode)
+	// current_mode: with no .dsn under DataDir, must be one of the
+	// non-configured states — "embedded" when embed_pg is compiled in
+	// (dev/demo build), or "setup" when not (release binary first
+	// boot). Tests run without the embed_pg tag by default, so we
+	// expect "setup" here; the embed_pg matrix re-runs the suite with
+	// the tag and exercises the "embedded" branch.
+	if resp.CurrentMode != "embedded" && resp.CurrentMode != "setup" {
+		t.Errorf("current_mode: want embedded or setup with no .dsn, got %q", resp.CurrentMode)
 	}
-	// configured must mirror "external" only.
+	// configured must mirror "external" only — neither embedded nor
+	// setup count as "configured".
 	if resp.Configured {
-		t.Errorf("configured: want false when current_mode=embedded, got true")
+		t.Errorf("configured: want false when current_mode=%q, got true", resp.CurrentMode)
 	}
 	// suggested_username is os.Getenv("USER"); we just assert it's a
 	// string (could be empty in CI sandboxes that strip env).

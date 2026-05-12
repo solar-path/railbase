@@ -29,7 +29,12 @@ import { useAuth } from "../auth/context";
 type SocketInfo = { dir: string; path: string; distro: string };
 type DetectResponse = {
   configured: boolean;
-  current_mode: "embedded" | "external" | "unconfigured";
+  // "setup" is returned by production binaries on first boot — embed_pg
+  // not compiled in AND no `.dsn` file yet. The setup-mode HTTP server
+  // accepts `/_setup/detect` / `/_setup/probe-db` / `/_setup/save-db`
+  // and returns 503 for everything else, so the operator MUST complete
+  // this step before the admin UI becomes useful.
+  current_mode: "embedded" | "external" | "unconfigured" | "setup";
   sockets: SocketInfo[];
   suggested_username: string;
 };
@@ -53,11 +58,36 @@ type DBDriver = "local-socket" | "external" | "embedded";
 
 export function BootstrapScreen() {
   // step 0 = database, step 1 = admin. We start on 0 — the operator
-  // sees the database picker first. They can advance to 1 by either
-  // (a) saving an external/local-socket DSN and clicking "Continue
-  // to admin setup" once they've restarted, or (b) selecting
-  // embedded and clicking Continue (which skips the save altogether).
+  // sees the database picker first. Auto-advance to step 1 fires when
+  // /_setup/detect reports `configured: true` (post in-process reload
+  // OR manual restart) AND we haven't already advanced — the operator
+  // can always click Back in AdminStep to revisit the DB config.
   const [step, setStep] = useState<0 | 1>(0);
+  const [autoAdvanced, setAutoAdvanced] = useState(false);
+
+  // Probe detect once at mount to decide whether to skip step 0.
+  // Using a tiny dedicated fetch (not coupled to DatabaseStep's state)
+  // keeps the auto-skip decision out of the DatabaseStep render path.
+  useEffect(() => {
+    if (autoAdvanced) return;
+    let cancelled = false;
+    fetch("/api/_admin/_setup/detect")
+      .then((r) => r.json())
+      .then((d: DetectResponse) => {
+        if (cancelled) return;
+        if (d.configured) {
+          setStep(1);
+          setAutoAdvanced(true);
+        }
+      })
+      .catch(() => {
+        // Detect failures are not fatal — DatabaseStep will surface
+        // them when it mounts. We just don't auto-advance.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [autoAdvanced]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-neutral-100 p-6">
@@ -121,6 +151,13 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
         if (d.sockets.length > 0) {
           setDriver("local-socket");
           setPickedSocket(d.sockets[0].dir);
+        } else if (d.current_mode === "setup") {
+          // Production binary, no embed_pg, no detected sockets — the
+          // embedded driver radio is unavailable in this build. Default
+          // to external DSN so the operator isn't pre-selected on a
+          // dead option. The radio for embedded is rendered disabled
+          // below when current_mode === "setup".
+          setDriver("external");
         }
         if (d.suggested_username && !username) {
           setUsername(d.suggested_username);
@@ -193,13 +230,48 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
           (data as { error?: { message?: string } }).error?.message ?? "Validation error.";
         setErr(m);
       } else {
-        setSave(data as SaveResponse);
+        const saveData = data as SaveResponse;
+        setSave(saveData);
+        // When the server is reloading in-place (setup-mode → normal
+        // mode without an operator restart), restart_required is false
+        // and we poll readiness from the client. Once the new boot
+        // path's /readyz returns 200, the admin SPA reloads itself —
+        // /_bootstrap now hits the real handler, currentMode flips to
+        // "external", the wizard reopens on the admin-account step.
+        if (saveData.ok && saveData.restart_required === false) {
+          void waitForReadyThenReload();
+        }
       }
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Save failed.");
     } finally {
       setBusy(null);
     }
+  }
+
+  // waitForReadyThenReload polls /readyz every 500 ms (cheap — the
+  // probe just runs SELECT 1). It tolerates connection refused (the
+  // listener is briefly down during the cutover) so the operator
+  // doesn't see a spurious error flash. Caps at 30 s; if readiness
+  // hasn't returned by then, fall back to a plain reload — the
+  // operator can refresh manually if that doesn't catch the new boot.
+  async function waitForReadyThenReload() {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      try {
+        const r = await fetch("/readyz", { cache: "no-store" });
+        if (r.ok) {
+          window.location.reload();
+          return;
+        }
+      } catch {
+        // listener briefly down — that's expected during the in-process
+        // reload. Just keep polling.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    // 30s without readiness — reload anyway; admin might just be slow.
+    window.location.reload();
   }
 
   const hasSockets = (detect?.sockets ?? []).length > 0;
@@ -260,8 +332,22 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
         <DriverRadio
           checked={driver === "embedded"}
           onChange={() => setDriver("embedded")}
-          title="Keep embedded (development)"
-          subtitle="Single-machine dev workflow; data lives under pb_data/postgres/"
+          // Embedded postgres is a `-tags embed_pg` build option,
+          // intentionally NOT included in release binaries. In
+          // setup-mode we surface the row as disabled so the operator
+          // sees "this exists but I can't pick it" rather than wonders
+          // why their choice silently fails on save.
+          disabled={detect?.current_mode === "setup"}
+          title={
+            detect?.current_mode === "setup"
+              ? "Embedded postgres — not available in this build"
+              : "Keep embedded (development)"
+          }
+          subtitle={
+            detect?.current_mode === "setup"
+              ? "Rebuild with `make build-embed` for the dev-only embedded driver"
+              : "Single-machine dev workflow; data lives under pb_data/postgres/"
+          }
         />
       </fieldset>
 
@@ -383,6 +469,10 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
 
       <div className="flex items-center gap-2 pt-2 border-t border-neutral-100">
         {isEmbedded ? (
+          // "Keep embedded" path is only reachable when embed_pg is
+          // compiled in (driver radio is disabled in setup-mode). The
+          // operator is staying on the current process's BD; admin
+          // create is fine without a restart.
           <button
             type="button"
             onClick={onContinue}
@@ -394,7 +484,7 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
           <>
             <button
               type="button"
-              disabled={busy !== null}
+              disabled={busy !== null || save?.ok === true}
               onClick={doProbe}
               className="rounded border border-neutral-300 bg-white px-3 py-2 text-sm hover:bg-neutral-50 disabled:opacity-50"
             >
@@ -402,24 +492,63 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
             </button>
             <button
               type="button"
-              disabled={busy !== null}
+              disabled={busy !== null || save?.ok === true}
               onClick={doSave}
               className="rounded bg-neutral-900 text-white px-3 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
             >
               {busy === "save" ? "Saving…" : "Save and restart later"}
             </button>
-            {save?.ok ? (
-              <button
-                type="button"
-                onClick={onContinue}
-                className="ml-auto rounded border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 hover:bg-emerald-100"
-              >
-                Continue to admin setup →
-              </button>
-            ) : null}
+            {/*
+              Once save succeeded, the new DSN is on disk but the current
+              process is still bound to whatever DB it booted with
+              (setup-mode = no DB, embedded = throwaway dev cluster). An
+              admin created NOW lands in the wrong place — empty after
+              the restart in setup-mode, or in the old embedded cluster
+              that gets shadowed by the new DSN. So we hide the Continue
+              button entirely and tell the operator to restart. After
+              the restart, /_bootstrap reports needsBootstrap=true with
+              currentMode=external, the wizard reopens, the database
+              step short-circuits (`configured: true`), and the operator
+              lands on the admin step on a fresh process bound to the
+              real DB.
+            */}
           </>
         )}
       </div>
+
+      {save?.ok && !isEmbedded && save.restart_required === false ? (
+        // In-process reload path: server is about to swap from
+        // setup-mode to the full boot path on the new DSN. We poll
+        // /readyz in the background and reload the page as soon as the
+        // new server is up — usually under 2s on a local socket.
+        <div className="mt-3 rounded border border-emerald-300 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
+          <strong className="block mb-1 flex items-center gap-2">
+            <span className="inline-block h-3 w-3 rounded-full bg-emerald-500 animate-pulse" />
+            Reloading on your new database…
+          </strong>
+          <span className="block">
+            The server is applying migrations and restarting in-place.
+            This page will refresh automatically once it's ready — no
+            terminal commands needed.
+          </span>
+        </div>
+      ) : null}
+
+      {save?.ok && !isEmbedded && save.restart_required === true ? (
+        // Manual-restart path: kept as fallback for the rare case the
+        // backend can't trigger an in-process reload (e.g. invoked
+        // from a normal-boot wizard re-run where the chan is nil).
+        <div className="mt-3 rounded border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+          <strong className="block mb-1">Restart railbase to continue.</strong>
+          <span className="block">
+            The configuration is saved. Re-run the process to pick up
+            the new DSN.
+          </span>
+          <code className="mt-2 block whitespace-pre rounded bg-amber-100 px-2 py-1 text-xs text-amber-900">
+            {`# Ctrl-C in the terminal, then:\n./railbase serve`}
+          </code>
+        </div>
+      ) : null}
     </form>
   );
 }

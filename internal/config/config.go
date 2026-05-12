@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/railbase/railbase/internal/db/embedded"
 )
 
 // Config is the resolved boot configuration.
@@ -69,6 +71,17 @@ type Config struct {
 	// DevMode toggles pretty logging, hot-reload watchers, and the
 	// embedded admin UI dev proxy.
 	DevMode bool
+
+	// SetupMode is the first-run fallback: no DSN provided, no
+	// persisted `.dsn` file, embedded postgres not compiled in
+	// (production binary), not production. Boot still completes —
+	// we run a minimal HTTP server that serves the admin SPA + the
+	// `/api/_admin/_setup/*` wizard endpoints + a 503 stub for every
+	// other route, so the operator can configure the real database
+	// from a browser instead of from the shell.
+	//
+	// Auto-detected by Load() — operators don't set this directly.
+	SetupMode bool
 }
 
 // Default returns the baseline configuration with no env/flag overlay.
@@ -161,25 +174,29 @@ func Load() (Config, error) {
 		}
 	}
 
-	// Zero-config UX (v1.4.3): with no explicit DSN AND not in
-	// production, auto-enable embedded postgres so the first
-	// `./railbase serve` on a fresh machine just works.
+	// Zero-config UX policy with no explicit DSN AND not in production:
 	//
-	// v1.7.38 considered auto-picking a local PG socket and
-	// silently building a DSN like
-	// `postgres://$USER@/railbase?host=/tmp&sslmode=disable`,
-	// but that hard-codes two operator-owned decisions (db name
-	// + auth identity) — Railbase is a universal backend, not a
-	// machine-local tool, so the right place to settle that is
-	// the admin first-run setup wizard (extended in v1.7.39 to
-	// cover DSN config alongside the existing v0.8 admin-account
-	// step). Boot defaults stay: explicit env override → keep;
-	// otherwise embedded for the cold-start case.
+	//   - If embedded postgres IS compiled in (-tags embed_pg, dev/demo
+	//     build via `make build-embed`) → auto-enable EmbedPostgres so
+	//     the first `./railbase serve` on a fresh machine just works.
 	//
-	// `DetectLocalPostgresSockets()` is exported for the setup
-	// wizard to list candidates without committing to them.
+	//   - If embedded postgres is NOT compiled in (release binaries
+	//     from `bin/dist/` / GitHub Releases / goreleaser output) →
+	//     SetupMode. App.Run() poignts the operator at the first-run
+	//     wizard (v1.7.39) so they pick a real Postgres in the browser
+	//     instead of getting a hard boot error like prior versions did.
+	//
+	// Hard-coding a default DSN like `postgres://$USER@/railbase?host=/tmp`
+	// was considered and rejected: Railbase is a universal backend, not
+	// a machine-local tool, so db name + auth identity are operator-owned.
+	// `DetectLocalPostgresSockets()` is still exported for the wizard to
+	// list candidates without the boot process committing to one.
 	if c.DSN == "" && !c.EmbedPostgres && !c.ProductionMode {
-		c.EmbedPostgres = true
+		if embedded.Available() {
+			c.EmbedPostgres = true
+		} else {
+			c.SetupMode = true
+		}
 	}
 
 	if err := c.Validate(); err != nil {
@@ -298,15 +315,17 @@ func (c Config) Validate() error {
 		return fmt.Errorf("shutdown-grace must be positive")
 	}
 
-	// Postgres-only baseline: either explicit DSN OR embedded opt-in.
-	// Load() auto-flips EmbedPostgres=true in dev when DSN is missing,
-	// so reaching this state means the caller skipped Load() OR was
-	// in production with no DSN (both fail).
-	if c.DSN == "" && !c.EmbedPostgres {
+	// Postgres-only baseline: either explicit DSN OR embedded opt-in
+	// OR setup-mode fallback. Load() auto-flips EmbedPostgres=true when
+	// embed_pg is compiled in, otherwise SetupMode=true so the first-run
+	// wizard can drive db configuration from the browser. Reaching this
+	// state with all three false means: caller skipped Load(), OR was in
+	// production with no DSN (both fail).
+	if c.DSN == "" && !c.EmbedPostgres && !c.SetupMode {
 		if c.ProductionMode {
-			return fmt.Errorf("RAILBASE_DSN required in production (RAILBASE_PROD=true). Refusing to fall back to embedded postgres")
+			return fmt.Errorf("RAILBASE_DSN required in production (RAILBASE_PROD=true). Refusing to fall back to embedded postgres or setup mode")
 		}
-		return fmt.Errorf("RAILBASE_DSN required (or use Load() which auto-enables embedded in dev)")
+		return fmt.Errorf("RAILBASE_DSN required (or use Load() which picks embedded/setup-mode in dev)")
 	}
 	if c.EmbedPostgres && c.ProductionMode {
 		return fmt.Errorf("embed-postgres is dev-only; refused with RAILBASE_PROD=true. Provide RAILBASE_DSN to a managed Postgres instead")
