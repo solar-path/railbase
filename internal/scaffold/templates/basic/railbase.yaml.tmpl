@@ -1,0 +1,27 @@
+# {{.ProjectName}} — Railbase configuration.
+#
+# v0.2 reads only env vars. This file is here as documentation for
+# the v0.3+ yaml-config layer; setting values here today is a no-op.
+# Use environment variables instead:
+#
+#   RAILBASE_DSN              postgres://... (required unless EMBED_POSTGRES)
+#   RAILBASE_EMBED_POSTGRES   true  (dev only)
+#   RAILBASE_HTTP_ADDR        :8090
+#   RAILBASE_LOG_LEVEL        debug | info | warn | error
+#   RAILBASE_LOG_FORMAT       json | text
+#   RAILBASE_PROD             true on production deploys
+
+http:
+  addr: ":8090"
+
+db:
+  # dsn: postgres://railbase:railbase@localhost:5432/{{.ProjectName}}?sslmode=disable
+  pool:
+    max_conns: 16
+    min_conns: 1
+    max_conn_lifetime: 1h
+    max_conn_idle_time: 30m
+
+log:
+  level: info
+  format: json

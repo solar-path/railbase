@@ -1,0 +1,257 @@
+package gen
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/railbase/railbase/internal/schema/builder"
+)
+
+// Diff is the result of comparing two Snapshots. Categories are kept
+// separate so the migration generator can render them in a sensible
+// order (creates first, alters next, drops last) and so callers can
+// detect "no changes" without parsing SQL.
+type Diff struct {
+	NewCollections     []builder.CollectionSpec
+	DroppedCollections []string
+
+	// FieldChanges has one entry per collection that exists in both
+	// snapshots and has at least one added or dropped field.
+	FieldChanges []FieldChange
+
+	// IndexChanges captures user-declared index additions/drops on
+	// existing collections. Implicit indexes (auto-FK, FTS, .Indexed)
+	// are re-emitted via fieldIndexes when their owning column changes,
+	// not tracked here.
+	IndexChanges []IndexChange
+
+	// IncompatibleChanges are diff hits we refuse to auto-handle in
+	// v0.2 (column type change, .Tenant() toggle, FK action change,
+	// etc.). The CLI prints them and aborts so the user can write a
+	// hand-rolled migration.
+	IncompatibleChanges []string
+}
+
+// FieldChange enumerates the per-column adds/drops on one collection.
+// Renamed columns currently surface as a Drop + Add pair — rename
+// detection is a v0.3 concern.
+type FieldChange struct {
+	Collection string
+	Added      []builder.FieldSpec
+	Dropped    []string
+}
+
+// IndexChange captures user-declared composite index changes.
+type IndexChange struct {
+	Collection string
+	Added      []builder.IndexSpec
+	Dropped    []string
+}
+
+// Empty reports whether the diff carries any change at all.
+func (d Diff) Empty() bool {
+	return len(d.NewCollections) == 0 &&
+		len(d.DroppedCollections) == 0 &&
+		len(d.FieldChanges) == 0 &&
+		len(d.IndexChanges) == 0 &&
+		len(d.IncompatibleChanges) == 0
+}
+
+// HasIncompatible is a fast check whether the user must edit the
+// generated SQL by hand. CLI uses this to decide between exit 0 and
+// non-zero after surfacing the warnings.
+func (d Diff) HasIncompatible() bool { return len(d.IncompatibleChanges) > 0 }
+
+// Compute compares prev (last applied snapshot) with curr (current
+// in-memory schema registry). The diff is computed by name —
+// renames look like drop+add and v0.2 does not try to reconcile.
+func Compute(prev, curr Snapshot) Diff {
+	prevByName := indexByName(prev.Collections)
+	currByName := indexByName(curr.Collections)
+
+	var d Diff
+
+	// New collections (in curr, not in prev).
+	for _, c := range curr.Collections {
+		if _, ok := prevByName[c.Name]; !ok {
+			d.NewCollections = append(d.NewCollections, c)
+		}
+	}
+
+	// Dropped collections (in prev, not in curr).
+	for _, c := range prev.Collections {
+		if _, ok := currByName[c.Name]; !ok {
+			d.DroppedCollections = append(d.DroppedCollections, c.Name)
+		}
+	}
+
+	// Existing collections — diff fields and indexes.
+	for _, currColl := range curr.Collections {
+		prevColl, ok := prevByName[currColl.Name]
+		if !ok {
+			continue
+		}
+		fc := diffFields(prevColl, currColl, &d)
+		if len(fc.Added) > 0 || len(fc.Dropped) > 0 {
+			d.FieldChanges = append(d.FieldChanges, fc)
+		}
+		ic := diffIndexes(prevColl, currColl)
+		if len(ic.Added) > 0 || len(ic.Dropped) > 0 {
+			d.IndexChanges = append(d.IndexChanges, ic)
+		}
+		if prevColl.Tenant != currColl.Tenant {
+			d.IncompatibleChanges = append(d.IncompatibleChanges,
+				fmt.Sprintf("collection %q: .Tenant() toggle is not auto-migratable in v0.2 (RLS policies + tenant_id column would need a hand-rolled migration)",
+					currColl.Name))
+		}
+	}
+
+	// Determinism for testing / human review.
+	sort.Slice(d.NewCollections, func(i, j int) bool {
+		return d.NewCollections[i].Name < d.NewCollections[j].Name
+	})
+	sort.Strings(d.DroppedCollections)
+	sort.Slice(d.FieldChanges, func(i, j int) bool {
+		return d.FieldChanges[i].Collection < d.FieldChanges[j].Collection
+	})
+	sort.Slice(d.IndexChanges, func(i, j int) bool {
+		return d.IndexChanges[i].Collection < d.IndexChanges[j].Collection
+	})
+	sort.Strings(d.IncompatibleChanges)
+	return d
+}
+
+// SQL renders the diff into ordered SQL statements suitable for a
+// .up.sql migration file. The order is:
+//   1. CREATE TABLE for new collections (with all their indexes/RLS).
+//   2. ALTER TABLE ADD COLUMN for added fields, in collection order.
+//   3. ALTER TABLE DROP COLUMN for dropped fields, in collection order.
+//   4. CREATE INDEX for added user indexes.
+//   5. DROP INDEX for dropped user indexes.
+//   6. DROP TABLE for removed collections (last so any FK from them
+//      to non-dropped tables is gone before we try to drop the parent).
+func (d Diff) SQL() string {
+	var b strings.Builder
+
+	for _, c := range d.NewCollections {
+		fmt.Fprintf(&b, "-- create collection %q\n", c.Name)
+		b.WriteString(CreateCollectionSQL(c))
+		b.WriteString("\n")
+	}
+
+	for _, fc := range d.FieldChanges {
+		for _, f := range fc.Added {
+			fmt.Fprintf(&b, "-- add %q.%q\n", fc.Collection, f.Name)
+			b.WriteString(AddColumnSQL(fc.Collection, f))
+			b.WriteString("\n")
+		}
+	}
+	for _, fc := range d.FieldChanges {
+		for _, name := range fc.Dropped {
+			fmt.Fprintf(&b, "-- drop %q.%q\n", fc.Collection, name)
+			b.WriteString(DropColumnSQL(fc.Collection, name))
+			b.WriteString("\n")
+		}
+	}
+
+	for _, ic := range d.IndexChanges {
+		for _, idx := range ic.Added {
+			fmt.Fprintf(&b, "-- add index %q on %q\n", idx.Name, ic.Collection)
+			b.WriteString(indexStmt(ic.Collection, idx))
+			b.WriteString("\n\n")
+		}
+	}
+	for _, ic := range d.IndexChanges {
+		for _, name := range ic.Dropped {
+			fmt.Fprintf(&b, "-- drop index %q on %q\n", name, ic.Collection)
+			fmt.Fprintf(&b, "DROP INDEX IF EXISTS %s;\n\n", name)
+		}
+	}
+
+	for _, name := range d.DroppedCollections {
+		fmt.Fprintf(&b, "-- drop collection %q\n", name)
+		b.WriteString(DropCollectionSQL(name))
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+// --- internal helpers ---
+
+func indexByName(specs []builder.CollectionSpec) map[string]builder.CollectionSpec {
+	out := make(map[string]builder.CollectionSpec, len(specs))
+	for _, s := range specs {
+		out[s.Name] = s
+	}
+	return out
+}
+
+func diffFields(prev, curr builder.CollectionSpec, d *Diff) FieldChange {
+	prevByName := make(map[string]builder.FieldSpec, len(prev.Fields))
+	for _, f := range prev.Fields {
+		prevByName[f.Name] = f
+	}
+	currByName := make(map[string]builder.FieldSpec, len(curr.Fields))
+	for _, f := range curr.Fields {
+		currByName[f.Name] = f
+	}
+
+	fc := FieldChange{Collection: curr.Name}
+
+	for _, f := range curr.Fields {
+		if _, ok := prevByName[f.Name]; !ok {
+			fc.Added = append(fc.Added, f)
+		}
+	}
+	for _, f := range prev.Fields {
+		if _, ok := currByName[f.Name]; !ok {
+			fc.Dropped = append(fc.Dropped, f.Name)
+		}
+	}
+	// Type / constraint changes on existing fields aren't auto-handled
+	// in v0.2. Surface them as incompatible so the user knows to take
+	// action.
+	for _, c := range curr.Fields {
+		p, ok := prevByName[c.Name]
+		if !ok {
+			continue
+		}
+		if p.Type != c.Type {
+			d.IncompatibleChanges = append(d.IncompatibleChanges,
+				fmt.Sprintf("collection %q field %q: type change %s → %s requires a hand-rolled migration in v0.2",
+					curr.Name, c.Name, p.Type, c.Type))
+		}
+	}
+
+	sort.Slice(fc.Added, func(i, j int) bool { return fc.Added[i].Name < fc.Added[j].Name })
+	sort.Strings(fc.Dropped)
+	return fc
+}
+
+func diffIndexes(prev, curr builder.CollectionSpec) IndexChange {
+	prevByName := make(map[string]builder.IndexSpec, len(prev.Indexes))
+	for _, i := range prev.Indexes {
+		prevByName[i.Name] = i
+	}
+	currByName := make(map[string]builder.IndexSpec, len(curr.Indexes))
+	for _, i := range curr.Indexes {
+		currByName[i.Name] = i
+	}
+
+	ic := IndexChange{Collection: curr.Name}
+	for _, i := range curr.Indexes {
+		if _, ok := prevByName[i.Name]; !ok {
+			ic.Added = append(ic.Added, i)
+		}
+	}
+	for _, i := range prev.Indexes {
+		if _, ok := currByName[i.Name]; !ok {
+			ic.Dropped = append(ic.Dropped, i.Name)
+		}
+	}
+	sort.Slice(ic.Added, func(i, j int) bool { return ic.Added[i].Name < ic.Added[j].Name })
+	sort.Strings(ic.Dropped)
+	return ic
+}

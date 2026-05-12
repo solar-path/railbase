@@ -1,0 +1,99 @@
+# ─── Build artefacts ──────────────────────────────────────────────
+# Local `go build -o bin/railbase` output + `make cross-compile`
+# sweep (railbase_<os>_<arch>[.exe]) + goreleaser `dist/` payload.
+/bin/
+/dist/
+
+# Admin UI bundle output. The production binary embeds via
+# `admin/embed.go` which build-tags against the committed copy, so we
+# never want a developer-machine bundle leaking into the repo.
+/admin/dist/
+/admin/node_modules/
+/admin/.vite/
+/admin/tsconfig.tsbuildinfo
+/admin/vite.config.ts.timestamp-*
+
+# ─── Runtime data ─────────────────────────────────────────────────
+# Railbase data directories — gitignored ANYWHERE in the tree, not
+# just at the root. Without the leading slash, `bin/dist/pb_data/`
+# (created when an operator runs the dist binary from the repo
+# without cd'ing elsewhere) is also excluded. Same for any nested
+# `pb_hooks/` and the v1.7.39 setup wizard's persisted `.dsn` /
+# `.secret` files which live inside the data dir.
+pb_data/
+pb_hooks/
+pb_i18n/
+pdf_templates/
+
+# …but the scaffold templates SHIP these dirs as starter content for
+# `railbase init` (embed.FS-loaded). Don't strip them out.
+!internal/scaffold/templates/**/pb_data/
+!internal/scaffold/templates/**/pb_hooks/
+!internal/scaffold/templates/**/pb_i18n/
+!internal/scaffold/templates/**/pdf_templates/
+
+# Ad-hoc local data dirs operators sometimes drop next to the binary.
+/data/
+/storage/
+/backups/
+/exports/
+
+# ─── Go ───────────────────────────────────────────────────────────
+*.test
+*.out
+*.prof
+*.pprof
+coverage.txt
+coverage.html
+coverage.out
+go.work
+go.work.sum
+
+# ─── Node / admin tooling ─────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# ─── Env / secrets ────────────────────────────────────────────────
+# Never commit a `.env` — operator-specific DSN + secrets land here.
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+!docs/**/*.pem
+!docs/**/*.key
+
+# Audit / session signing key written to `<DataDir>/.audit_seal_key`
+# is already covered by pb_data/, but pin the literal name in case a
+# future ops doc shows it relative to repo root.
+.audit_seal_key
+
+# ─── Logs / scratch ───────────────────────────────────────────────
+*.log
+*.bak
+*.tmp
+*.swp
+*.swo
+
+# ─── IDE / editor ─────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+.nvimlog
+.history/
+
+# ─── OS ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ─── Claude / agent scratch ───────────────────────────────────────
+# Per-machine agent caches live under `.claude/`. Plan caches under
+# `/Users/<user>/.claude/plans/` are outside the repo already, but
+# keep the in-repo dir out too.
+.claude/

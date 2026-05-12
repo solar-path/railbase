@@ -1,0 +1,72 @@
+# v1 SHIP — tag-triggered release workflow.
+#
+# Pushing a `vX.Y.Z` tag invokes goreleaser, which (per .goreleaser.yml):
+#   1. cross-compiles 6 binaries (linux/darwin/windows × amd64/arm64);
+#   2. enforces the docs/17 #1 30 MB binary budget via the size-check
+#      script (post-build hook below);
+#   3. produces tarballs + checksums in `dist/`;
+#   4. drafts a GitHub release whose body is the auto-generated changelog.
+#
+# The release is DRAFT — operator reviews tarballs + release notes,
+# then publishes manually. Prerelease tags (`vX.Y.Z-rc.N`, `-alpha.N`,
+# `-beta.N`) are detected via `prerelease: auto` in .goreleaser.yml.
+#
+# Permissions: contents:write to push the release; packages:write only
+# if you later add a docker image push step (currently the workflow
+# does not push images).
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  goreleaser:
+    name: Cross-compile + draft GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # goreleaser changelog needs the full history
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Sanity build (catches obvious breakage before the release)
+        run: go build ./...
+
+      - name: Run goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enforce 30 MB binary budget
+        # Re-run the size check against the goreleaser output. If any
+        # archived binary exceeded the budget, goreleaser would have
+        # produced a tarball but we fail the job loudly so the operator
+        # sees the regression before publishing the draft.
+        run: bash scripts/check-binary-size.sh dist/
+
+      - name: Upload size report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-sizes
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          retention-days: 30

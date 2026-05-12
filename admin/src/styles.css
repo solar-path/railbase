@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+/* Railbase admin UI — global styles.
+ *
+ * We deliberately keep custom CSS minimal. Anything reusable lives
+ * as a Tailwind composition; one-off tweaks land here only when a
+ * utility class can't express the rule.
+ */
+
+html, body, #root {
+  height: 100%;
+}
+
+/* Headless table styling defaults — set once so each consumer doesn't
+ * repeat the same border/padding combo. */
+.rb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.rb-table th,
+.rb-table td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgb(229 229 229); /* neutral-200 */
+}
+.rb-table th {
+  font-weight: 500;
+  color: rgb(82 82 82); /* neutral-600 */
+  background-color: rgb(250 250 250); /* neutral-50 */
+}
+.rb-table tr:hover td {
+  background-color: rgb(250 250 250);
+}
+
+/* Code-ish display for IDs, hashes, raw JSON. */
+.rb-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+}

@@ -1,0 +1,110 @@
+// Package cli is the cobra command set shared by the bare `railbase`
+// binary and the project binary that `railbase init` scaffolds for
+// the user.
+//
+// The split exists because both binaries want the same `serve`,
+// `migrate diff/up/down/status`, and `version` surface — only the
+// `init` command is exclusive to the bare binary (you don't init
+// a project from inside another project).
+//
+// Calling Execute from main() is all a binary needs to do; cobra
+// reads os.Args, dispatches, and exits. ExecuteWithInit additionally
+// wires up the init command for the bare-binary case.
+package cli
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+
+	"github.com/railbase/railbase/internal/buildinfo"
+	"github.com/spf13/cobra"
+)
+
+// Execute runs the CLI without the `init` subcommand. Use from a
+// user project binary.
+func Execute() {
+	run(newRoot(false))
+}
+
+// ExecuteWithInit runs the CLI including `init`. The bare railbase
+// binary uses this; user project binaries should not.
+func ExecuteWithInit() {
+	run(newRoot(true))
+}
+
+func run(root *cobra.Command) {
+	ctx, cancel := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	if err := root.ExecuteContext(ctx); err != nil {
+		// SilenceErrors is on, so cobra hasn't printed anything.
+		// Treat ctx-cancel as a clean exit so SIGTERM doesn't return
+		// non-zero from a graceful shutdown.
+		if errors.Is(err, context.Canceled) {
+			os.Exit(0)
+		}
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+}
+
+func newRoot(includeInit bool) *cobra.Command {
+	// Use the actual binary basename — for the user's `./mydemo`
+	// help text, cobra shows "mydemo serve" instead of "railbase
+	// serve" which would be misleading.
+	use := "railbase"
+	if exe, err := os.Executable(); err == nil {
+		use = filepath.Base(exe)
+	}
+
+	root := &cobra.Command{
+		Use:           use,
+		Short:         "Railbase: PocketBase-class Go backend on PostgreSQL",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Version:       buildinfo.String(),
+	}
+	root.AddCommand(
+		newServeCmd(),
+		newVersionCmd(),
+		newMigrateCmd(),
+		newAdminCmd(),
+		newTenantCmd(),
+		newConfigCmd(),
+		newAuditCmd(),
+		newGenerateCmd(),
+		newMailerCmd(),
+		newAuthCmd(),
+		newRoleCmd(),
+		newJobsCmd(),
+		newCronCmd(),
+		newWebhooksCmd(),
+		// v1.6.6 — XLSX / PDF export from the terminal. Operates on
+		// the local DB, RBAC bypassed (operator surface).
+		newExportCmd(),
+		// v1.7.7 — DB dump/restore via pure-Go pgx COPY (no pg_dump
+		// dep). Single-binary contract preserved.
+		newBackupCmd(),
+		// v1.7.8 — PocketBase schema → Railbase Go-code translator.
+		// Closes the last §3.13 PB-compat item before v1 verification.
+		newImportCmd(),
+		// v1.7.21 — `railbase test` CLI (docs/23 §3.12.1). Thin
+		// wrapper over `go test` with Railbase-flavoured flag
+		// composition (--integration / --embed-pg → -tags=).
+		newTestCmd(),
+		// v1.7.28d — `railbase coverage` (docs/23 §3.12.7). Merges
+		// a Go coverprofile and a Vitest c8 JSON into a single
+		// self-contained HTML report. Closes the last §3.12 item.
+		newCoverageCmd(),
+	)
+	if includeInit {
+		root.AddCommand(newInitCmd())
+	}
+	return root
+}

@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-test:
+    name: vet + test (Postgres ${{ matrix.pg }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ["14", "15", "16"]
+    services:
+      postgres:
+        image: postgres:${{ matrix.pg }}-alpine
+        env:
+          POSTGRES_USER: railbase
+          POSTGRES_PASSWORD: railbase
+          POSTGRES_DB: railbase
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U railbase -d railbase"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go mod download
+        run: go mod download
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build (default tags)
+        run: go build ./...
+
+      - name: go build (embed_pg)
+        run: go build -tags embed_pg ./...
+
+      - name: go test
+        env:
+          RAILBASE_TEST_DSN: postgres://railbase:railbase@localhost:5432/railbase?sslmode=disable
+        run: go test -race -count=1 ./...
+
+  cross-build:
+    name: cross-build ${{ matrix.os }}/${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: darwin
+            arch: amd64
+          - os: darwin
+            arch: arm64
+          - os: windows
+            arch: amd64
+          - os: windows
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: build
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags="-s -w" -o bin/railbase-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.os == 'windows' && '.exe' || '' }} ./cmd/railbase
+
+      - name: Enforce 30 MB binary budget (docs/17 #1)
+        # Fail the CI job if this target's binary exceeds the v1 SHIP
+        # gate — catches a size regression at PR time, before it lands
+        # in main and bites a future release. The shared script handles
+        # macOS/Linux/Windows binary names uniformly.
+        run: bash scripts/check-binary-size.sh bin/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: railbase-${{ matrix.os }}-${{ matrix.arch }}
+          path: bin/railbase-${{ matrix.os }}-${{ matrix.arch }}*
+          if-no-files-found: error

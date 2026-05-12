@@ -1,0 +1,10 @@
+module {{.ModulePath}}
+
+go 1.26
+
+require github.com/railbase/railbase {{.RailbaseVersion}}
+{{if .RailbaseLocalPath}}
+// Pre-release: until github.com/railbase/railbase ships versioned
+// modules to a registry, point at the local checkout.
+replace github.com/railbase/railbase => {{.RailbaseLocalPath}}
+{{end}}

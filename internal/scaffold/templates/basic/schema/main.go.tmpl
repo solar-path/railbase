@@ -1,0 +1,32 @@
+// Package schema is where you declare the collections that make up
+// your {{.ProjectName}} backend. Each `var` is a collection; the
+// init() function registers them with the global registry so the
+// generated CLI commands (migrate diff, serve, ...) can find them.
+//
+// Workflow:
+//
+//   1. Edit this file (or add new files in schema/) to declare your
+//      collections using the fluent DSL.
+//   2. Run `./{{.ProjectName}} migrate diff <slug>` to emit a SQL
+//      migration capturing your changes.
+//   3. Run `./{{.ProjectName}} migrate up` to apply it.
+//   4. Run `./{{.ProjectName}} serve` to start the HTTP server.
+//
+// `id`, `created`, and `updated` are auto-added — don't declare them.
+package schema
+
+import railschema "github.com/railbase/railbase/pkg/railbase/schema"
+
+// Posts is a starter collection that demonstrates the DSL. Replace
+// it with your real model — `migrate diff` will sort out the SQL.
+var Posts = railschema.Collection("posts").
+	Field("title", railschema.Text().Required().MinLen(3).MaxLen(120)).
+	Field("body", railschema.Text().FTS()).
+	Field("status", railschema.Select("draft", "published").Default("draft").Required()).
+	Index("idx_posts_status", "status").
+	ListRule("@request.auth.id != ''").
+	CreateRule("@request.auth.id != ''")
+
+func init() {
+	railschema.Register(Posts)
+}

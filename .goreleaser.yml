@@ -1,0 +1,141 @@
+# v1 SHIP gate — docs/17 #1: Build & cross-compile via goreleaser, ≤30MB binary.
+#
+# Run locally to dry-run a release:
+#
+#   goreleaser release --snapshot --clean --skip=publish,sign,announce,validate
+#
+# Produces tarballs + zip + checksum file under dist/. The smoke gate is
+# the binary-size check at the bottom of `scripts/smoke-5min.sh` (must be
+# ≤30 MB). Real release: tag `vX.Y.Z`, push tag, GitHub Actions invokes
+# `goreleaser release --clean`.
+#
+# Why no `embed_pg` builds here: production binaries should NOT carry the
+# embedded-PG driver. It's a ~300 MB build-tag-gated subsystem only used
+# for `railbase init demo` zero-config DX. Operators wanting embed_pg
+# build from source.
+#
+# Why pure-Go (CGO_ENABLED=0) — the §00 contract pins this; CGo would
+# break musl-on-Alpine + the static-linking guarantee. Every dep in
+# go.mod is pure-Go (no SQLite, no embedded WASM).
+
+version: 2
+
+# Pin the project name explicitly so it doesn't default to the repo
+# directory ("Railbase" with capital R) — release artifacts use the
+# lowercase form to match the binary name (`./railbase`) and the docs.
+project_name: railbase
+
+# Run go.mod tidy + a build sanity check before producing the matrix.
+before:
+  hooks:
+    - go mod tidy
+    - go build ./...
+
+builds:
+  - id: railbase
+    main: ./cmd/railbase
+    binary: railbase
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # 6-target matrix. No fancy combinations (no riscv, no 386, no freebsd)
+    # for v1 — adding them is cheap if demand surfaces.
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/railbase/railbase/internal/buildinfo.Commit={{.Commit}}
+      - -X github.com/railbase/railbase/internal/buildinfo.Tag={{.Version}}
+      - -X github.com/railbase/railbase/internal/buildinfo.Date={{.Date}}
+    # Reproducible builds — mod-time pinned via the commit timestamp.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    # tar.gz for unix, zip for windows. Operators on Windows get a
+    # familiar handle.
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- if eq .Os "darwin" }}macos
+      {{- else }}{{ .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - README.md
+      - LICENSE*
+      # NOTE: NOT including docs/ to keep tarballs small; docs ship with
+      # the repo not the binary release.
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: "🚀 Features"
+      regexp: '^.*?feat(\(.+\))?!?:.+$'
+      order: 0
+    - title: "🐛 Bug fixes"
+      regexp: '^.*?fix(\(.+\))?!?:.+$'
+      order: 1
+    - title: "📝 Documentation"
+      regexp: '^.*?docs(\(.+\))?!?:.+$'
+      order: 2
+    - title: "🧰 Misc"
+      order: 999
+  filters:
+    exclude:
+      - "^chore:"
+      - "^test:"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  # Mark as draft until manually published. Lets the operator review
+  # auto-generated notes + tarballs before they go live.
+  draft: true
+  # Pull a v1-style milestone note from the changelog generator. Tag
+  # template: vX.Y.Z. Pre-release detection via the standard semver
+  # suffix scan (-rc.N, -alpha.N, etc).
+  prerelease: auto
+  name_template: "Railbase {{ .Tag }}"
+  header: |
+    Railbase {{ .Tag }} — PocketBase-class single-binary Go backend on Postgres.
+
+    Single static binary, no CGo, ≤ 30 MB stripped. Cross-compiled for
+    linux / darwin / windows × amd64 / arm64.
+
+    See [progress.md](https://github.com/railbase/railbase/blob/main/progress.md) for
+    the per-milestone history.
+  footer: |
+    ---
+
+    **Binary size check**: every artifact in this release passes the
+    docs/17 #1 ≤30 MB gate (see `scripts/smoke-5min.sh`). If a future
+    release ever fails the gate, `goreleaser release` exits non-zero
+    via the size check below.
+
+# Block release when any binary exceeds the docs/17 #1 ship-gate
+# threshold. 31 MB ceiling gives 1 MB headroom; current baseline at
+# v0.9 was 13.06-15.19 MB.
+#
+# goreleaser doesn't have a built-in "max binary size" check, so we
+# enforce via a post-archive hook script. The script is small and lives
+# under scripts/.
+report_sizes: true

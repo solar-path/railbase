@@ -1,0 +1,17 @@
+// Command {{.ProjectName}} is your Railbase server.
+//
+// The blank import below loads {{.ModulePath}}/schema for its
+// init() side-effects: every collection in that package gets
+// registered with the global schema registry, so the CLI subcommands
+// (serve, migrate diff/up/status) automatically know about them.
+package main
+
+import (
+	_ "{{.ModulePath}}/schema"
+
+	"github.com/railbase/railbase/pkg/railbase/cli"
+)
+
+func main() {
+	cli.Execute()
+}
