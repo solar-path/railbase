@@ -1,6 +1,14 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* Geist Variable — cross-platform sans-serif matched to the shadcn /
+ * Vercel reference look. Self-hosted via fontsource so the admin UI
+ * doesn't depend on a CDN. ~35 KB woff2; loaded once for the admin SPA.
+ * NOT imported by `lib/ui/styles.css` (the kit-distributable copy) —
+ * downstream apps choose their own font; this lives in admin-private
+ * styles only. */
+@import "@fontsource-variable/geist";
+
 /* Railbase admin UI — global styles.
  *
  * Stack: Tailwind 4 + shadcn-on-Preact theme tokens (oklch). The
@@ -175,34 +183,11 @@
     color: var(--color-foreground);
   }
   body {
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    /* Geist Variable as primary sans (see import at top). Full fallback
+     * stack retained so the UI remains readable if the font file fails
+     * to load (CSP / blocked / offline first-render). */
+    font-family: "Geist Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-feature-settings: "ss01", "cv11";
   }
 }
 
-/* Legacy `.rb-*` utilities. Pre-shadcn screens (audit log, raw logs,
- * jobs queue) still lean on these. Each one is small enough to inline
- * here rather than chase a Tailwind composition; they'll burn off as
- * those screens migrate to <Table /> / <Card />. */
-.rb-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
-.rb-table th,
-.rb-table td {
-  text-align: left;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid rgb(229 229 229);
-}
-.rb-table th {
-  font-weight: 500;
-  color: rgb(82 82 82);
-  background-color: rgb(250 250 250);
-}
-.rb-table tr:hover td {
-  background-color: rgb(250 250 250);
-}
-.rb-mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.8125rem;
-}

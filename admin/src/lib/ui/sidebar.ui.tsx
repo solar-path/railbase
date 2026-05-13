@@ -14,7 +14,20 @@ import { Sheet, SheetContent } from './sheet.ui'
 import { Skeleton } from './skeleton.ui'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './tooltip.ui'
 
-const SIDEBAR_COOKIE_NAME = 'sidebar:state'
+// v1.7.x — aligned with canonical shadcn sidebar primitives (Jan 2025).
+// The CSS variables (`--sidebar-width`, `--sidebar-width-icon`,
+// `--sidebar-width-mobile`) are INJECTED on the provider wrapper
+// inline so consumers don't have to redeclare them in global CSS.
+// Without this injection the `w-[var(--sidebar-width)]` classes
+// collapse to 0 and downstream `peer-data-[state=collapsed]:...`
+// rules cascade incorrect spacing — that's the root cause of the
+// "большие отступы" symptom on cold render before any consumer-set
+// stylesheet kicks in.
+const SIDEBAR_COOKIE_NAME = 'sidebar_state'
+const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
+const SIDEBAR_WIDTH = '16rem'
+const SIDEBAR_WIDTH_MOBILE = '18rem'
+const SIDEBAR_WIDTH_ICON = '3rem'
 const SIDEBAR_KEYBOARD_SHORTCUT = 'b'
 
 interface SidebarCtx {
@@ -72,12 +85,12 @@ export const SidebarProvider = forwardRef<HTMLDivElement, SidebarProviderProps>(
           if (open === undefined) setIsOpen(v === 'true')
         }
       } catch {}
-      // eslint-disable-next-line react-hooks/exhaustive-deps
+       
     }, [])
 
     useEffect(() => {
       try {
-        document.cookie = `${SIDEBAR_COOKIE_NAME}=${isOpen}; path=/; max-age=${60 * 60 * 24 * 7}`
+        document.cookie = `${SIDEBAR_COOKIE_NAME}=${isOpen}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
       } catch {}
     }, [isOpen])
 
@@ -103,17 +116,27 @@ export const SidebarProvider = forwardRef<HTMLDivElement, SidebarProviderProps>(
       [state, isOpen, openMobile, isMobile],
     )
 
+    // Inject the CSS variables on the wrapper exactly as canonical
+    // shadcn does. `style` from the consumer is spread AFTER so a
+    // caller passing `--sidebar-width: 14rem` still wins.
+    const wrapperStyle = {
+      '--sidebar-width': SIDEBAR_WIDTH,
+      '--sidebar-width-icon': SIDEBAR_WIDTH_ICON,
+      ...(style as Record<string, unknown> | undefined),
+    } as Record<string, unknown>
+
     return (
       <Ctx.Provider value={value}>
         <TooltipProvider delayDuration={0}>
           <div
             ref={ref as Ref<HTMLDivElement>}
+            data-slot="sidebar-wrapper"
             class={cn(
               'group/sidebar-wrapper flex min-h-svh w-full has-[[data-variant=inset]]:bg-sidebar',
               klass as string,
               className,
             )}
-            style={style}
+            style={wrapperStyle as any}
             {...props}
           >
             {children}
@@ -139,6 +162,7 @@ export const Sidebar = forwardRef<HTMLDivElement, SidebarProps>(
       return (
         <div
           ref={ref as Ref<HTMLDivElement>}
+          data-slot="sidebar"
           class={cn(
             'flex h-full w-[var(--sidebar-width)] flex-col bg-sidebar text-sidebar-foreground',
             klass as string,
@@ -152,12 +176,20 @@ export const Sidebar = forwardRef<HTMLDivElement, SidebarProps>(
     }
 
     if (isMobile) {
+      // Mobile Sheet uses its own width (18rem in canonical shadcn)
+      // because the off-canvas drawer benefits from being a touch wider
+      // for tap-target ergonomics. Set as a per-sheet CSS variable so
+      // we don't pollute the desktop layout's `--sidebar-width`.
+      const mobileStyle = {
+        '--sidebar-width': SIDEBAR_WIDTH_MOBILE,
+      } as Record<string, unknown>
       return (
         <Sheet open={openMobile} onOpenChange={setOpenMobile}>
           <SheetContent
-            data-sidebar="sidebar"
+            data-slot="sidebar-sidebar" data-sidebar="sidebar"
             data-mobile="true"
             class="w-[var(--sidebar-width)] bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden"
+            style={mobileStyle as any}
             side={side}
           >
             <div class="flex h-full w-full flex-col">{children}</div>
@@ -169,6 +201,7 @@ export const Sidebar = forwardRef<HTMLDivElement, SidebarProps>(
     return (
       <div
         ref={ref as Ref<HTMLDivElement>}
+        data-slot="sidebar"
         class="group peer hidden md:block text-sidebar-foreground"
         data-state={state}
         data-collapsible={state === 'collapsed' ? collapsible : ''}
@@ -200,7 +233,7 @@ export const Sidebar = forwardRef<HTMLDivElement, SidebarProps>(
           {...props}
         >
           <div
-            data-sidebar="sidebar"
+            data-slot="sidebar-sidebar" data-sidebar="sidebar"
             class="flex h-full w-full flex-col bg-sidebar group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow"
           >
             {children}
@@ -218,6 +251,7 @@ export const SidebarTrigger = forwardRef<HTMLButtonElement, ButtonHTMLAttributes
     return (
       <Button
         ref={ref}
+        data-slot="sidebar-trigger"
         variant="ghost"
         size="icon"
         class={cn('size-7', klass as string, className)}
@@ -244,6 +278,7 @@ export const SidebarRail = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HT
         type="button"
         aria-label="Toggle Sidebar"
         tabIndex={-1}
+        data-slot="sidebar-rail"
         onClick={toggleSidebar}
         class={cn(
           'absolute inset-y-0 z-20 hidden w-4 -translate-x-1/2 transition-all ease-linear after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] hover:after:bg-sidebar-border group-data-[side=left]:-right-4 group-data-[side=right]:left-0 sm:flex',
@@ -261,6 +296,7 @@ export const SidebarInset = forwardRef<HTMLElement, HTMLAttributes<HTMLElement>>
   ({ class: klass, className, ...props }, ref) => (
     <main
       ref={ref as Ref<HTMLElement>}
+      data-slot="sidebar-inset"
       class={cn(
         'relative flex min-h-svh min-w-0 flex-1 flex-col bg-background',
         'peer-data-[variant=inset]:min-h-[calc(100svh-theme(spacing.4))] md:peer-data-[variant=inset]:m-2 md:peer-data-[state=collapsed]:peer-data-[variant=inset]:ml-2 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow',
@@ -277,7 +313,7 @@ export const SidebarInput = forwardRef<HTMLInputElement, HTMLAttributes<HTMLInpu
   ({ class: klass, className, ...props }, ref) => (
     <Input
       ref={ref}
-      data-sidebar="input"
+      data-slot="sidebar-input" data-sidebar="input"
       class={cn(
         'h-8 w-full bg-background shadow-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
         klass as string,
@@ -293,7 +329,7 @@ export const SidebarHeader = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEl
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
-      data-sidebar="header"
+      data-slot="sidebar-header" data-sidebar="header"
       class={cn('flex flex-col gap-2 p-2', klass as string, className)}
       {...props}
     />
@@ -305,7 +341,7 @@ export const SidebarFooter = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEl
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
-      data-sidebar="footer"
+      data-slot="sidebar-footer" data-sidebar="footer"
       class={cn('flex flex-col gap-2 p-2', klass as string, className)}
       {...props}
     />
@@ -317,7 +353,7 @@ export const SidebarSeparator = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDi
   ({ class: klass, className, ...props }, ref) => (
     <Separator
       ref={ref as Ref<HTMLDivElement>}
-      data-sidebar="separator"
+      data-slot="sidebar-separator" data-sidebar="separator"
       class={cn('mx-2 w-auto bg-sidebar-border', klass as string, className)}
       {...props}
     />
@@ -329,7 +365,7 @@ export const SidebarContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivE
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
-      data-sidebar="content"
+      data-slot="sidebar-content" data-sidebar="content"
       class={cn(
         'flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden',
         klass as string,
@@ -345,7 +381,7 @@ export const SidebarGroup = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEle
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
-      data-sidebar="group"
+      data-slot="sidebar-group" data-sidebar="group"
       class={cn('relative flex w-full min-w-0 flex-col p-2', klass as string, className)}
       {...props}
     />
@@ -357,7 +393,7 @@ export const SidebarGroupLabel = forwardRef<HTMLDivElement, HTMLAttributes<HTMLD
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
-      data-sidebar="group-label"
+      data-slot="sidebar-group-label" data-sidebar="group-label"
       class={cn(
         'duration-200 flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium text-sidebar-foreground/70 outline-none ring-sidebar-ring transition-[margin,opa] ease-linear focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0 group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0',
         klass as string,
@@ -373,7 +409,7 @@ export const SidebarGroupContent = forwardRef<HTMLDivElement, HTMLAttributes<HTM
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
-      data-sidebar="group-content"
+      data-slot="sidebar-group-content" data-sidebar="group-content"
       class={cn('w-full text-sm', klass as string, className)}
       {...props}
     />
@@ -385,7 +421,7 @@ export const SidebarMenu = forwardRef<HTMLUListElement, HTMLAttributes<HTMLUList
   ({ class: klass, className, ...props }, ref) => (
     <ul
       ref={ref as Ref<HTMLUListElement>}
-      data-sidebar="menu"
+      data-slot="sidebar-menu" data-sidebar="menu"
       class={cn('flex w-full min-w-0 flex-col gap-1', klass as string, className)}
       {...props}
     />
@@ -397,7 +433,7 @@ export const SidebarMenuItem = forwardRef<HTMLLIElement, HTMLAttributes<HTMLLIEl
   ({ class: klass, className, ...props }, ref) => (
     <li
       ref={ref as Ref<HTMLLIElement>}
-      data-sidebar="menu-item"
+      data-slot="sidebar-menu-item" data-sidebar="menu-item"
       class={cn('group/menu-item relative', klass as string, className)}
       {...props}
     />
@@ -417,7 +453,7 @@ export const SidebarMenuAction = forwardRef<HTMLButtonElement, SidebarMenuAction
       <Comp
         ref={ref as Ref<HTMLButtonElement>}
         type={asChild ? undefined : (type ?? 'button')}
-        data-sidebar="menu-action"
+        data-slot="sidebar-menu-action" data-sidebar="menu-action"
         class={cn(
           'absolute right-1 top-1.5 flex aspect-square w-5 items-center justify-center rounded-md p-0 text-sidebar-foreground outline-none ring-sidebar-ring transition-transform hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 peer-hover/menu-button:text-sidebar-accent-foreground [&>svg]:size-4 [&>svg]:shrink-0',
           'after:absolute after:-inset-2 md:after:hidden',
@@ -472,7 +508,7 @@ export const SidebarMenuButton = forwardRef<HTMLButtonElement, SidebarMenuButton
       <Comp
         ref={ref as Ref<HTMLButtonElement>}
         type={asChild ? undefined : (type ?? 'button')}
-        data-sidebar="menu-button"
+        data-slot="sidebar-menu-button" data-sidebar="menu-button"
         data-size={size}
         data-active={isActive}
         class={cn(sidebarMenuButtonVariants({ variant, size }), klass as string, className)}
@@ -498,7 +534,7 @@ export const SidebarMenuSub = forwardRef<HTMLUListElement, HTMLAttributes<HTMLUL
   ({ class: klass, className, ...props }, ref) => (
     <ul
       ref={ref as Ref<HTMLUListElement>}
-      data-sidebar="menu-sub"
+      data-slot="sidebar-menu-sub" data-sidebar="menu-sub"
       class={cn(
         'mx-3.5 flex min-w-0 translate-x-px flex-col gap-1 border-l border-sidebar-border px-2.5 py-0.5',
         'group-data-[collapsible=icon]:hidden',
@@ -524,7 +560,7 @@ export const SidebarMenuSubButton = forwardRef<
   return (
     <Comp
       ref={ref as Ref<HTMLAnchorElement>}
-      data-sidebar="menu-sub-button"
+      data-slot="sidebar-menu-sub-button" data-sidebar="menu-sub-button"
       data-size={size}
       data-active={isActive}
       class={cn(
@@ -549,7 +585,7 @@ export function SidebarMenuSkeleton({
 }: HTMLAttributes<HTMLDivElement> & { showIcon?: boolean }) {
   return (
     <div
-      data-sidebar="menu-skeleton"
+      data-slot="sidebar-menu-skeleton" data-sidebar="menu-skeleton"
       class={cn('flex h-8 items-center gap-2 rounded-md px-2', klass as string, className)}
       {...props}
     >

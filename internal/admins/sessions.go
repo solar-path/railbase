@@ -207,6 +207,20 @@ func (s *SessionStore) Refresh(ctx context.Context, oldTok token.Token, ip, user
 	}, nil
 }
 
+// RevokeAllFor soft-deletes every live session belonging to the admin.
+// Used after a successful password reset: invalidates any cookie that
+// might be in the hands of an attacker who phished the old password.
+// Returns the number of sessions revoked (zero is fine — no live
+// session is not an error).
+func (s *SessionStore) RevokeAllFor(ctx context.Context, adminID uuid.UUID) (int64, error) {
+	const q = `UPDATE _admin_sessions SET revoked_at = $2 WHERE admin_id = $1 AND revoked_at IS NULL`
+	tag, err := s.pool.Exec(ctx, q, adminID, clock.Now())
+	if err != nil {
+		return 0, fmt.Errorf("admin session: revoke-all: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // Revoke soft-deletes a session. Idempotent — the handler should
 // return 204 either way.
 func (s *SessionStore) Revoke(ctx context.Context, tok token.Token) error {

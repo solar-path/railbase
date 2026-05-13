@@ -28,7 +28,7 @@ function countryHint(field: FieldSpec): string | null {
 export function TaxIdCell({ value }: { value: unknown }) {
   if (value == null || value === "") return null;
   const s = String(value);
-  return <span className="rb-mono text-xs whitespace-nowrap">{s}</span>;
+  return <span className="font-mono text-xs whitespace-nowrap">{s}</span>;
 }
 
 export function TaxIdInput({
@@ -76,18 +76,18 @@ export function TaxIdInput({
         autoCapitalize="characters"
         autoCorrect="off"
         className={
-          "mt-1 w-full rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +
+          "mt-1 w-full rounded border px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 " +
           (err
-            ? "border-red-400 focus:ring-red-500"
-            : "border-neutral-300 focus:ring-neutral-900")
+            ? "border-destructive/40 focus:ring-destructive"
+            : "border-input focus:ring-ring")
         }
       />
       {hint ? (
-        <p className="mt-0.5 text-xs text-neutral-500">
-          country hint: <span className="rb-mono">{hint}</span>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          country hint: <span className="font-mono">{hint}</span>
         </p>
       ) : null}
-      {err ? <p className="mt-0.5 text-xs text-red-600">{err}</p> : null}
+      {err ? <p className="mt-0.5 text-xs text-destructive">{err}</p> : null}
     </div>
   );
 }

@@ -25,12 +25,14 @@ export function RatingCell({ value }: { value: unknown }) {
   const n = coerce(value);
   return (
     <span
-      className="inline-block rb-mono text-sm text-amber-500 whitespace-nowrap"
+      // gold-star icon palette is iconic; keep amber literal
+      // eslint-disable-next-line railbase/no-hardcoded-tw-color
+      className="inline-block font-mono text-sm text-amber-500 whitespace-nowrap"
       title={n === 0 ? "unrated" : `${n} / 5`}
       aria-label={n === 0 ? "unrated" : `${n} out of 5`}
     >
       <span>{FILLED.repeat(n)}</span>
-      <span className="text-neutral-300">{EMPTY.repeat(5 - n)}</span>
+      <span className="text-muted-foreground">{EMPTY.repeat(5 - n)}</span>
     </span>
   );
 }
@@ -73,7 +75,9 @@ export function RatingInput({
               }}
               className={
                 "px-0.5 text-lg leading-none focus:outline-none " +
-                (filled ? "text-amber-500" : "text-neutral-300 hover:text-amber-300")
+                // gold-star icon palette is iconic; keep amber literal
+                // eslint-disable-next-line railbase/no-hardcoded-tw-color
+                (filled ? "text-amber-500" : "text-muted-foreground hover:text-amber-300")
               }
               aria-label={`${i} star${i === 1 ? "" : "s"}`}
               aria-checked={committed === i}
@@ -91,12 +95,12 @@ export function RatingInput({
             setCommitted(0);
             onChange(null);
           }}
-          className="text-xs text-neutral-500 hover:text-neutral-700 underline"
+          className="text-xs text-muted-foreground hover:text-foreground underline"
         >
           clear
         </button>
       ) : (
-        <span className="text-xs text-neutral-400">unrated</span>
+        <span className="text-xs text-muted-foreground">unrated</span>
       )}
     </div>
   );

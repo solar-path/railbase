@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import { Pager } from "../layout/pager";
+import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
@@ -97,19 +98,19 @@ export function NotificationsScreen() {
     : [];
 
   return (
-    <div className="space-y-4">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Notifications</h1>
-          <p className="text-sm text-muted-foreground">
+    <AdminPage>
+      <AdminPage.Header
+        title="Notifications"
+        description={
+          <>
             {stats
               ? `${stats.total} delivered (${stats.unread} unread). `
               : ""}
             Cross-user log of persisted notifications. Showing newest first.
-          </p>
-        </div>
-        <Pager page={page} totalPages={totalPages} onChange={setPage} />
-      </header>
+          </>
+        }
+        actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
+      />
 
       {stats ? (
         <div className="flex gap-2 items-baseline flex-wrap">
@@ -119,7 +120,7 @@ export function NotificationsScreen() {
               variant="secondary"
               title={`${n} notifications with kind=${k}`}
             >
-              <span className="rb-mono">{k}</span>
+              <span className="font-mono">{k}</span>
               <span className="text-muted-foreground"> · {n}</span>
             </Badge>
           ))}
@@ -139,7 +140,7 @@ export function NotificationsScreen() {
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+      <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
           <span className="text-muted-foreground">kind</span>
           <Input
@@ -147,7 +148,7 @@ export function NotificationsScreen() {
             value={kindInput}
             onInput={(e) => setKindInput(e.currentTarget.value)}
             placeholder="exact match"
-            className="w-56 h-8 rb-mono text-xs"
+            className="w-56 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
@@ -170,7 +171,7 @@ export function NotificationsScreen() {
             value={userIdInput}
             onInput={(e) => setUserIdInput(e.currentTarget.value)}
             placeholder="UUID"
-            className="w-64 h-8 rb-mono text-xs"
+            className="w-64 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
@@ -196,8 +197,9 @@ export function NotificationsScreen() {
             clear
           </Button>
         ) : null}
-      </div>
+      </AdminPage.Toolbar>
 
+      <AdminPage.Body>
       <Card>
         <CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -220,10 +222,10 @@ export function NotificationsScreen() {
                       onClick={() => setExpandedId(isOpen ? null : n.id)}
                       className="cursor-pointer"
                     >
-                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
                         {n.created_at}
                       </TableCell>
-                      <TableCell className="rb-mono">{n.kind}</TableCell>
+                      <TableCell className="font-mono">{n.kind}</TableCell>
                       <TableCell>
                         <Badge
                           variant="outline"
@@ -233,15 +235,15 @@ export function NotificationsScreen() {
                         </Badge>
                       </TableCell>
                       <TableCell className="max-w-md truncate">{n.title}</TableCell>
-                      <TableCell className="rb-mono text-xs" title={n.user_id}>
+                      <TableCell className="font-mono text-xs" title={n.user_id}>
                         {n.user_id.slice(0, 8)}…
                       </TableCell>
                       <TableCell>
                         {n.read_at ? (
                           <span className="text-xs text-muted-foreground">read</span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
-                            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+                          <span className="inline-flex items-center gap-1 text-xs text-primary">
+                            <span className="inline-block w-2 h-2 rounded-full bg-primary" />
                             unread
                           </span>
                         )}
@@ -252,22 +254,22 @@ export function NotificationsScreen() {
                         <TableCell colSpan={6} className="bg-muted">
                           <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 p-3 text-xs">
                             <dt className="text-muted-foreground">id</dt>
-                            <dd className="rb-mono">{n.id}</dd>
+                            <dd className="font-mono">{n.id}</dd>
                             <dt className="text-muted-foreground">user_id</dt>
-                            <dd className="rb-mono">{n.user_id}</dd>
+                            <dd className="font-mono">{n.user_id}</dd>
                             <dt className="text-muted-foreground">tenant_id</dt>
-                            <dd className="rb-mono">{n.tenant_id ?? "—"}</dd>
+                            <dd className="font-mono">{n.tenant_id ?? "—"}</dd>
                             <dt className="text-muted-foreground">priority</dt>
-                            <dd className="rb-mono">{n.priority}</dd>
+                            <dd className="font-mono">{n.priority}</dd>
                             <dt className="text-muted-foreground">read_at</dt>
-                            <dd className="rb-mono">{n.read_at ?? "—"}</dd>
+                            <dd className="font-mono">{n.read_at ?? "—"}</dd>
                             <dt className="text-muted-foreground">expires_at</dt>
-                            <dd className="rb-mono">{n.expires_at ?? "—"}</dd>
+                            <dd className="font-mono">{n.expires_at ?? "—"}</dd>
                             {n.body ? (
                               <>
                                 <dt className="text-muted-foreground self-start">body</dt>
                                 <dd>
-                                  <pre className="rb-mono text-xs text-foreground whitespace-pre-wrap break-all m-0">
+                                  <pre className="font-mono text-xs text-foreground whitespace-pre-wrap break-all m-0">
                                     {n.body}
                                   </pre>
                                 </dd>
@@ -275,7 +277,7 @@ export function NotificationsScreen() {
                             ) : null}
                             <dt className="text-muted-foreground self-start">payload</dt>
                             <dd>
-                              <pre className="rb-mono text-xs text-foreground whitespace-pre-wrap break-all m-0">
+                              <pre className="font-mono text-xs text-foreground whitespace-pre-wrap break-all m-0">
                                 {JSON.stringify(n.payload ?? {}, null, 2)}
                               </pre>
                             </dd>
@@ -297,7 +299,8 @@ export function NotificationsScreen() {
           </Table>
         </CardContent>
       </Card>
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }
 
@@ -306,8 +309,8 @@ export function NotificationsScreen() {
 function channelBadgeClass(c: string): string {
   switch (c) {
     case "inapp": return "border-input bg-muted text-foreground";
-    case "email": return "border-sky-200 bg-sky-50 text-sky-700";
-    case "push":  return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "email": return "border-primary/40 bg-primary/10 text-primary";
+    case "push":  return "border-primary/40 bg-primary/10 text-primary";
     default:      return "border-input bg-muted text-foreground";
   }
 }

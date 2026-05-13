@@ -28,9 +28,9 @@ export function CronCell({ value }: { value: unknown }) {
   const s = canonicalise(String(value));
   const label = COMMON_PATTERNS[s];
   return (
-    <span className="rb-mono text-xs whitespace-nowrap" title={s}>
+    <span className="font-mono text-xs whitespace-nowrap" title={s}>
       {s}
-      {label ? <span className="text-neutral-400"> · {label}</span> : null}
+      {label ? <span className="text-muted-foreground"> · {label}</span> : null}
     </span>
   );
 }
@@ -78,16 +78,16 @@ export function CronInput({
         spellcheck={false}
         autoCorrect="off"
         className={
-          "mt-1 w-full rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +
+          "mt-1 w-full rounded border px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 " +
           (err
-            ? "border-red-400 focus:ring-red-500"
-            : "border-neutral-300 focus:ring-neutral-900")
+            ? "border-destructive/40 focus:ring-destructive"
+            : "border-input focus:ring-ring")
         }
       />
       {err ? (
-        <p className="mt-0.5 text-xs text-red-600">{err}</p>
+        <p className="mt-0.5 text-xs text-destructive">{err}</p>
       ) : (
-        <p className="mt-0.5 text-xs text-neutral-500">e.g. 0 4 * * * (daily at 4am)</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">e.g. 0 4 * * * (daily at 4am)</p>
       )}
     </div>
   );

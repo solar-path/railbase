@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import { Pager } from "../layout/pager";
+import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
@@ -14,6 +15,7 @@ import {
   TableRow,
 } from "@/lib/ui/table.ui";
 import { Card, CardContent } from "@/lib/ui/card.ui";
+import { Shield, Download } from "@/lib/ui/icons";
 
 // Audit log viewer — paginated, filterable list of `_audit_log` rows.
 // Backend endpoint: GET /api/_admin/audit (v0.8 list, v1.7.11 filters).
@@ -86,19 +88,28 @@ export function AuditScreen() {
   const totalPages = Math.max(1, Math.ceil(total / perPage));
 
   return (
-    <div className="space-y-4">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Audit log</h1>
-          <p className="text-sm text-muted-foreground">
-            {total} event{total === 1 ? "" : "s"} total. Append-only chain — verify with{" "}
-            <code className="rb-mono">railbase audit verify</code>.
-          </p>
-        </div>
-        <Pager page={page} totalPages={totalPages} onChange={setPage} />
-      </header>
+    <AdminPage>
+      <AdminPage.Header
+        title={
+          <span className="inline-flex items-center gap-2">
+            <Shield className="h-5 w-5 text-primary" />
+            Audit log
+            <Badge variant="outline" className="font-mono text-[10px] uppercase tracking-wide">
+              compliance
+            </Badge>
+          </span>
+        }
+        description={
+          <>
+            {total} event{total === 1 ? "" : "s"} total. Append-only hash chain —
+            verify integrity with <code className="font-mono">railbase audit verify</code>.
+            Every system_admin action is recorded here for forensic review.
+          </>
+        }
+        actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
+      />
 
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+      <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
           <span className="text-muted-foreground">event</span>
           <Input
@@ -106,7 +117,7 @@ export function AuditScreen() {
             value={eventInput}
             onInput={(e) => setEventInput(e.currentTarget.value)}
             placeholder="substring (e.g. auth.signin)"
-            className="w-56 h-8 rb-mono text-xs"
+            className="w-56 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
@@ -130,7 +141,7 @@ export function AuditScreen() {
             value={userIdInput}
             onInput={(e) => setUserIdInput(e.currentTarget.value)}
             placeholder="UUID exact match"
-            className="w-64 h-8 rb-mono text-xs"
+            className="w-64 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
@@ -139,7 +150,7 @@ export function AuditScreen() {
             type="datetime-local"
             value={since}
             onInput={(e) => setSince(e.currentTarget.value)}
-            className="h-8 rb-mono text-xs w-auto"
+            className="h-8 font-mono text-xs w-auto"
             title="RFC3339 lower bound on the row's `at` column"
           />
         </label>
@@ -149,7 +160,7 @@ export function AuditScreen() {
             type="datetime-local"
             value={until}
             onInput={(e) => setUntil(e.currentTarget.value)}
-            className="h-8 rb-mono text-xs w-auto"
+            className="h-8 font-mono text-xs w-auto"
             title="RFC3339 upper bound on the row's `at` column"
           />
         </label>
@@ -160,7 +171,7 @@ export function AuditScreen() {
             value={errorCodeInput}
             onInput={(e) => setErrorCodeInput(e.currentTarget.value)}
             placeholder="substring"
-            className="w-48 h-8 rb-mono text-xs"
+            className="w-48 h-8 font-mono text-xs"
           />
         </label>
         {anyFilter ? (
@@ -182,8 +193,35 @@ export function AuditScreen() {
             clear
           </Button>
         ) : null}
-      </div>
+        {/* v1.7.x §3.15 Block A — XLSX export with the same filter
+            vocabulary. We rely on the admin session cookie riding
+            with window.location so the browser handles the download
+            natively (no fetch + blob + revokeObjectURL dance). */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            const params = new URLSearchParams();
+            if (event) params.set("event", event);
+            if (outcome) params.set("outcome", outcome);
+            if (userId) params.set("user_id", userId);
+            const sinceRFC = toRFC3339OrUndefined(since);
+            if (sinceRFC) params.set("since", sinceRFC);
+            const untilRFC = toRFC3339OrUndefined(until);
+            if (untilRFC) params.set("until", untilRFC);
+            if (errorCode) params.set("error_code", errorCode);
+            const qs = params.toString();
+            const url = "/api/_admin/audit/export.xlsx" + (qs ? "?" + qs : "");
+            window.location.href = url;
+          }}
+          title="Export the current filter slice as XLSX (cap 100k rows)"
+        >
+          <Download className="h-3.5 w-3.5 mr-1" />
+          Export XLSX
+        </Button>
+      </AdminPage.Toolbar>
 
+      <AdminPage.Body>
       <Card>
         <CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -201,21 +239,21 @@ export function AuditScreen() {
             <TableBody>
               {(q.data?.items ?? []).map((e) => (
                 <TableRow key={e.seq}>
-                  <TableCell className="rb-mono text-muted-foreground">{e.seq}</TableCell>
-                  <TableCell className="rb-mono text-xs text-muted-foreground">{e.at}</TableCell>
-                  <TableCell className="rb-mono">{e.event}</TableCell>
+                  <TableCell className="font-mono text-muted-foreground">{e.seq}</TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">{e.at}</TableCell>
+                  <TableCell className="font-mono">{e.event}</TableCell>
                   <TableCell>
                     <Badge variant={outcomeVariant(e.outcome)}>{e.outcome}</Badge>
                   </TableCell>
-                  <TableCell className="rb-mono text-xs">
+                  <TableCell className="font-mono text-xs">
                     {e.user_id ? (
                       <span title={e.user_collection ?? ""}>{e.user_id.slice(0, 8)}…</span>
                     ) : (
                       "—"
                     )}
                   </TableCell>
-                  <TableCell className="rb-mono text-xs">{e.ip ?? "—"}</TableCell>
-                  <TableCell className="rb-mono text-xs text-amber-700">{e.error_code ?? ""}</TableCell>
+                  <TableCell className="font-mono text-xs">{e.ip ?? "—"}</TableCell>
+                  <TableCell className="font-mono text-xs text-foreground">{e.error_code ?? ""}</TableCell>
                 </TableRow>
               ))}
               {q.data?.items.length === 0 ? (
@@ -229,7 +267,8 @@ export function AuditScreen() {
           </Table>
         </CardContent>
       </Card>
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }
 

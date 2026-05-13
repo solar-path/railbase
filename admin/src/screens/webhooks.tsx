@@ -5,6 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { adminAPI } from "../api/admin";
 import type { Webhook, Delivery } from "../api/types";
+import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Textarea } from "@/lib/ui/textarea.ui";
@@ -108,18 +109,18 @@ export function WebhooksScreen() {
   const items = q.data?.items ?? [];
 
   return (
-    <div className="space-y-4">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Webhooks</h1>
-          <p className="text-sm text-muted-foreground">
+    <AdminPage>
+      <AdminPage.Header
+        title="Webhooks"
+        description={
+          <>
             {items.length} webhook{items.length === 1 ? "" : "s"}. Outbound
             event subscribers — every matching record event triggers an
             HTTP POST signed with HMAC-SHA256.
-          </p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>+ Create webhook</Button>
-      </header>
+          </>
+        }
+        actions={<Button onClick={() => setCreateOpen(true)}>+ Create webhook</Button>}
+      />
 
       {createdSecret ? (
         <CreatedBanner
@@ -129,6 +130,7 @@ export function WebhooksScreen() {
         />
       ) : null}
 
+      <AdminPage.Body>
       {q.isLoading ? (
         <div className="text-sm text-muted-foreground">Loading…</div>
       ) : items.length === 0 ? (
@@ -157,8 +159,8 @@ export function WebhooksScreen() {
                         className="cursor-pointer"
                       >
                         <TableCell className="font-medium">{w.name}</TableCell>
-                        <TableCell className="rb-mono text-xs text-muted-foreground max-w-xs truncate">
-                          <code className="rb-mono">{w.url}</code>
+                        <TableCell className="font-mono text-xs text-muted-foreground max-w-xs truncate">
+                          <code className="font-mono">{w.url}</code>
                         </TableCell>
                         <TableCell>
                           <EventsCell events={w.events} />
@@ -166,7 +168,7 @@ export function WebhooksScreen() {
                         <TableCell>
                           <StatusBadge active={w.active} />
                         </TableCell>
-                        <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                        <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
                           {w.created_at}
                         </TableCell>
                         <TableCell className="text-right whitespace-nowrap">
@@ -177,7 +179,7 @@ export function WebhooksScreen() {
                                 size="sm"
                                 onClick={() => pauseM.mutate(w.id)}
                                 disabled={pauseM.isPending}
-                                className="border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
+                                className="border-input bg-muted text-foreground hover:bg-muted/70"
                               >
                                 pause
                               </Button>
@@ -187,7 +189,7 @@ export function WebhooksScreen() {
                                 size="sm"
                                 onClick={() => resumeM.mutate(w.id)}
                                 disabled={resumeM.isPending}
-                                className="border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                                className="border-primary/40 bg-primary/10 text-primary hover:bg-primary/20"
                               >
                                 resume
                               </Button>
@@ -221,6 +223,7 @@ export function WebhooksScreen() {
           </CardContent>
         </Card>
       )}
+      </AdminPage.Body>
 
       {createOpen ? (
         <CreateModal
@@ -230,7 +233,7 @@ export function WebhooksScreen() {
           onSubmit={(input) => createM.mutate(input)}
         />
       ) : null}
-    </div>
+    </AdminPage>
   );
 }
 
@@ -242,7 +245,7 @@ function EventsCell({ events }: { events: string[] }) {
   const visible = events.slice(0, 3);
   const overflow = events.length - visible.length;
   return (
-    <div className="rb-mono text-xs flex flex-wrap gap-1">
+    <div className="font-mono text-xs flex flex-wrap gap-1">
       {visible.map((e) => (
         <Badge key={e} variant="secondary">{e}</Badge>
       ))}
@@ -257,14 +260,14 @@ function StatusBadge({ active }: { active: boolean }) {
   return active ? (
     <Badge
       variant="outline"
-      className="border-emerald-200 bg-emerald-50 text-emerald-700"
+      className="border-primary/40 bg-primary/10 text-primary"
     >
       active
     </Badge>
   ) : (
     <Badge
       variant="outline"
-      className="border-amber-200 bg-amber-50 text-amber-700"
+      className="border-input bg-muted text-foreground"
     >
       paused
     </Badge>
@@ -300,36 +303,36 @@ function DeliveryTimeline({ webhookID }: { webhookID: string }) {
       <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">
         Recent deliveries
       </div>
-      <table className="w-full text-xs">
-        <thead className="text-muted-foreground">
-          <tr className="text-left">
-            <th className="pr-3 py-1">created</th>
-            <th className="pr-3 py-1">event</th>
-            <th className="pr-3 py-1">status</th>
-            <th className="pr-3 py-1">code</th>
-            <th className="pr-3 py-1">attempt</th>
-            <th className="pr-3 py-1">error</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table className="text-xs">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="h-8 px-3 py-1">created</TableHead>
+            <TableHead className="h-8 px-3 py-1">event</TableHead>
+            <TableHead className="h-8 px-3 py-1">status</TableHead>
+            <TableHead className="h-8 px-3 py-1">code</TableHead>
+            <TableHead className="h-8 px-3 py-1">attempt</TableHead>
+            <TableHead className="h-8 px-3 py-1">error</TableHead>
+            <TableHead />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {items.map((d) => (
-            <tr key={d.id} className="border-t border-border">
-              <td className="rb-mono pr-3 py-1 whitespace-nowrap text-muted-foreground">
+            <TableRow key={d.id}>
+              <TableCell className="font-mono px-3 py-1 whitespace-nowrap text-muted-foreground">
                 {d.created_at}
-              </td>
-              <td className="rb-mono pr-3 py-1 whitespace-nowrap">{d.event}</td>
-              <td className="pr-3 py-1">
+              </TableCell>
+              <TableCell className="font-mono px-3 py-1 whitespace-nowrap">{d.event}</TableCell>
+              <TableCell className="px-3 py-1">
                 <DeliveryStatusBadge status={d.status} />
-              </td>
-              <td className="rb-mono pr-3 py-1 whitespace-nowrap">
+              </TableCell>
+              <TableCell className="font-mono px-3 py-1 whitespace-nowrap">
                 {d.response_code ?? "—"}
-              </td>
-              <td className="rb-mono pr-3 py-1 whitespace-nowrap">{d.attempt}</td>
-              <td className="pr-3 py-1 text-destructive max-w-xs truncate">
+              </TableCell>
+              <TableCell className="font-mono px-3 py-1 whitespace-nowrap">{d.attempt}</TableCell>
+              <TableCell className="px-3 py-1 text-destructive max-w-xs truncate">
                 {d.error_msg ?? ""}
-              </td>
-              <td className="text-right">
+              </TableCell>
+              <TableCell className="px-3 py-1 text-right">
                 {isFailed(d) ? (
                   <Button
                     variant="outline"
@@ -340,11 +343,11 @@ function DeliveryTimeline({ webhookID }: { webhookID: string }) {
                     replay
                   </Button>
                 ) : null}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }
@@ -361,11 +364,11 @@ function DeliveryStatusBadge({ status }: { status: string }) {
   const cls = (() => {
     switch (status) {
       case "success":
-        return "border-emerald-200 bg-emerald-50 text-emerald-700";
+        return "border-primary/40 bg-primary/10 text-primary";
       case "pending":
         return "border-input bg-muted text-foreground";
       case "retry":
-        return "border-amber-200 bg-amber-50 text-amber-700";
+        return "border-input bg-muted text-foreground";
       case "dead":
         return "border-destructive/30 bg-destructive/10 text-destructive";
       default:
@@ -403,42 +406,42 @@ function CreatedBanner({
     }
   };
   return (
-    <Card className="border-2 border-emerald-300 bg-emerald-50">
+    <Card className="border-2 border-primary/40 bg-primary/10">
       <CardContent className="p-4 space-y-2">
         <div className="flex items-start justify-between">
           <div>
-            <div className="font-semibold text-emerald-900">
+            <div className="font-semibold text-primary">
               Webhook created — copy the secret now, it won't be shown again.
             </div>
-            <div className="text-xs text-emerald-800 mt-1">
-              <span className="rb-mono">{record.name}</span>
+            <div className="text-xs text-primary mt-1">
+              <span className="font-mono">{record.name}</span>
               {" — "}
-              <code className="rb-mono">{record.url}</code>
+              <code className="font-mono">{record.url}</code>
             </div>
           </div>
           <Button
             variant="ghost"
             size="sm"
             onClick={onDismiss}
-            className="text-emerald-700 hover:text-emerald-900"
+            className="text-primary hover:text-primary/80"
           >
             dismiss
           </Button>
         </div>
         <div className="flex items-stretch gap-2">
-          <code className="flex-1 rounded border border-emerald-300 bg-background px-3 py-2 rb-mono text-xs break-all">
+          <code className="flex-1 rounded border border-primary/40 bg-background px-3 py-2 font-mono text-xs break-all">
             {secret}
           </code>
           <Button
             variant="outline"
             size="sm"
             onClick={copy}
-            className="border-emerald-400 bg-background text-emerald-800 hover:bg-emerald-100"
+            className="border-primary/40 bg-background text-primary hover:bg-primary/10"
           >
             {copied ? "Copied!" : "Copy"}
           </Button>
         </div>
-        <div className="text-xs text-emerald-800">
+        <div className="text-xs text-primary">
           Sign incoming payloads with HMAC-SHA256 using this key. See
           docs/21-webhooks.md for the signature header format.
         </div>
@@ -532,7 +535,7 @@ function CreateModal({
                   <Input
                     type="text"
                     placeholder="https://example.com/hooks/railbase"
-                    className="rb-mono"
+                    className="font-mono"
                     {...field}
                   />
                 </FormControl>
@@ -550,7 +553,7 @@ function CreateModal({
                   <Textarea
                     rows={3}
                     placeholder={"record.created.posts\nrecord.*.tags"}
-                    className="rb-mono"
+                    className="font-mono"
                     value={field.value.join("\n")}
                     onInput={(e) => {
                       const raw = e.currentTarget.value;
@@ -566,8 +569,8 @@ function CreateModal({
                   />
                 </FormControl>
                 <FormDescription className="text-[11px]">
-                  Dotted patterns; <span className="rb-mono">*</span> matches one segment.
-                  See <span className="rb-mono">record.*.posts</span> for every verb on a collection.
+                  Dotted patterns; <span className="font-mono">*</span> matches one segment.
+                  See <span className="font-mono">record.*.posts</span> for every verb on a collection.
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -627,7 +630,7 @@ function ModalShell({
 }) {
   return (
     <div
-      className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4"
+      className="fixed inset-0 z-40 bg-foreground/40 flex items-center justify-center p-4"
       onClick={onClose}
     >
       <Card

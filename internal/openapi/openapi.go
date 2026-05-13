@@ -220,11 +220,11 @@ type XMeta struct {
 }
 
 // Options tweaks Emit's behaviour. Zero value is fine — Title defaults
-// to "Railbase API", ServerURL to "http://localhost:8090".
+// to "Railbase API", ServerURL to "http://localhost:8095".
 type Options struct {
 	Title       string
 	Description string
-	// ServerURL is the public base URL. Default "http://localhost:8090"
+	// ServerURL is the public base URL. Default "http://localhost:8095"
 	// matches the dev binding so the spec is immediately runnable in
 	// Swagger UI / Postman without editing.
 	ServerURL string
@@ -245,7 +245,7 @@ func Emit(specs []builder.CollectionSpec, opts Options) (*Spec, error) {
 		opts.Title = "Railbase API"
 	}
 	if opts.ServerURL == "" {
-		opts.ServerURL = "http://localhost:8090"
+		opts.ServerURL = "http://localhost:8095"
 	}
 
 	sorted := append([]builder.CollectionSpec(nil), specs...)

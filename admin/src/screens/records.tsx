@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "wouter-preact";
 import { adminAPI, recordsAPI } from "../api/admin";
+import { AdminPage } from "../layout/admin_page";
 import type {
   BatchResponse,
   CollectionSpec,
@@ -158,7 +159,7 @@ export function RecordsScreen() {
   if (!spec) {
     return (
       <p className="text-sm text-destructive">
-        Collection <code className="rb-mono">{name}</code> not found.
+        Collection <code className="font-mono">{name}</code> not found.
       </p>
     );
   }
@@ -213,26 +214,29 @@ export function RecordsScreen() {
   };
 
   return (
-    <div className="space-y-4">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold rb-mono">{name}</h1>
-          <p className="text-sm text-muted-foreground">
+    <AdminPage>
+      <AdminPage.Header
+        title={<span className="font-mono">{name}</span>}
+        description={
+          <>
             {total} record{total === 1 ? "" : "s"}
             {spec.auth ? " · auth collection (read-only here)" : ""}
             {spec.tenant ? " · tenant-scoped" : ""}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {spec.auth ? null : (
-            <Button asChild size="sm">
-              <Link href={`/data/${name}/new`}>+ New</Link>
-            </Button>
-          )}
-          <Pager page={page} totalPages={totalPages} onChange={setPage} />
-        </div>
-      </header>
+          </>
+        }
+        actions={
+          <div className="flex items-center gap-2">
+            {spec.auth ? null : (
+              <Button asChild size="sm">
+                <Link href={`/data/${name}/new`}>+ New</Link>
+              </Button>
+            )}
+            <Pager page={page} totalPages={totalPages} onChange={setPage} />
+          </div>
+        }
+      />
 
+      <AdminPage.Body className="space-y-4">
       <Card className="p-3">
         <div className="flex flex-wrap items-end gap-3">
           <div className="block flex-1 min-w-64 space-y-0.5">
@@ -243,7 +247,7 @@ export function RecordsScreen() {
               value={filter}
               onInput={(e) => setFilter(e.currentTarget.value)}
               placeholder={`status='published' && @request.auth.id != ''`}
-              className="h-8 text-xs rb-mono"
+              className="h-8 text-xs font-mono"
             />
           </div>
           <div className="block space-y-0.5">
@@ -254,15 +258,15 @@ export function RecordsScreen() {
               value={sort}
               onInput={(e) => setSort(e.currentTarget.value)}
               placeholder="-created,name"
-              className="h-8 w-48 text-xs rb-mono"
+              className="h-8 w-48 text-xs font-mono"
             />
           </div>
         </div>
       </Card>
 
       {selected.size > 0 ? (
-        <div className="sticky top-0 z-10 flex items-center gap-3 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
-          <span className="font-medium text-blue-900">{selected.size} selected</span>
+        <div className="sticky top-0 z-10 flex items-center gap-3 rounded border border-primary/40 bg-primary/10 px-3 py-2 text-sm">
+          <span className="font-medium text-primary">{selected.size} selected</span>
           <Button
             type="button"
             variant="destructive"
@@ -280,7 +284,7 @@ export function RecordsScreen() {
               setSelected(new Set());
               setBulkBanner(null);
             }}
-            className="h-auto px-0 text-xs text-blue-700"
+            className="h-auto px-0 text-xs text-primary"
           >
             Clear selection
           </Button>
@@ -314,7 +318,7 @@ export function RecordsScreen() {
               const rowId = (row.id as string) ?? "";
               const isSelected = rowId && selected.has(rowId);
               return (
-                <TableRow key={rowId || i} className={isSelected ? "bg-blue-50/40" : ""}>
+                <TableRow key={rowId || i} className={isSelected ? "bg-primary/10" : ""}>
                   <TableCell>
                     <Checkbox
                       aria-label={`Select row ${rowId}`}
@@ -359,7 +363,8 @@ export function RecordsScreen() {
           </TableBody>
         </Table>
       </Card>
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }
 
@@ -375,7 +380,7 @@ function listColumns(spec: CollectionSpec | null): Column[] {
   const cols: Column[] = [];
   cols.push({
     key: "id",
-    cellClass: "rb-mono text-xs text-muted-foreground",
+    cellClass: "font-mono text-xs text-muted-foreground",
     render: (v) => (typeof v === "string" ? v.slice(0, 8) + "…" : "—"),
   });
   for (const f of spec.fields) {
@@ -390,15 +395,15 @@ function listColumns(spec: CollectionSpec | null): Column[] {
   }
   cols.push({
     key: "created",
-    cellClass: "rb-mono text-xs text-muted-foreground",
+    cellClass: "font-mono text-xs text-muted-foreground",
     render: (v) => (typeof v === "string" ? v.slice(0, 19) : "—"),
   });
   return cols;
 }
 
 function cellClassFor(f: FieldSpec): string {
-  if (f.type === "number") return "text-right rb-mono";
-  if (f.type === "json") return "rb-mono text-xs";
+  if (f.type === "number") return "text-right font-mono";
+  if (f.type === "json") return "font-mono text-xs";
   // Finance is a NUMERIC string on the wire but renders right-
   // aligned tabular-num for column scanability (see FinanceCell).
   if ((f.type as string) === "finance") return "text-right";
@@ -425,12 +430,12 @@ function rendererFor(f: FieldSpec): (v: unknown) => React.ReactNode {
       return (v) => (v ? "✓" : "—");
     case "json":
       return (v) =>
-        v == null ? "—" : <span className="rb-mono">{JSON.stringify(v)}</span>;
+        v == null ? "—" : <span className="font-mono">{JSON.stringify(v)}</span>;
     case "files":
     case "multiselect":
     case "relations":
       return (v) =>
-        Array.isArray(v) ? <span className="rb-mono">{v.length} item(s)</span> : "—";
+        Array.isArray(v) ? <span className="font-mono">{v.length} item(s)</span> : "—";
     case "richtext":
       return (v) =>
         typeof v === "string" ? truncate(stripTags(v), 80) : "—";
@@ -502,7 +507,7 @@ function BulkBanner({
 }) {
   if (banner.kind === "success") {
     return (
-      <div className="flex items-center justify-between rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
+      <div className="flex items-center justify-between rounded border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-primary">
         <span>Deleted {banner.count} record{banner.count === 1 ? "" : "s"}.</span>
         <Button type="button" variant="link" size="sm" onClick={onDismiss} className="h-auto px-0 text-xs">
           dismiss
@@ -512,7 +517,7 @@ function BulkBanner({
   }
   if (banner.kind === "partial") {
     return (
-      <div className="flex items-center justify-between rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+      <div className="flex items-center justify-between rounded border border-input bg-muted px-3 py-2 text-sm text-foreground">
         <div>
           <span className="font-medium">
             {banner.ok} ok, {banner.failed.length} failed.
@@ -655,7 +660,7 @@ function InlineCell({
 
   // Compact in-cell editor classes — kit Input is h-9 by default; we
   // shrink to h-7 so the cell row doesn't grow when entering edit mode.
-  const commonClass = "h-7 w-full rounded px-1 ring-2 ring-blue-500 outline-none text-sm";
+  const commonClass = "h-7 w-full rounded px-1 ring-2 ring-ring outline-none text-sm";
 
   // Domain-type editor — the registry's edit input commits via
   // onChange (the input owns its own validation / coercion). We
@@ -667,7 +672,7 @@ function InlineCell({
   if (hasDomainRenderer(field)) {
     return (
       <div
-        className="relative ring-2 ring-blue-500 rounded px-1"
+        className="relative ring-2 ring-ring rounded px-1"
         onBlur={(e) => {
           // Close edit mode only when focus actually leaves the
           // wrapper — focus moving between the search-input and the

@@ -66,10 +66,27 @@ func (d *Deps) requireWebAuthnDeps(w http.ResponseWriter) bool {
 	return true
 }
 
+// requireWebAuthnCeremony combines the dep check with the v1.7.48
+// wizard gate. Used by the 4 ceremony handlers (register-start /
+// register-finish / login-start / login-finish). NOT used by
+// list/delete — managing already-registered credentials should remain
+// possible even after the method is disabled, so users can clean up
+// orphan passkeys without admin intervention.
+func (d *Deps) requireWebAuthnCeremony(w http.ResponseWriter, r *http.Request) bool {
+	if !d.requireWebAuthnDeps(w) {
+		return false
+	}
+	if denied := d.requireMethod(r.Context(), "auth.webauthn.enabled", "webauthn", true); denied != nil {
+		rerr.WriteJSON(w, denied)
+		return false
+	}
+	return true
+}
+
 // --- registration ---
 
 func (d *Deps) webauthnRegisterStartHandler(w http.ResponseWriter, r *http.Request) {
-	if !d.requireWebAuthnDeps(w) {
+	if !d.requireWebAuthnCeremony(w, r) {
 		return
 	}
 	collName := chi.URLParam(r, "name")
@@ -130,7 +147,7 @@ func (d *Deps) webauthnRegisterStartHandler(w http.ResponseWriter, r *http.Reque
 }
 
 func (d *Deps) webauthnRegisterFinishHandler(w http.ResponseWriter, r *http.Request) {
-	if !d.requireWebAuthnDeps(w) {
+	if !d.requireWebAuthnCeremony(w, r) {
 		return
 	}
 	collName := chi.URLParam(r, "name")
@@ -193,7 +210,7 @@ func (d *Deps) webauthnRegisterFinishHandler(w http.ResponseWriter, r *http.Requ
 // --- authentication ---
 
 func (d *Deps) webauthnLoginStartHandler(w http.ResponseWriter, r *http.Request) {
-	if !d.requireWebAuthnDeps(w) {
+	if !d.requireWebAuthnCeremony(w, r) {
 		return
 	}
 	collName := chi.URLParam(r, "name")
@@ -244,7 +261,7 @@ func (d *Deps) webauthnLoginStartHandler(w http.ResponseWriter, r *http.Request)
 }
 
 func (d *Deps) webauthnLoginFinishHandler(w http.ResponseWriter, r *http.Request) {
-	if !d.requireWebAuthnDeps(w) {
+	if !d.requireWebAuthnCeremony(w, r) {
 		return
 	}
 	collName := chi.URLParam(r, "name")

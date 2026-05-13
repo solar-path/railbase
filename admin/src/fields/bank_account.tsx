@@ -84,7 +84,7 @@ export function BankAccountCell({ value }: { value: unknown }) {
   const b = coerce(value);
   if (b.iban) {
     return (
-      <span className="rb-mono text-xs whitespace-nowrap" title={b.iban}>
+      <span className="font-mono text-xs whitespace-nowrap" title={b.iban}>
         {groupIban(b.iban)}
       </span>
     );
@@ -93,8 +93,8 @@ export function BankAccountCell({ value }: { value: unknown }) {
     const v = b[k];
     if (typeof v === "string" && v !== "") {
       return (
-        <span className="rb-mono text-xs whitespace-nowrap">
-          <span className="text-neutral-500">{LABEL[k]}:</span> {v}
+        <span className="font-mono text-xs whitespace-nowrap">
+          <span className="text-muted-foreground">{LABEL[k]}:</span> {v}
         </span>
       );
     }
@@ -128,17 +128,17 @@ export function BankAccountInput({
   };
 
   const inputCls =
-    "mt-1 w-full rounded border border-neutral-300 px-2 py-1.5 text-sm rb-mono uppercase focus:outline-none focus:ring-1 focus:ring-neutral-900";
+    "mt-1 w-full rounded border border-input px-2 py-1.5 text-sm font-mono uppercase focus:outline-none focus:ring-1 focus:ring-ring";
 
   return (
     <div className="space-y-2">
       {hint ? (
-        <p className="text-xs text-neutral-500">
-          country hint: <span className="rb-mono">{hint}</span>
+        <p className="text-xs text-muted-foreground">
+          country hint: <span className="font-mono">{hint}</span>
         </p>
       ) : null}
       <label className="block">
-        <span className="text-xs text-neutral-500">IBAN</span>
+        <span className="text-xs text-muted-foreground">IBAN</span>
         <input
           type="text"
           value={draft.iban ?? ""}
@@ -151,7 +151,7 @@ export function BankAccountInput({
         />
       </label>
       <label className="block">
-        <span className="text-xs text-neutral-500">BIC / SWIFT</span>
+        <span className="text-xs text-muted-foreground">BIC / SWIFT</span>
         <input
           type="text"
           value={draft.bic ?? ""}
@@ -164,7 +164,7 @@ export function BankAccountInput({
         />
       </label>
       <label className="block">
-        <span className="text-xs text-neutral-500">account number</span>
+        <span className="text-xs text-muted-foreground">account number</span>
         <input
           type="text"
           value={draft.accountNumber ?? ""}
@@ -178,7 +178,7 @@ export function BankAccountInput({
       </label>
       <div className="flex gap-2">
         <label className="flex-1">
-          <span className="text-xs text-neutral-500">sort code (GB)</span>
+          <span className="text-xs text-muted-foreground">sort code (GB)</span>
           <input
             type="text"
             value={draft.sortCode ?? ""}
@@ -191,7 +191,7 @@ export function BankAccountInput({
           />
         </label>
         <label className="flex-1">
-          <span className="text-xs text-neutral-500">routing # (US)</span>
+          <span className="text-xs text-muted-foreground">routing # (US)</span>
           <input
             type="text"
             value={draft.routingNumber ?? ""}

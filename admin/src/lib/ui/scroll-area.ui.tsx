@@ -6,10 +6,13 @@ export const ScrollArea = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEleme
   ({ class: klass, className, children, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
+      data-slot="scroll-area"
       class={cn('relative overflow-hidden', klass as string, className)}
       {...props}
     >
-      <div class="h-full w-full overflow-auto rounded-[inherit]">{children}</div>
+      <div data-slot="scroll-area-viewport" class="h-full w-full overflow-auto rounded-[inherit]">
+        {children}
+      </div>
     </div>
   ),
 )
@@ -22,6 +25,7 @@ export const ScrollBar = forwardRef<
   <div
     ref={ref as Ref<HTMLDivElement>}
     aria-hidden
+    data-slot="scroll-area-scrollbar"
     data-orientation={orientation}
     class={cn(
       'flex touch-none select-none transition-colors',

@@ -54,6 +54,7 @@ export const ContextMenuTrigger = forwardRef<
   return (
     <div
       ref={ref as Ref<HTMLDivElement>}
+      data-slot="context-menu-trigger"
       data-state={ctx.open ? 'open' : 'closed'}
       onContextMenu={(e: MouseEvent) => {
         onContextMenu?.(e as any)
@@ -95,6 +96,7 @@ export const ContextMenuContent = forwardRef<HTMLDivElement, HTMLAttributes<HTML
                   else if (ref) (ref as { current: HTMLDivElement | null }).current = el
                 }}
                 role="menu"
+                data-slot="context-menu-content"
                 data-state={ctx.open ? 'open' : 'closed'}
                 style={{
                   position: 'fixed',
@@ -131,6 +133,7 @@ export const ContextMenuItem = forwardRef<
       ref={ref as Ref<HTMLDivElement>}
       role="menuitem"
       tabIndex={-1}
+      data-slot="context-menu-item"
       data-disabled={disabled ? '' : undefined}
       onClick={(e: Event) => {
         onClick?.(e as any)
@@ -139,7 +142,7 @@ export const ContextMenuItem = forwardRef<
         if (!e.defaultPrevented) ctx.setOpen(false)
       }}
       class={cn(
-        'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none',
+        'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden',
         'focus:bg-accent focus:text-accent-foreground',
         'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
         inset && 'pl-8',
@@ -167,6 +170,7 @@ export const ContextMenuCheckboxItem = forwardRef<
       role="menuitemcheckbox"
       aria-checked={checked}
       tabIndex={-1}
+      data-slot="context-menu-checkbox-item"
       data-state={checked ? 'checked' : 'unchecked'}
       data-disabled={disabled ? '' : undefined}
       onClick={(e: Event) => {
@@ -176,7 +180,7 @@ export const ContextMenuCheckboxItem = forwardRef<
         ctx.setOpen(false)
       }}
       class={cn(
-        'relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none',
+        'relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-hidden',
         'focus:bg-accent focus:text-accent-foreground',
         klass as string,
         className,
@@ -219,6 +223,7 @@ export const ContextMenuRadioItem = forwardRef<
       role="menuitemradio"
       aria-checked={checked}
       tabIndex={-1}
+      data-slot="context-menu-radio-item"
       data-state={checked ? 'checked' : 'unchecked'}
       data-disabled={disabled ? '' : undefined}
       onClick={(e: Event) => {
@@ -228,7 +233,7 @@ export const ContextMenuRadioItem = forwardRef<
         ctx.setOpen(false)
       }}
       class={cn(
-        'relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none',
+        'relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-hidden',
         'focus:bg-accent focus:text-accent-foreground',
         klass as string,
         className,
@@ -250,6 +255,7 @@ export const ContextMenuLabel = forwardRef<
 >(({ class: klass, className, inset, ...props }, ref) => (
   <div
     ref={ref as Ref<HTMLDivElement>}
+    data-slot="context-menu-label"
     class={cn('px-2 py-1.5 text-sm font-semibold text-foreground', inset && 'pl-8', klass as string, className)}
     {...props}
   />
@@ -261,6 +267,7 @@ export const ContextMenuSeparator = forwardRef<HTMLDivElement, HTMLAttributes<HT
     <div
       ref={ref as Ref<HTMLDivElement>}
       role="separator"
+      data-slot="context-menu-separator"
       class={cn('-mx-1 my-1 h-px bg-border', klass as string, className)}
       {...props}
     />
@@ -275,6 +282,7 @@ export function ContextMenuShortcut({
 }: HTMLAttributes<HTMLSpanElement>) {
   return (
     <span
+      data-slot="context-menu-shortcut"
       class={cn('ml-auto text-xs tracking-widest text-muted-foreground', klass as string, className)}
       {...props}
     />
@@ -283,7 +291,7 @@ export function ContextMenuShortcut({
 
 export const ContextMenuGroup = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
   ({ class: klass, className, ...props }, ref) => (
-    <div ref={ref as Ref<HTMLDivElement>} role="group" class={cn('', klass as string, className)} {...props} />
+    <div ref={ref as Ref<HTMLDivElement>} role="group" data-slot="context-menu-group" class={cn('', klass as string, className)} {...props} />
   ),
 )
 ContextMenuGroup.displayName = 'ContextMenuGroup'

@@ -12,6 +12,7 @@ export const Separator = forwardRef<HTMLDivElement, SeparatorProps>(
     <div
       ref={ref as Ref<HTMLDivElement>}
       role={decorative ? 'none' : 'separator'}
+      data-slot="separator"
       aria-orientation={decorative ? undefined : orientation}
       data-orientation={orientation}
       class={cn(

@@ -178,6 +178,40 @@ func (s *Store) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// SetPassword updates an admin's password hash. Used by:
+//   - the password-reset HTTP endpoint (POST /api/_admin/reset-password)
+//   - the operator CLI escape hatch (`railbase admin reset-password`)
+//
+// Argon2id rehash uses the package-wide cost params; the operator
+// CANNOT request a weaker hash via this method. On success, returns
+// nil. On no-row-matched, returns ErrNotFound.
+//
+// We deliberately do NOT revoke sessions here — that's the caller's
+// concern (the HTTP handler revokes after a successful reset to
+// invalidate stolen-cookie scenarios; the CLI doesn't need to because
+// an operator with shell access on the host can already do anything).
+// Splitting it lets unit tests verify each side in isolation.
+func (s *Store) SetPassword(ctx context.Context, id uuid.UUID, plaintextPW string) error {
+	if len(plaintextPW) < 8 {
+		return errors.New("admin: password must be at least 8 chars")
+	}
+	hash, err := password.Hash(plaintextPW)
+	if err != nil {
+		return fmt.Errorf("admin: hash: %w", err)
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE _admins SET password_hash = $1, updated = now() WHERE id = $2`,
+		hash, id,
+	)
+	if err != nil {
+		return fmt.Errorf("admin: update password: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // Count returns how many admin rows exist. Useful for the bootstrap
 // flow: when the count is zero, the CLI hints "run `railbase admin
 // create` to create the first administrator."

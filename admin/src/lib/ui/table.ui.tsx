@@ -58,9 +58,10 @@ import { toast } from './sonner.ui'
 
 export const Table = forwardRef<HTMLTableElement, HTMLAttributes<HTMLTableElement>>(
   ({ class: klass, className, ...props }, ref) => (
-    <div class="relative w-full overflow-auto">
+    <div data-slot="table-container" class="relative w-full overflow-auto">
       <table
         ref={ref as Ref<HTMLTableElement>}
+        data-slot="table"
         class={cn('w-full caption-bottom text-sm', klass as string, className)}
         {...props}
       />
@@ -73,6 +74,7 @@ export const TableHeader = forwardRef<HTMLTableSectionElement, HTMLAttributes<HT
   ({ class: klass, className, ...props }, ref) => (
     <thead
       ref={ref as Ref<HTMLTableSectionElement>}
+      data-slot="table-header"
       class={cn('[&_tr]:border-b', klass as string, className)}
       {...props}
     />
@@ -84,6 +86,7 @@ export const TableBody = forwardRef<HTMLTableSectionElement, HTMLAttributes<HTML
   ({ class: klass, className, ...props }, ref) => (
     <tbody
       ref={ref as Ref<HTMLTableSectionElement>}
+      data-slot="table-body"
       class={cn('[&_tr:last-child]:border-0', klass as string, className)}
       {...props}
     />
@@ -95,6 +98,7 @@ export const TableFooter = forwardRef<HTMLTableSectionElement, HTMLAttributes<HT
   ({ class: klass, className, ...props }, ref) => (
     <tfoot
       ref={ref as Ref<HTMLTableSectionElement>}
+      data-slot="table-footer"
       class={cn(
         'border-t bg-muted/50 font-medium [&>tr]:last:border-b-0',
         klass as string,
@@ -110,6 +114,7 @@ export const TableRow = forwardRef<HTMLTableRowElement, HTMLAttributes<HTMLTable
   ({ class: klass, className, ...props }, ref) => (
     <tr
       ref={ref as Ref<HTMLTableRowElement>}
+      data-slot="table-row"
       class={cn(
         'border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted',
         klass as string,
@@ -125,6 +130,7 @@ export const TableHead = forwardRef<HTMLTableCellElement, ThHTMLAttributes<HTMLT
   ({ class: klass, className, ...props }, ref) => (
     <th
       ref={ref as Ref<HTMLTableCellElement>}
+      data-slot="table-head"
       class={cn(
         'h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0',
         klass as string,
@@ -140,6 +146,7 @@ export const TableCell = forwardRef<HTMLTableCellElement, TdHTMLAttributes<HTMLT
   ({ class: klass, className, ...props }, ref) => (
     <td
       ref={ref as Ref<HTMLTableCellElement>}
+      data-slot="table-cell"
       class={cn('p-2 align-middle [&:has([role=checkbox])]:pr-0', klass as string, className)}
       {...props}
     />
@@ -151,6 +158,7 @@ export const TableCaption = forwardRef<HTMLTableCaptionElement, HTMLAttributes<H
   ({ class: klass, className, ...props }, ref) => (
     <caption
       ref={ref as Ref<HTMLTableCaptionElement>}
+      data-slot="table-caption"
       class={cn('mt-4 text-sm text-muted-foreground', klass as string, className)}
       {...props}
     />

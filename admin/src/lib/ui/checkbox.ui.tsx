@@ -47,12 +47,14 @@ export const Checkbox = forwardRef<HTMLButtonElement, CheckboxProps>(
           role="checkbox"
           aria-checked={state === 'indeterminate' ? 'mixed' : state}
           aria-required={required}
+          data-slot="checkbox"
           data-state={state === 'indeterminate' ? 'indeterminate' : state ? 'checked' : 'unchecked'}
           data-disabled={disabled ? '' : undefined}
           disabled={disabled}
           class={cn(
-            'peer inline-flex size-4 shrink-0 items-center justify-center rounded-sm border border-primary shadow',
-            'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+            'peer inline-flex size-4 shrink-0 items-center justify-center rounded-sm border border-primary shadow transition-[color,box-shadow]',
+            'outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]',
+            'aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive',
             'disabled:cursor-not-allowed disabled:opacity-50',
             'data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground',
             'data-[state=indeterminate]:bg-primary data-[state=indeterminate]:text-primary-foreground',

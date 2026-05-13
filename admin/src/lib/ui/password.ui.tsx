@@ -61,6 +61,11 @@ export function generatePassword(length = 16): string {
   return base.join('')
 }
 
+/* shadcn: password-strength bars use canonical traffic-light palette
+ * (destructive → amber → yellow → emerald) at the 500 shade, matching
+ * the canonical shadcn password-strength reference. These five colors
+ * are status semantics, not theme tokens — they must remain visually
+ * distinct in both light and dark modes regardless of theme. */
 const STRENGTH_COLORS = [
   'bg-muted',
   'bg-destructive',
@@ -101,7 +106,7 @@ export const PasswordInput = forwardRef<HTMLInputElement, PasswordInputProps>(
     const slots = showStrength || showGenerate ? 2 : 1
 
     return (
-      <div class="space-y-1.5">
+      <div data-slot="password-input" class="space-y-1.5">
         <div class="relative">
           <Input
             ref={ref as Ref<HTMLInputElement>}
@@ -114,9 +119,8 @@ export const PasswordInput = forwardRef<HTMLInputElement, PasswordInputProps>(
               <button
                 type="button"
                 aria-label="generate"
-                tabIndex={-1}
                 onClick={() => onGenerate?.(generatePassword(generateLength))}
-                class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-hidden focus-visible:ring-ring/50 focus-visible:ring-[3px]"
               >
                 <Dices class="size-4" />
               </button>
@@ -125,9 +129,8 @@ export const PasswordInput = forwardRef<HTMLInputElement, PasswordInputProps>(
               type="button"
               aria-label={visible ? 'hide' : 'show'}
               aria-pressed={visible}
-              tabIndex={-1}
               onClick={() => setVisible((v) => !v)}
-              class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+              class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-hidden focus-visible:ring-ring/50 focus-visible:ring-[3px]"
             >
               {visible ? <EyeOff class="size-4" /> : <Eye class="size-4" />}
             </button>
@@ -162,6 +165,8 @@ PasswordInput.displayName = 'PasswordInput'
 
 function RuleDot({ ok, children }: { ok: boolean; children: string }) {
   return (
+    /* shadcn: the "rule satisfied" check uses emerald-600/500 for clear
+     * semantic success, mirroring the canonical shadcn password-rule UI. */
     <span class={cn(ok ? 'text-emerald-600 dark:text-emerald-500' : 'text-muted-foreground')}>
       {ok ? '✓' : '·'} {children}
     </span>

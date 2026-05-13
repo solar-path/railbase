@@ -62,6 +62,7 @@ export const RadioGroup = forwardRef<HTMLDivElement, RadioGroupProps>(
             else if (ref) (ref as { current: HTMLDivElement | null }).current = el
           }}
           role="radiogroup"
+          data-slot="radio-group"
           onKeyDown={onKey}
           class={cn('grid gap-2', klass as string, className)}
           {...props}
@@ -90,6 +91,7 @@ export const RadioGroupItem = forwardRef<HTMLButtonElement, RadioGroupItemProps>
         type="button"
         role="radio"
         aria-checked={isChecked}
+        data-slot="radio-group-item"
         data-state={isChecked ? 'checked' : 'unchecked'}
         data-disabled={isDisabled ? '' : undefined}
         disabled={isDisabled}
@@ -99,8 +101,9 @@ export const RadioGroupItem = forwardRef<HTMLButtonElement, RadioGroupItemProps>
           ctx.setValue(value)
         }}
         class={cn(
-          'aspect-square size-4 rounded-full border border-primary text-primary shadow',
-          'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+          'aspect-square size-4 rounded-full border border-primary text-primary shadow transition-[color,box-shadow]',
+          'outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]',
+          'aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive',
           'disabled:cursor-not-allowed disabled:opacity-50',
           klass as string,
           className,

@@ -181,9 +181,24 @@ type Runtime struct {
 	// called). nil → JS-only dispatch (the original v1.2.0 contract).
 	goHooks *GoHooks
 
+	// invocationsCounter is the optional metric counter the runtime
+	// bumps once per Dispatch call (skipped when HasHandlers returns
+	// false so background no-op CRUD doesn't inflate the count). nil
+	// → no-op, matching the "registry not wired" contract on every
+	// other publishing site. Set via Options.MetricInvocations.
+	invocationsCounter MetricCounter
+
 	// Stop fns the watcher / reloader register at startup so the
 	// app can clean up on shutdown.
 	stops []func()
+}
+
+// MetricCounter is the surface the hooks runtime calls to publish per-
+// dispatch metrics. Kept as a one-method interface so the hooks
+// package doesn't have to import internal/metrics directly (and so
+// tests can pass a stub recorder without instantiating a Registry).
+type MetricCounter interface {
+	Inc()
 }
 
 // DefaultMaxCallStackSize bounds JS call depth across the embedded
@@ -223,6 +238,14 @@ type Options struct {
 	// When both HooksDir == "" AND GoHooks == nil, NewRuntime returns
 	// (nil, nil) — REST handlers nil-check and skip dispatch.
 	GoHooks *GoHooks
+
+	// MetricInvocations, when non-nil, is incremented once per Dispatch
+	// call that actually has handlers (HasHandlers true). Hooks-package
+	// metric publishing is opt-in: production wires the registry's
+	// `hooks.invocations_total` counter via pkg/railbase/app.go; tests
+	// leave it nil and the dispatcher path stays exactly as it was in
+	// v1.2.0.
+	MetricInvocations MetricCounter
 }
 
 // NewRuntime constructs a Runtime ready to load + dispatch. Caller is
@@ -251,13 +274,14 @@ func NewRuntime(opts Options) (*Runtime, error) {
 		log = slog.Default()
 	}
 	r := &Runtime{
-		log:              log,
-		hooksDir:         opts.HooksDir,
-		timeout:          timeout,
-		maxCallStackSize: opts.MaxCallStackSize,
-		primaryVM:        applyStackCap(goja.New(), opts.MaxCallStackSize),
-		bus:              opts.Bus,
-		goHooks:          opts.GoHooks,
+		log:                log,
+		hooksDir:           opts.HooksDir,
+		timeout:            timeout,
+		maxCallStackSize:   opts.MaxCallStackSize,
+		primaryVM:          applyStackCap(goja.New(), opts.MaxCallStackSize),
+		bus:                opts.Bus,
+		goHooks:            opts.GoHooks,
+		invocationsCounter: opts.MetricInvocations,
 	}
 	// Empty registry — Load() populates.
 	empty := &Registry{handlers: map[string]map[Event][]*registeredHandler{}}
@@ -364,6 +388,12 @@ func (r *Runtime) Dispatch(ctx context.Context, collection string, event Event, 
 	}
 	if !r.HasHandlers(collection, event) {
 		return &RecordEvent{Collection: collection, record: record}, nil
+	}
+	// Publish "we dispatched something" exactly once per Dispatch call
+	// that has handlers. The interface is nil-safe via the explicit
+	// guard so the runtime works without a registry wired.
+	if r.invocationsCounter != nil {
+		r.invocationsCounter.Inc()
 	}
 
 	isAfter := event == EventRecordAfterCreate ||

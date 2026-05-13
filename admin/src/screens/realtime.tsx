@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import type { RealtimeSubscription } from "../api/types";
+import { AdminPage } from "../layout/admin_page";
 import {
   Card,
   CardContent,
@@ -40,14 +41,13 @@ export function RealtimeScreen() {
   const totalDropped = subs.reduce((acc, s) => acc + (s.dropped ?? 0), 0);
 
   return (
-    <div class="space-y-4">
-      <header>
-        <h1 class="text-2xl font-semibold">Realtime monitor</h1>
-        <p class="text-sm text-muted-foreground">
-          Live snapshot of SSE subscriptions on this replica. Polls every 5 s.
-        </p>
-      </header>
+    <AdminPage>
+      <AdminPage.Header
+        title="Realtime monitor"
+        description="Live snapshot of SSE subscriptions on this replica. Polls every 5 s."
+      />
 
+      <AdminPage.Body className="space-y-4">
       {/* Stats banner */}
       <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <StatCard label="Active subscriptions" value={stats?.subscription_count ?? 0} />
@@ -78,7 +78,7 @@ export function RealtimeScreen() {
             No active subscriptions.
             <div class="mt-1 text-xs">
               Connect with{" "}
-              <code class="rb-mono rounded bg-card px-1">
+              <code class="font-mono rounded bg-card px-1">
                 curl -N {`<host>`}/api/realtime?topics=posts/*
               </code>{" "}
               to see one appear here.
@@ -102,11 +102,11 @@ export function RealtimeScreen() {
                 {subs.map((s) => (
                   <TableRow key={s.id}>
                     <TableCell class="align-top">
-                      <span class="rb-mono text-xs">{shortenID(s.user_id)}</span>
+                      <span class="font-mono text-xs">{shortenID(s.user_id)}</span>
                     </TableCell>
                     <TableCell class="align-top">
                       {s.tenant_id ? (
-                        <span class="rb-mono text-xs">{shortenID(s.tenant_id)}</span>
+                        <span class="font-mono text-xs">{shortenID(s.tenant_id)}</span>
                       ) : (
                         <span class="text-xs text-muted-foreground">site</span>
                       )}
@@ -115,7 +115,7 @@ export function RealtimeScreen() {
                       {s.topics.map((t, i) => (
                         <code
                           key={`${s.id}-t-${i}`}
-                          class="rb-mono mr-1 inline-block rounded bg-muted px-1.5 py-0.5 text-xs"
+                          class="font-mono mr-1 inline-block rounded bg-muted px-1.5 py-0.5 text-xs"
                         >
                           {t}
                         </code>
@@ -141,7 +141,8 @@ export function RealtimeScreen() {
           </CardContent>
         </Card>
       )}
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }
 

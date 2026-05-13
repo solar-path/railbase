@@ -81,6 +81,11 @@ func newRoot(includeInit bool) *cobra.Command {
 		newGenerateCmd(),
 		newMailerCmd(),
 		newAuthCmd(),
+		// v1.7.51 — SCIM 2.0 bearer credentials for inbound provisioning
+		// from external IdPs (Okta / Azure AD / OneLogin / Auth0).
+		// Sibling to `railbase auth token` (v1.7.3) — separate store +
+		// separate token prefix (`rbsm_`) so the routes can disambiguate.
+		newSCIMCmd(),
 		newRoleCmd(),
 		newJobsCmd(),
 		newCronCmd(),

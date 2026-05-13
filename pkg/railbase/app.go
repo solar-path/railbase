@@ -17,11 +17,13 @@ import (
 	"github.com/railbase/railbase/internal/api/adminapi"
 	authapi "github.com/railbase/railbase/internal/api/auth"
 	notifapi "github.com/railbase/railbase/internal/api/notifications"
+	scimapi "github.com/railbase/railbase/internal/api/scim"
 	"github.com/railbase/railbase/internal/api/uiapi"
 	"github.com/railbase/railbase/internal/api/rest"
 	"github.com/railbase/railbase/internal/audit"
 	"github.com/railbase/railbase/internal/compat"
 	"github.com/railbase/railbase/internal/auth/apitoken"
+	scimauth "github.com/railbase/railbase/internal/auth/scim"
 	"github.com/railbase/railbase/internal/auth/externalauths"
 	"github.com/railbase/railbase/internal/auth/lockout"
 	"github.com/railbase/railbase/internal/auth/mfa"
@@ -45,6 +47,7 @@ import (
 	"github.com/railbase/railbase/internal/jobs"
 	"github.com/railbase/railbase/internal/logger"
 	"github.com/railbase/railbase/internal/logs"
+	"github.com/railbase/railbase/internal/metrics"
 	"github.com/railbase/railbase/internal/notifications"
 	"github.com/railbase/railbase/internal/rbac"
 	"github.com/railbase/railbase/internal/realtime"
@@ -92,6 +95,15 @@ type App struct {
 	// when Run() builds the JS dispatcher so both surfaces share one
 	// registry instance.
 	goHooks *hooks.GoHooks
+
+	// Metrics is the process-wide in-process metric registry that backs
+	// the /api/_admin/metrics endpoint. Constructed lazily on first
+	// MetricsRegistry() call so embedders that wrap the app for tests
+	// (no Run loop) still get a non-nil handle; Run() also pins it on
+	// startup so the HTTP middleware can reference the same registry as
+	// the admin endpoint without a re-init race. Pure-Go, no Prometheus
+	// dep — see internal/metrics/metrics.go for the design rationale.
+	metricsReg *metrics.Registry
 }
 
 // GoHooks returns the embedder-facing Go hook registry. Safe to call
@@ -109,6 +121,22 @@ func (a *App) GoHooks() *hooks.GoHooks {
 		a.goHooks = hooks.NewGoHooks()
 	}
 	return a.goHooks
+}
+
+// MetricsRegistry returns the process-wide in-process metric registry.
+// Lazy-init on first call so embedders that construct an App and skip
+// Run (test seams) still get a usable handle. Run() also references
+// this so the HTTP middleware + the /api/_admin/metrics endpoint
+// share a single Registry instance.
+func (a *App) MetricsRegistry() *metrics.Registry {
+	if a.metricsReg == nil {
+		// nil → metrics package's internal real-clock fallback. The
+		// public clock package doesn't expose a Real() constructor;
+		// metrics.New nil-handles for exactly this reason so callers
+		// don't have to plumb the package-private realClock through.
+		a.metricsReg = metrics.New(nil)
+	}
+	return a.metricsReg
 }
 
 // New validates cfg and constructs the App without performing I/O.
@@ -209,7 +237,7 @@ func (a *App) Run(ctx context.Context) error {
 	// "address already in use" at the end. We bind, immediately close,
 	// and re-bind in the real server later — racy in theory (another
 	// process could grab the port in between) but in practice this only
-	// catches the "PocketBase / old railbase already running on :8090"
+	// catches the "old `./railbase serve` still running on :8095"
 	// foot-gun, which is overwhelmingly the source of this error.
 	if err := preflightBindCheck(a.cfg.HTTPAddr); err != nil {
 		return err
@@ -344,6 +372,11 @@ func (a *App) Run(ctx context.Context) error {
 	// v1.7.3 — API token store. Shares the master key so a secret
 	// rotation invalidates sessions AND API tokens in one operation.
 	apiTokens := apitoken.NewStore(p.Pool, masterKey)
+	// v1.7.51 — SCIM 2.0 inbound provisioning token store. Shares the
+	// master key — secret rotation invalidates every external IdP's
+	// SCIM credential in one operation, same contract as sessions +
+	// API tokens.
+	scimTokens := scimauth.NewTokenStore(p.Pool, masterKey)
 	lockoutTracker := lockout.New()
 
 	// v0.5 settings + eventbus: bus runs for the lifetime of the
@@ -524,6 +557,10 @@ func (a *App) Run(ctx context.Context) error {
 	// "preview" and "real digest" go through identical SendTemplate
 	// paths — operators see what users would see.
 	adminDeps.Mailer = notificationsMailerAdapter{mailerSvc}
+	// v1.7.46 — admin password-reset flow needs the same recordtoken
+	// store the rest of auth uses. Mounted alongside the auth-collection
+	// reset tokens; CollectionName="_admins" namespaces them.
+	adminDeps.RecordTokens = recordTokens
 	// v3.5.9 — PB-SDK clientId registry. Threaded into the SSE
 	// handler so the GET stream can register a clientId on connect
 	// and the POST subscribe handler can route topic updates back
@@ -555,6 +592,12 @@ func (a *App) Run(ctx context.Context) error {
 	// near-identical Address shapes (jobs.MailerAddress vs mailer.Address)
 	// without dragging internal/mailer into internal/jobs.
 	jobs.RegisterMailerBuiltins(jobsReg, mailerSendAdapter{mailerSvc}, a.log)
+	// v1.7.43 — `retry_failed_welcome_emails` sweeper. Resurrects
+	// admin_welcome / admin_created_notice rows that exhausted their
+	// MaxAttempts, so welcome content eventually lands after operator
+	// fixes a transient SMTP problem. Default cron schedule (every 30
+	// min) lands via DefaultSchedules() on first boot.
+	jobs.RegisterWelcomeEmailRetryBuiltins(jobsReg, p.Pool, a.log)
 	// v1.7.31 — `scheduled_backup` builtin. Default destination mirrors
 	// the manual CLI (`railbase backup create`) so manual + scheduled
 	// archives share the same directory and retention sweep. NOT
@@ -670,6 +713,11 @@ func (a *App) Run(ctx context.Context) error {
 		// getter, which keeps the dispatcher in its v1.2.0 JS-only
 		// hot path (HasHandlers short-circuits on a nil receiver).
 		GoHooks: a.goHooks,
+		// v1.7.x §3.11 — bump the registry counter once per Dispatch
+		// call that has handlers. The hooks package doesn't import
+		// internal/metrics directly (we pass a one-method interface)
+		// so the dispatcher stays test-isolated without metrics.
+		MetricInvocations: hooksInvocationsCounter(a.MetricsRegistry()),
 	})
 	if err != nil {
 		return fmt.Errorf("hooks runtime: %w", err)
@@ -823,6 +871,14 @@ func (a *App) Run(ctx context.Context) error {
 			readSetting(ctx, settingsMgr, "compat.mode", "RAILBASE_COMPAT_MODE", string(compat.ModeStrict))))
 	})
 
+	// v1.7.x §3.11 — in-process metric registry. Single instance shared
+	// between the HTTP observer middleware (publish) and the admin
+	// /api/_admin/metrics endpoint (read). MetricsRegistry() lazy-inits
+	// so embedders that built the App for tests still have a handle;
+	// here we materialise it on the normal-boot path so the rest of
+	// the wiring below can reference it without nil-guarding.
+	metricsReg := a.MetricsRegistry()
+
 	a.server = server.New(server.Config{
 		Addr:  a.cfg.HTTPAddr,
 		Log:   a.log,
@@ -835,7 +891,13 @@ func (a *App) Run(ctx context.Context) error {
 		IPFilter:        ipFilter,
 		RateLimiter:     rateLimiter,
 		AntiBot:         antiBot,
+		Metrics:         metricsReg,
 	})
+	// Plumb the same registry into the admin API so /api/_admin/metrics
+	// reads back what the HTTP middleware has been publishing. adminDeps
+	// was constructed up-thread; we patch the field here so the order
+	// matches "create deps → create server → wire registry to both".
+	adminDeps.Metrics = metricsReg
 
 	// Admin API: mounted in its own group so user-auth middleware
 	// doesn't run on admin requests. The adminapi middleware reads
@@ -990,7 +1052,7 @@ func (a *App) Run(ctx context.Context) error {
 		// expect). Sibling to v1.7.0 auth-methods discovery.
 		r.Get("/api/_compat-mode", compat.Handler(compatResolver))
 
-		authapi.Mount(r, &authapi.Deps{
+		authDeps := &authapi.Deps{
 			Pool:       a.pool.Pool,
 			Sessions:   sessions,
 			Lockout:    lockoutTracker,
@@ -1028,6 +1090,86 @@ func (a *App) Run(ctx context.Context) error {
 			// `send_email_async` builtin instead of a bespoke path.
 			AuthOrigins: authOrigins,
 			JobsStore:   jobsStore,
+			// v1.7.49 — LDAP / AD Enterprise SSO. Authenticator is nil
+			// when `auth.ldap.enabled=false` OR no URL configured. The
+			// handler 503's on nil; discovery returns enabled=false.
+			LDAP: buildLDAPAuthenticator(ctx, settingsMgr, a.log),
+			// v1.7.50.1d — RBAC store threaded in for SAML group → role
+			// mapping. Already constructed above (v1.1.4 RBAC core);
+			// passing the same handle here means SAML signins land
+			// assignments visible to the rest of the RBAC subsystem
+			// (admin UI, /api/_admin/roles).
+			RBAC: rbacStore,
+			// v1.7.50 — SAML 2.0 SP Enterprise SSO. atomic.Pointer field
+			// is zero-init'd; we Store(...) the initial SP below after
+			// the Deps struct exists, then subscribe to settings.changed
+			// so future wizard saves trigger a rebuild + atomic swap
+			// (v1.7.50.1c). Mid-request flow gets a stable snapshot
+			// from samlSP() — no torn reads.
+			// v1.7.47 — auth-methods discovery honours wizard toggles.
+			// `auth.password.enabled` / `auth.magic_link.enabled` /
+			// `auth.otp.enabled` / `auth.totp.enabled` /
+			// `auth.webauthn.enabled` / `auth.oauth.<name>.enabled` all
+			// override the capability-based default. Nil-safe — when
+			// settings are absent (test paths), discovery falls back to
+			// the v1.7.0 behaviour ("enabled iff capability wired").
+			Settings: settingsMgr,
+		}
+		// v1.7.50.1c — install the initial SAML SP into the atomic.Pointer
+		// + subscribe to settings.changed so future wizard saves hot-swap
+		// the SP without a restart. The build helper logs + returns nil
+		// on errors; a nil store leaves discovery reporting enabled=false
+		// and handlers 503'ing on signin — that's the operator's signal
+		// to re-save the wizard with a valid config.
+		if initialSP := buildSAMLServiceProvider(ctx, settingsMgr, a.log); initialSP != nil {
+			authDeps.SAML.Store(initialSP)
+		}
+		bus.Subscribe(settings.TopicChanged, 4, func(_ context.Context, e eventbus.Event) {
+			change, _ := e.Payload.(settings.Change)
+			if !strings.HasPrefix(change.Key, "auth.saml.") {
+				return
+			}
+			// Rebuild from the (newly saved) settings. We tolerate
+			// nil — see the rationale above.
+			ctxBG := context.Background()
+			rebuilt := buildSAMLServiceProvider(ctxBG, settingsMgr, a.log)
+			if rebuilt != nil {
+				authDeps.SAML.Store(rebuilt)
+				a.log.Info("saml: hot-reloaded from settings change", "trigger_key", change.Key)
+			} else {
+				// Setting auth.saml.enabled to false also hits here →
+				// store a nil-equivalent by stashing a zero-value
+				// pointer. atomic.Pointer can't actually swap to nil
+				// directly except via CompareAndSwap; we use Store on
+				// a freshly-allocated zero value semantically wrong.
+				// Simplest correct approach: CompareAndSwap to nil.
+				for {
+					cur := authDeps.SAML.Load()
+					if cur == nil {
+						break
+					}
+					if authDeps.SAML.CompareAndSwap(cur, nil) {
+						a.log.Info("saml: disabled via settings change", "trigger_key", change.Key)
+						break
+					}
+				}
+			}
+		})
+		authapi.Mount(r, authDeps)
+		// v1.7.51 — SCIM 2.0 inbound provisioning. /scim/v2/* routes are
+		// mounted under the same chi router but DON'T live inside the
+		// auth-group middleware chain — SCIM has its own bearer-token
+		// auth (rbsm_<token>) distinct from the user-session cookie.
+		// The discovery endpoints (ServiceProviderConfig / Schemas /
+		// ResourceTypes) are PUBLIC per RFC 7644 §4.
+		scimapi.Mount(r, &scimapi.Deps{
+			Pool:   a.pool.Pool,
+			Tokens: scimTokens,
+			// v1.7.51 follow-up — wires SCIM-group → RBAC-role
+			// reconciliation. When an IdP PATCHes group memberships,
+			// each mapped role (declared in `_scim_group_role_map`)
+			// is granted or revoked via the rbac.Store.
+			RBAC: rbacStore,
 		})
 		// v1.6.5/6 polish: pass the audit Writer so export handlers emit
 		// `export.xlsx` / `export.pdf` rows on success and failure.
@@ -1425,11 +1567,11 @@ func dbModeLabel(cfg config.Config) string {
 }
 
 // preflightBindCheck tries to bind addr once and immediately closes the
-// listener. If the bind fails — almost always because another process
-// (commonly a stale `pocketbase serve` on :8090) is holding the port —
-// it returns a human-friendly error explaining the three recovery
-// paths. We fail fast HERE instead of after the 10-second embedded-PG
-// boot, which is the difference between a 12-second mystery and a
+// listener. If the bind fails — almost always because a stale
+// `./railbase serve` from a previous run is still holding the port —
+// it returns a human-friendly error explaining the recovery paths. We
+// fail fast HERE instead of after the 10-second embedded-PG boot,
+// which is the difference between a 12-second mystery and a
 // 0.1-second "oh of course."
 func preflightBindCheck(addr string) error {
 	ln, err := net.Listen("tcp", addr)
@@ -1447,16 +1589,16 @@ func preflightBindCheck(addr string) error {
 	return fmt.Errorf(`cannot bind to %s: %w
 
 Another process is using this address. Common causes:
-  • PocketBase or an older railbase is already running on port %s
-  • A previous `+"`./railbase serve`"+` crashed without releasing the port
+  • A previous `+"`./railbase serve`"+` is still running (or crashed without releasing the port)
+  • You bound Railbase to a port already used by another service
 
 To fix, pick one:
-  1. Stop the other process:
-       lsof -nP -iTCP:%s -sTCP:LISTEN     # macOS / Linux — find the PID
-       kill <pid>
+  1. Find and stop the other process:
+       lsof -nP -iTCP:%s -sTCP:LISTEN     # macOS / Linux
+       netstat -ano | findstr :%s         # Windows
+       kill <pid>                          # then
   2. Run Railbase on a different port:
-       RAILBASE_HTTP_ADDR=:9090 ./railbase serve
-  3. If you actually want PocketBase, ignore this binary`,
+       RAILBASE_HTTP_ADDR=:8096 ./railbase serve`,
 		addr, err, port, port)
 }
 
@@ -1603,4 +1745,18 @@ func mustParseRule(log *slog.Logger, raw string) security.Rule {
 		return security.Rule{}
 	}
 	return r
+}
+
+// hooksInvocationsCounter resolves the `hooks.invocations_total`
+// counter on the given registry, wrapped in a thin shim that satisfies
+// hooks.MetricCounter. Returns nil when the registry is nil so the
+// hooks runtime takes its zero-publishing path. Defined as a separate
+// helper so the wiring site reads as a single line; the indirection
+// also gives us a place to land the "future hook timeouts / panic
+// count" companion metrics without re-touching app.go's hot-init flow.
+func hooksInvocationsCounter(reg *metrics.Registry) hooks.MetricCounter {
+	if reg == nil {
+		return nil
+	}
+	return reg.Counter("hooks.invocations_total")
 }

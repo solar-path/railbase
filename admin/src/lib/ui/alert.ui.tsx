@@ -26,6 +26,7 @@ export const Alert = forwardRef<HTMLDivElement, AlertProps>(
     <div
       ref={ref as Ref<HTMLDivElement>}
       role="alert"
+      data-slot="alert"
       class={cn(alertVariants({ variant }), klass as string, className)}
       {...props}
     />
@@ -37,6 +38,7 @@ export const AlertTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HTMLHead
   ({ class: klass, className, ...props }, ref) => (
     <h5
       ref={ref as Ref<HTMLHeadingElement>}
+      data-slot="alert-title"
       class={cn('mb-1 font-medium leading-none tracking-tight', klass as string, className)}
       {...props}
     />
@@ -50,6 +52,7 @@ export const AlertDescription = forwardRef<
 >(({ class: klass, className, ...props }, ref) => (
   <div
     ref={ref as Ref<HTMLParagraphElement>}
+    data-slot="alert-description"
     class={cn('text-sm [&_p]:leading-relaxed', klass as string, className)}
     {...props}
   />

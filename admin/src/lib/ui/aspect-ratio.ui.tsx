@@ -9,6 +9,7 @@ export interface AspectRatioProps extends HTMLAttributes<HTMLDivElement> {
 export function AspectRatio({ ratio = 1, children, style, ...props }: AspectRatioProps) {
   return (
     <div
+      data-slot="aspect-ratio"
       {...(props as Record<string, unknown>)}
       style={{ position: 'relative', width: '100%', paddingBottom: `${(1 / ratio) * 100}%`, ...(style as object) }}
     >

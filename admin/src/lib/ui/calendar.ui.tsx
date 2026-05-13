@@ -15,6 +15,7 @@ export function Calendar({
   return (
     <DayPicker
       showOutsideDays={showOutsideDays}
+      data-slot="calendar"
       className={cn('p-3', klass as string, className)}
       classNames={{
         months: 'flex flex-col sm:flex-row space-y-4 sm:space-x-4 sm:space-y-0',

@@ -7,6 +7,7 @@ import { z } from "zod";
 import { adminAPI, recordsAPI } from "../api/admin";
 import { isAPIError } from "../api/client";
 import { FieldEditor } from "../fields/editor";
+import { AdminPage } from "../layout/admin_page";
 import type { FieldSpec } from "../api/types";
 import { Button } from "@/lib/ui/button.ui";
 import { Card, CardContent } from "@/lib/ui/card.ui";
@@ -122,7 +123,7 @@ export function RecordEditorScreen() {
     }
     // form.reset is stable across renders; don't include it in deps
     // to avoid re-firing.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [spec, isNew, recordQ.data]);
 
   const createMu = useMutation({
@@ -220,7 +221,7 @@ export function RecordEditorScreen() {
   const serverError = form.formState.errors.root?.serverError?.message;
 
   return (
-    <div className="max-w-2xl space-y-4">
+    <AdminPage className="max-w-2xl">
       <header className="flex items-baseline justify-between">
         <div>
           <Link
@@ -233,7 +234,7 @@ export function RecordEditorScreen() {
             {isNew ? "New record" : "Edit record"}
           </h1>
           {!isNew ? (
-            <p className="text-xs rb-mono text-muted-foreground">{params.id}</p>
+            <p className="text-xs font-mono text-muted-foreground">{params.id}</p>
           ) : null}
         </div>
         {!isNew ? (
@@ -255,9 +256,9 @@ export function RecordEditorScreen() {
       </header>
 
       {spec.auth && isNew ? (
-        <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+        <p className="text-sm text-foreground bg-muted border border-input rounded px-3 py-2">
           Auth collections do not accept generic POST.
-          Use <code className="rb-mono">/api/collections/{spec.name}/auth-signup</code> instead.
+          Use <code className="font-mono">/api/collections/{spec.name}/auth-signup</code> instead.
         </p>
       ) : null}
 
@@ -329,7 +330,7 @@ export function RecordEditorScreen() {
           </Form>
         </CardContent>
       </Card>
-    </div>
+    </AdminPage>
   );
 }
 

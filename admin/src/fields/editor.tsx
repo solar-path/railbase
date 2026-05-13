@@ -30,11 +30,11 @@ export function FieldEditor({ field, value, onChange }: Props) {
 function Label({ field }: { field: FieldSpec }) {
   return (
     <div className="flex items-baseline justify-between">
-      <label className="text-sm font-medium text-neutral-700 rb-mono">
+      <label className="text-sm font-medium text-foreground font-mono">
         {field.name}
-        {field.required ? <span className="text-red-600 ml-0.5">*</span> : null}
+        {field.required ? <span className="text-destructive ml-0.5">*</span> : null}
       </label>
-      <span className="text-xs text-neutral-400 rb-mono">{field.type}</span>
+      <span className="text-xs text-muted-foreground font-mono">{field.type}</span>
     </div>
   );
 }
@@ -47,12 +47,12 @@ function Hint({ field }: { field: FieldSpec }) {
   if (field.unique) hints.push("unique");
   if (field.related_collection) hints.push(`→ ${field.related_collection}.id`);
   if (hints.length === 0) return null;
-  return <p className="text-xs text-neutral-400 mt-1">{hints.join(" · ")}</p>;
+  return <p className="text-xs text-muted-foreground mt-1">{hints.join(" · ")}</p>;
 }
 
 function Input({ field, value, onChange }: Props) {
   const cls =
-    "mt-1 w-full rounded border border-neutral-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-900";
+    "mt-1 w-full rounded border border-input px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring";
 
   // Domain-type editors (tel / finance / currency / slug / country)
   // short-circuit before the v0.8 PB-parity switch below. The
@@ -89,7 +89,7 @@ function Input({ field, value, onChange }: Props) {
           onChange={(e) => onChange(e.currentTarget.value)}
           rows={6}
           required={field.required}
-          className={cls + " rb-mono"}
+          className={cls + " font-mono"}
         />
       );
     }
@@ -112,7 +112,7 @@ function Input({ field, value, onChange }: Props) {
           min={field.min ?? undefined}
           max={field.max ?? undefined}
           required={field.required}
-          className={cls + " rb-mono"}
+          className={cls + " font-mono"}
         />
       );
 
@@ -135,7 +135,7 @@ function Input({ field, value, onChange }: Props) {
           value={toLocalDatetime(value)}
           onChange={(e) => onChange(fromLocalDatetime(e.currentTarget.value))}
           required={field.required}
-          className={cls + " rb-mono"}
+          className={cls + " font-mono"}
         />
       );
 
@@ -165,7 +165,7 @@ function Input({ field, value, onChange }: Props) {
           }}
           rows={4}
           required={field.required}
-          className={cls + " rb-mono text-xs"}
+          className={cls + " font-mono text-xs"}
           placeholder={"{ }"}
         />
       );
@@ -188,7 +188,7 @@ function Input({ field, value, onChange }: Props) {
 
     case "multiselect":
       return (
-        <div className="mt-1 grid grid-cols-2 gap-1 rounded border border-neutral-300 p-2">
+        <div className="mt-1 grid grid-cols-2 gap-1 rounded border border-input p-2">
           {(field.select_values ?? []).map((opt) => {
             const arr = Array.isArray(value) ? (value as string[]) : [];
             const checked = arr.includes(opt);
@@ -202,7 +202,7 @@ function Input({ field, value, onChange }: Props) {
                     else onChange(arr.filter((v) => v !== opt));
                   }}
                 />
-                <span className="rb-mono">{opt}</span>
+                <span className="font-mono">{opt}</span>
               </label>
             );
           })}
@@ -219,7 +219,7 @@ function Input({ field, value, onChange }: Props) {
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(e.currentTarget.value)}
           placeholder="storage path"
-          className={cls + " rb-mono text-xs"}
+          className={cls + " font-mono text-xs"}
         />
       );
 
@@ -236,7 +236,7 @@ function Input({ field, value, onChange }: Props) {
             }
           }}
           rows={3}
-          className={cls + " rb-mono text-xs"}
+          className={cls + " font-mono text-xs"}
         />
       );
 
@@ -248,7 +248,7 @@ function Input({ field, value, onChange }: Props) {
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(e.currentTarget.value || null)}
           placeholder="uuid"
-          className={cls + " rb-mono text-xs"}
+          className={cls + " font-mono text-xs"}
           required={field.required}
         />
       );
@@ -273,7 +273,7 @@ function Input({ field, value, onChange }: Props) {
           }
           rows={3}
           placeholder="one uuid per line"
-          className={cls + " rb-mono text-xs"}
+          className={cls + " font-mono text-xs"}
         />
       );
 

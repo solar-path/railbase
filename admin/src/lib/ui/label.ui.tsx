@@ -10,6 +10,7 @@ export const Label = forwardRef<HTMLLabelElement, LabelProps>(
   ({ class: klass, className, disabled, ...props }, ref) => (
     <label
       ref={ref as Ref<HTMLLabelElement>}
+      data-slot="label"
       data-disabled={disabled ? 'true' : undefined}
       class={cn(
         'text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70',

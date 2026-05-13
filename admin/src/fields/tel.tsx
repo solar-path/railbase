@@ -109,7 +109,7 @@ export function TelCell({ value }: { value: unknown }) {
   const flag = flagFor(iso);
   const formatted = formatE164(s);
   return (
-    <span className="rb-mono text-xs whitespace-nowrap">
+    <span className="font-mono text-xs whitespace-nowrap">
       {flag ? <span className="mr-1" aria-label={iso ?? ""}>{flag}</span> : null}
       {formatted}
     </span>
@@ -159,10 +159,10 @@ export function TelInput({
           }}
           placeholder="+14155552671"
           className={
-            "mt-1 w-full rounded border px-2 py-1.5 pl-8 text-sm rb-mono focus:outline-none focus:ring-1 " +
+            "mt-1 w-full rounded border px-2 py-1.5 pl-8 text-sm font-mono focus:outline-none focus:ring-1 " +
             (err
-              ? "border-red-400 focus:ring-red-500"
-              : "border-neutral-300 focus:ring-neutral-900")
+              ? "border-destructive/40 focus:ring-destructive"
+              : "border-input focus:ring-ring")
           }
         />
         {flag ? (
@@ -174,7 +174,7 @@ export function TelInput({
           </span>
         ) : null}
       </div>
-      {err ? <p className="mt-0.5 text-xs text-red-600">{err}</p> : null}
+      {err ? <p className="mt-0.5 text-xs text-destructive">{err}</p> : null}
     </div>
   );
 }

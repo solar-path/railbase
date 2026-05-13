@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import type { EmailEvent } from "../api/types";
 import { Pager } from "../layout/pager";
+import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
@@ -81,19 +82,19 @@ export function EmailEventsScreen() {
   const hasFilter = !!(recipient || event || template || bounceType || since || until);
 
   return (
-    <div className="space-y-4">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Email events</h1>
-          <p className="text-sm text-muted-foreground">
+    <AdminPage>
+      <AdminPage.Header
+        title="Email events"
+        description={
+          <>
             {total} event{total === 1 ? "" : "s"} total. Showing newest first.
-            One row per recipient per <code className="rb-mono">mailer.Send</code> call.
-          </p>
-        </div>
-        <Pager page={page} totalPages={totalPages} onChange={setPage} />
-      </header>
+            One row per recipient per <code className="font-mono">mailer.Send</code> call.
+          </>
+        }
+        actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
+      />
 
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+      <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
           <span className="text-muted-foreground">recipient</span>
           <Input
@@ -101,7 +102,7 @@ export function EmailEventsScreen() {
             value={recipientInput}
             onInput={(e) => setRecipientInput(e.currentTarget.value)}
             placeholder="alice@example.com"
-            className="w-56 h-8 rb-mono text-xs"
+            className="w-56 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
@@ -127,7 +128,7 @@ export function EmailEventsScreen() {
             value={template}
             onInput={(e) => setTemplate(e.currentTarget.value)}
             placeholder="invite_received"
-            className="w-48 h-8 rb-mono text-xs"
+            className="w-48 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
@@ -178,8 +179,9 @@ export function EmailEventsScreen() {
             clear
           </Button>
         ) : null}
-      </div>
+      </AdminPage.Toolbar>
 
+      <AdminPage.Body>
       <Card>
         <CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -203,23 +205,23 @@ export function EmailEventsScreen() {
                       onClick={() => setExpandedId(isOpen ? null : e.id)}
                       className="cursor-pointer"
                     >
-                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
                         {e.occurred_at}
                       </TableCell>
                       <TableCell>
                         <Badge variant={eventVariant(e.event)}>{e.event}</Badge>
                       </TableCell>
-                      <TableCell className="rb-mono text-xs max-w-xs truncate" title={e.recipient}>
+                      <TableCell className="font-mono text-xs max-w-xs truncate" title={e.recipient}>
                         {e.recipient}
                       </TableCell>
                       <TableCell className="max-w-md truncate" title={e.subject ?? ""}>
                         {e.subject || <span className="text-muted-foreground">—</span>}
                       </TableCell>
-                      <TableCell className="rb-mono text-xs" title={e.template ?? ""}>
+                      <TableCell className="font-mono text-xs" title={e.template ?? ""}>
                         {e.template || <span className="text-muted-foreground">—</span>}
                       </TableCell>
-                      <TableCell className="rb-mono text-xs">{e.driver}</TableCell>
-                      <TableCell className="rb-mono text-xs" title={e.error_code ?? ""}>
+                      <TableCell className="font-mono text-xs">{e.driver}</TableCell>
+                      <TableCell className="font-mono text-xs" title={e.error_code ?? ""}>
                         {e.error_code || <span className="text-muted-foreground">—</span>}
                       </TableCell>
                     </TableRow>
@@ -244,7 +246,8 @@ export function EmailEventsScreen() {
           </Table>
         </CardContent>
       </Card>
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }
 
@@ -295,7 +298,7 @@ function ExpandedRow({ event }: { event: EmailEvent }) {
       {event.metadata && Object.keys(event.metadata).length > 0 ? (
         <div>
           <div className="text-muted-foreground">metadata</div>
-          <pre className="rb-mono text-xs text-foreground whitespace-pre-wrap break-all rounded bg-background border border-input p-2 mt-1">
+          <pre className="font-mono text-xs text-foreground whitespace-pre-wrap break-all rounded bg-background border border-input p-2 mt-1">
             {JSON.stringify(event.metadata, null, 2)}
           </pre>
         </div>
@@ -308,7 +311,7 @@ function Field({ label, value, mono = false }: { label: string; value: string; m
   return (
     <div className="flex gap-2">
       <span className="text-muted-foreground w-32 shrink-0">{label}</span>
-      <span className={"text-foreground break-all " + (mono ? "rb-mono" : "")}>{value}</span>
+      <span className={"text-foreground break-all " + (mono ? "font-mono" : "")}>{value}</span>
     </div>
   );
 }

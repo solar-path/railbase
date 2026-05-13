@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -38,7 +39,9 @@ import (
 
 	"github.com/railbase/railbase/internal/audit"
 	"github.com/railbase/railbase/internal/auth/externalauths"
+	"github.com/railbase/railbase/internal/auth/ldap"
 	"github.com/railbase/railbase/internal/auth/lockout"
+	samlauth "github.com/railbase/railbase/internal/auth/saml"
 	authmw "github.com/railbase/railbase/internal/auth/middleware"
 	"github.com/railbase/railbase/internal/auth/mfa"
 	"github.com/railbase/railbase/internal/auth/oauth"
@@ -52,7 +55,9 @@ import (
 	rerr "github.com/railbase/railbase/internal/errors"
 	"github.com/railbase/railbase/internal/jobs"
 	"github.com/railbase/railbase/internal/mailer"
+	"github.com/railbase/railbase/internal/rbac"
 	"github.com/railbase/railbase/internal/schema/registry"
+	"github.com/railbase/railbase/internal/settings"
 )
 
 // Deps bundles the runtime dependencies the auth handlers need.
@@ -123,6 +128,49 @@ type Deps struct {
 	// Wiring: `pkg/railbase/app.go` constructs both once on boot.
 	AuthOrigins *origins.Store
 	JobsStore   *jobs.Store
+
+	// v1.7.49 — LDAP / Active Directory Enterprise SSO. Nil when no
+	// LDAP server is configured in the wizard. The handler returns
+	// 503 when nil even if the gate flag is on, so a half-configured
+	// install (gate on but Authenticator nil) fails loudly instead of
+	// silently rejecting all logins.
+	LDAP *ldap.Authenticator
+
+	// v1.7.50 — SAML 2.0 SP Enterprise SSO. Atomic-pointer (v1.7.50.1c)
+	// so settings.changed events can hot-swap the ServiceProvider when
+	// the operator wizard-saves an IdP cert rotation or metadata URL
+	// change. Nil-pointer = "SAML not configured" → handlers 503.
+	//
+	// Use samlSP() rather than reading the field directly. The field
+	// is exposed so callers from pkg/railbase can install the initial
+	// SP + arrange the hot-reload subscription on the eventbus.
+	SAML atomic.Pointer[samlauth.ServiceProvider]
+
+	// v1.7.50.1d — RBAC store for group → role mapping at SAML signin
+	// (and any future similar surfaces). Nil-tolerant: when wired,
+	// the SAML JIT-provision step looks up the configured
+	// `auth.saml.group_attribute` in the user's assertion + grants
+	// any matching roles via Store.Assign. Without RBAC wired, group
+	// mapping is a no-op (audit-logged).
+	RBAC *rbac.Store
+
+	// v1.7.47 — auth-methods setup wizard reads/writes `auth.*.enabled`
+	// settings keys. When Settings is non-nil + a key exists, the
+	// auth-methods discovery handler treats it as an operator override
+	// of the capability-based default (e.g. mailer is wired but the
+	// operator turned magic-link OFF in the wizard → discovery reports
+	// otp.enabled=false). When Settings is nil OR the key is absent, we
+	// fall back to "enabled iff the capability is wired" — preserves
+	// every pre-v1.7.47 test path without rewiring.
+	Settings *settings.Manager
+}
+
+// samlSP is the unified accessor for the hot-reloadable SAML SP.
+// Returns nil when no SP has been installed yet (= "saml not
+// configured"). Reads from the atomic.Pointer so callers see the
+// freshest snapshot without locking.
+func (d *Deps) samlSP() *samlauth.ServiceProvider {
+	return d.SAML.Load()
 }
 
 // auditHook is the package-private accessor used to emit events.
@@ -142,6 +190,28 @@ func Mount(r chi.Router, d *Deps) {
 		r.Post("/auth-with-password", d.signinHandler)
 		r.Post("/auth-refresh", d.refreshHandler)
 		r.Post("/auth-logout", d.logoutHandler)
+
+		// v1.7.49 LDAP / AD Enterprise SSO — same {token, record}
+		// envelope as password signin so existing SDK consumers
+		// don't need new types. Handler refuses without an
+		// Authenticator wired AND without `auth.ldap.enabled=true`.
+		r.Post("/auth-with-ldap", d.authWithLDAPHandler)
+
+		// v1.7.50 SAML 2.0 SP. Browser-driven 3-leg flow:
+		//   start  → 302 to IdP
+		//   acs    → IdP POSTs SAMLResponse → session cookie + 302 to app
+		//   metadata → SP entity descriptor XML for the operator to paste
+		//              into the IdP's app config
+		r.Get("/auth-with-saml", d.samlStartHandler)
+		r.Post("/auth-with-saml/acs", d.samlACSHandler)
+		r.Get("/auth-with-saml/metadata", d.samlMetadataHandler)
+		// v1.7.50.2 SAML Single Logout. IdP-initiated. POST is the
+		// canonical binding (gosaml2 only signs/validates POST); GET is
+		// accepted too so an IdP with HTTP-Redirect binding lands the
+		// same handler — the gate inside refuses unsigned redirect
+		// requests anyway.
+		r.Post("/auth-with-saml/slo", d.samlSLOHandler)
+		r.Get("/auth-with-saml/slo", d.samlSLOHandler)
 
 		// v1.7.0 PB-compat: discovery endpoint the JS SDK + dynamic-UI
 		// front-ends call to find out which signin paths are configured.
@@ -277,6 +347,12 @@ func (d *Deps) signinHandler(w http.ResponseWriter, r *http.Request) {
 		rerr.WriteJSON(w, rerr.New(rerr.CodeNotFound, "auth collection %q not found", collName))
 		return
 	}
+	// v1.7.48 — honour the wizard's auth.password.enabled toggle.
+	// Default true: an unconfigured install never gets this 403.
+	if denied := d.requireMethod(r.Context(), "auth.password.enabled", "password", true); denied != nil {
+		rerr.WriteJSON(w, denied)
+		return
+	}
 	var body struct {
 		Identity string `json:"identity"`
 		Email    string `json:"email"` // alias accepted
@@ -331,7 +407,19 @@ func (d *Deps) signinHandler(w http.ResponseWriter, r *http.Request) {
 	// Client must POST auth-with-totp with the challenge + code to
 	// complete signin. Skip entirely when TOTP isn't wired (back-
 	// compat with deployments running the v1.1.1 surface).
-	if d.TOTPEnrollments != nil && d.MFAChallenges != nil {
+	//
+	// v1.7.48: ALSO skip when the wizard has explicitly disabled TOTP.
+	// Without this, an enrolled user would get challenged but bounced
+	// at auth-with-totp (which is also gated) — the closed-loop trap.
+	// Skipping here downgrades the user to password-only for the
+	// session: that's a deliberate security trade-off the operator
+	// signed off on by flipping auth.totp.enabled=false, and matches
+	// the discovery surface (mfa.enabled=false).
+	totpGated := false
+	if v, ok := d.settingOverride(r.Context(), "auth.totp.enabled"); ok && !v {
+		totpGated = true
+	}
+	if !totpGated && d.TOTPEnrollments != nil && d.MFAChallenges != nil {
 		if enr, err := d.TOTPEnrollments.Get(r.Context(), collName, row.ID); err == nil && enr.Active() {
 			chTok, _, err := d.MFAChallenges.Create(r.Context(), mfa.CreateInput{
 				CollectionName:  collName,

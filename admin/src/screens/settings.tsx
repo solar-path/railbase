@@ -5,6 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { adminAPI } from "../api/admin";
 import { isAPIError } from "../api/client";
+import { AdminPage } from "../layout/admin_page";
 import {
   Card,
   CardContent,
@@ -147,15 +148,18 @@ export function SettingsScreen() {
   }
 
   return (
-    <div class="space-y-6 max-w-3xl">
-      <header>
-        <h1 class="text-2xl font-semibold">Settings</h1>
-        <p class="text-sm text-muted-foreground">
-          Key/value entries persisted in <code class="rb-mono">_settings</code>.
-          Values are arbitrary JSON.
-        </p>
-      </header>
+    <AdminPage className="space-y-6 max-w-3xl">
+      <AdminPage.Header
+        title="Settings"
+        description={
+          <>
+            Key/value entries persisted in <code class="font-mono">_settings</code>.
+            Values are arbitrary JSON.
+          </>
+        }
+      />
 
+      <AdminPage.Body className="space-y-6">
       <Card>
         <CardHeader class="border-b px-4 py-2 space-y-0">
           <CardTitle class="text-sm font-medium">Add or update a key</CardTitle>
@@ -173,7 +177,7 @@ export function SettingsScreen() {
                       <Input
                         type="text"
                         placeholder="feature.dark_mode"
-                        class="rb-mono"
+                        class="font-mono"
                         {...field}
                       />
                     </FormControl>
@@ -216,7 +220,7 @@ export function SettingsScreen() {
                   <FormItem>
                     <FormLabel>Value</FormLabel>
                     <FormControl>
-                      <Textarea rows={4} class="rb-mono" {...field} />
+                      <Textarea rows={4} class="font-mono" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -256,9 +260,9 @@ export function SettingsScreen() {
               <TableBody>
                 {(list.data?.items ?? []).map((row) => (
                   <TableRow key={row.key}>
-                    <TableCell class="rb-mono">{row.key}</TableCell>
+                    <TableCell class="font-mono">{row.key}</TableCell>
                     <TableCell>
-                      <pre class="rb-mono text-xs whitespace-pre-wrap break-all">
+                      <pre class="font-mono text-xs whitespace-pre-wrap break-all">
                         {JSON.stringify(row.value)}
                       </pre>
                     </TableCell>
@@ -287,6 +291,7 @@ export function SettingsScreen() {
           )}
         </CardContent>
       </Card>
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }

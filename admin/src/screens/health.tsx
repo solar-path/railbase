@@ -1,5 +1,8 @@
+import { lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
+import { AdminPage } from "../layout/admin_page";
+import { useMetricBuffer, useMetricRate } from "../hooks/use_metric_buffer";
 import {
   Card,
   CardContent,
@@ -8,6 +11,12 @@ import {
   CardTitle,
 } from "@/lib/ui/card.ui";
 import { Alert, AlertDescription } from "@/lib/ui/alert.ui";
+
+// Recharts is heavy (~80 KB gzip including its dependency on
+// d3-shape/d3-scale subsets). We lazy-import it so the Dashboard +
+// Health charts go to their own chunk — main bundle stays under the
+// docs/12 §Bundle cost target of 145 KB gzip.
+const TrendChart = lazy(() => import("../components/trend_chart"));
 
 // Health / metrics admin dashboard — read-only snapshot of runtime,
 // DB pool, jobs queue, audit, logs, realtime, backups, and schema
@@ -24,6 +33,46 @@ export function HealthScreen() {
     queryFn: () => adminAPI.health(),
     refetchInterval: 5_000,
   });
+  // Second poll alongside /health for the in-process metric registry.
+  // Same 5 s cadence so the HTTP-rate trend and the runtime trend stay
+  // visually aligned. Independent query key — TanStack Query handles
+  // both concurrently without re-running either.
+  const metricsQ = useQuery({
+    queryKey: ["admin-metrics"],
+    queryFn: () => adminAPI.metrics(),
+    refetchInterval: 5_000,
+  });
+
+  // Counter-derived rates. The /metrics endpoint returns absolute
+  // monotonic counters; useMetricRate derives a per-unit-time series.
+  // We pass the absolute value + a pollKey (`snapshot_at`) so the hook
+  // dedupes within the same poll AND computes the delta against the
+  // previous poll's value. Unit=1 → events / second.
+  const reqRate = useMetricRate(
+    metricsQ.data?.counters["http.requests_total"],
+    metricsQ.data?.snapshot_at,
+  );
+  // Errors per MINUTE (rather than per second) because the absolute
+  // count is usually < 1 / second even on a busy box; showing /min
+  // keeps the headline value non-zero at typical traffic levels.
+  const errRate = useMetricRate(
+    (metricsQ.data?.counters["http.errors_4xx_total"] ?? 0) +
+      (metricsQ.data?.counters["http.errors_5xx_total"] ?? 0),
+    metricsQ.data?.snapshot_at,
+    24,
+    60,
+  );
+  const hooksRate = useMetricRate(
+    metricsQ.data?.counters["hooks.invocations_total"],
+    metricsQ.data?.snapshot_at,
+  );
+  // p95 latency is a histogram, not a counter — useMetricBuffer is the
+  // right shape since the absolute value at each poll IS the data
+  // point (no derivative). Convert ns→ms in the format() callback.
+  const p95Ms = metricsQ.data?.histograms?.["http.latency"]?.p95_ns
+    ? metricsQ.data.histograms["http.latency"].p95_ns / 1_000_000
+    : 0;
+  const latTrend = useMetricBuffer(p95Ms, metricsQ.data?.snapshot_at);
 
   if (q.isLoading) {
     return <div class="text-sm text-muted-foreground">Loading…</div>;
@@ -39,16 +88,29 @@ export function HealthScreen() {
   }
   const h = q.data;
 
-  return (
-    <div class="space-y-6">
-      <header>
-        <h1 class="text-2xl font-semibold">Health &amp; metrics</h1>
-        <p class="text-sm text-muted-foreground">
-          Live snapshot of runtime, DB pool, jobs, audit, logs, realtime,
-          and backups. Polls every 5&nbsp;s.
-        </p>
-      </header>
+  // Roll a small ring buffer of recent samples keyed off the response's
+  // `now` field. ~24 polls at 5s = ~2 min window. This is purely client-
+  // side; on refresh the trend resets to one sample. A future revision
+  // can pull historical series from a Prometheus-style /metrics endpoint
+  // (docs/12 screen #17 "live charts 1m/5m/1h/24h" target).
+  const goroutinesTrend = useMetricBuffer(h.memory.goroutines, h.now);
+  const poolTrend = useMetricBuffer(h.pool.acquired, h.now);
+  const jobsTrend = useMetricBuffer(h.jobs.pending + h.jobs.running, h.now);
+  const memTrend = useMetricBuffer(h.memory.alloc_bytes / 1024 / 1024, h.now);
 
+  return (
+    <AdminPage className="space-y-6">
+      <AdminPage.Header
+        title={<>Health &amp; metrics</>}
+        description={
+          <>
+            Live snapshot of runtime, DB pool, jobs, audit, logs, realtime,
+            and backups. Polls every 5&nbsp;s.
+          </>
+        }
+      />
+
+      <AdminPage.Body className="space-y-6">
       {/* Row 1 — runtime / pool / memory */}
       <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
@@ -72,6 +134,80 @@ export function HealthScreen() {
           label="Memory"
           value={`${(h.memory.alloc_bytes / 1024 / 1024).toFixed(1)} MB`}
           hint={`sys ${(h.memory.sys_bytes / 1024 / 1024).toFixed(0)} MB · ${h.memory.num_gc} GC cycles`}
+        />
+      </section>
+
+      {/* Trend strip — last ~2 min (24 polls × 5s) of the runtime
+          metrics that matter most. Lazy-loaded; main bundle skips
+          Recharts. */}
+      <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <TrendCard
+          label="Goroutines"
+          value={h.memory.goroutines}
+          intent={h.memory.goroutines > 10_000 ? "danger" : "neutral"}
+          data={goroutinesTrend}
+        />
+        <TrendCard
+          label="Pool acquired"
+          value={h.pool.acquired}
+          intent={
+            h.pool.max > 0 && h.pool.acquired >= h.pool.max - 1
+              ? "warn"
+              : "primary"
+          }
+          data={poolTrend}
+        />
+        <TrendCard
+          label="Jobs in flight"
+          value={h.jobs.pending + h.jobs.running}
+          intent={
+            h.jobs.pending + h.jobs.running > 100 ? "warn" : "info"
+          }
+          data={jobsTrend}
+        />
+        <TrendCard
+          label="Memory MB"
+          value={(h.memory.alloc_bytes / 1024 / 1024).toFixed(1)}
+          intent="neutral"
+          data={memTrend}
+          format={(v) => v.toFixed(1) + " MB"}
+        />
+      </section>
+
+      {/* HTTP + hooks trend strip — v1.7.x §3.11 / docs/14 §Health.
+          Derived from the in-process metric registry via /api/_admin/
+          metrics. Rates are computed client-side (useMetricRate)
+          against the previous poll's absolute counter — no historical
+          series stored server-side, so a page refresh resets the
+          trend to one sample. */}
+      <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <TrendCard
+          label="Requests/sec"
+          value={reqRate.rate != null ? reqRate.rate.toFixed(1) : "—"}
+          intent="primary"
+          data={reqRate.samples}
+          format={(v) => v.toFixed(2) + "/s"}
+        />
+        <TrendCard
+          label="Errors/min"
+          value={errRate.rate != null ? errRate.rate.toFixed(1) : "—"}
+          intent={errRate.rate != null && errRate.rate > 0 ? "warn" : "neutral"}
+          data={errRate.samples}
+          format={(v) => v.toFixed(1) + "/min"}
+        />
+        <TrendCard
+          label="p95 latency"
+          value={p95Ms > 0 ? p95Ms.toFixed(0) + " ms" : "—"}
+          intent={p95Ms > 500 ? "warn" : "info"}
+          data={latTrend}
+          format={(v) => v.toFixed(0) + " ms"}
+        />
+        <TrendCard
+          label="Hook invocations/sec"
+          value={hooksRate.rate != null ? hooksRate.rate.toFixed(2) : "—"}
+          intent="info"
+          data={hooksRate.samples}
+          format={(v) => v.toFixed(2) + "/s"}
         />
       </section>
 
@@ -133,7 +269,57 @@ export function HealthScreen() {
           </div>
         </CardContent>
       </Card>
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
+  );
+}
+
+// TrendCard — small Card containing a metric label, its current value,
+// and a lazy-loaded TrendChart sparkline of the last ~24 samples. The
+// chart only renders when there are ≥ 2 samples; before that we show
+// a "warming up…" hint so the screen doesn't look broken on first
+// render right after page load.
+function TrendCard({
+  label,
+  value,
+  intent,
+  data,
+  format,
+}: {
+  label: string;
+  value: number | string;
+  intent: "neutral" | "primary" | "warn" | "danger" | "info";
+  data: ReadonlyArray<{ t: number; v: number }>;
+  format?: (v: number) => string;
+}) {
+  return (
+    <Card>
+      <CardHeader class="p-3 pb-1 space-y-0">
+        <CardDescription class="text-xs uppercase tracking-wide text-muted-foreground">
+          {label}
+        </CardDescription>
+      </CardHeader>
+      <CardContent class="p-3 pt-0">
+        <CardTitle class="text-xl tabular-nums">{value}</CardTitle>
+        <div class="mt-2 h-12 -mx-1">
+          {data.length >= 2 ? (
+            <Suspense
+              fallback={
+                <div class="h-full flex items-center justify-center text-[10px] text-muted-foreground">
+                  loading chart…
+                </div>
+              }
+            >
+              <TrendChart data={data.slice()} intent={intent} format={format} />
+            </Suspense>
+          ) : (
+            <div class="h-full flex items-center justify-center text-[10px] text-muted-foreground">
+              warming up… ({data.length}/2 samples)
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

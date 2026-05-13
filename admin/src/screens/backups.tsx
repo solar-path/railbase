@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import type { BackupCreatedResponse } from "../api/types";
+import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import {
   Table,
@@ -59,17 +60,17 @@ export function BackupsScreen() {
   const totalSize = items.reduce((acc, it) => acc + (it.size_bytes ?? 0), 0);
 
   return (
-    <div className="space-y-4">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Backups</h1>
-          <p className="text-sm text-muted-foreground">
+    <AdminPage>
+      <AdminPage.Header
+        title="Backups"
+        description={
+          <>
             {items.length} archive{items.length === 1 ? "" : "s"}
             {items.length > 0 ? <> — {humanSize(totalSize)} total</> : null}.
-            Stored under <code className="rb-mono">&lt;dataDir&gt;/backups/</code>.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+            Stored under <code className="font-mono">&lt;dataDir&gt;/backups/</code>.
+          </>
+        }
+        actions={
           <Button
             onClick={() => createM.mutate()}
             disabled={createM.isPending}
@@ -84,13 +85,13 @@ export function BackupsScreen() {
               <>+ Create backup</>
             )}
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       {flash ? (
-        <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 flex items-start justify-between gap-3">
+        <div className="rounded border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-primary flex items-start justify-between gap-3">
           <div>
-            Backup created: <span className="rb-mono">{flash.name}</span>{" "}
+            Backup created: <span className="font-mono">{flash.name}</span>{" "}
             ({flash.manifest.tables_count} table
             {flash.manifest.tables_count === 1 ? "" : "s"},{" "}
             {flash.manifest.rows_count.toLocaleString()} row
@@ -101,7 +102,7 @@ export function BackupsScreen() {
             size="sm"
             onClick={() => setFlash(null)}
             aria-label="Dismiss"
-            className="text-emerald-700/70 hover:text-emerald-900 hover:bg-transparent h-auto p-0"
+            className="text-primary/70 hover:text-primary hover:bg-transparent h-auto p-0"
           >
             ×
           </Button>
@@ -111,12 +112,13 @@ export function BackupsScreen() {
       {createM.isError ? (
         <div className="rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           Backup failed:{" "}
-          <span className="rb-mono">
+          <span className="font-mono">
             {(createM.error as { message?: string } | null)?.message ?? "unknown error"}
           </span>
         </div>
       ) : null}
 
+      <AdminPage.Body className="space-y-4">
       {q.isLoading ? (
         <div className="text-sm text-muted-foreground">Loading…</div>
       ) : items.length === 0 ? (
@@ -137,12 +139,12 @@ export function BackupsScreen() {
               <TableBody>
                 {items.map((b) => (
                   <TableRow key={b.path}>
-                    <TableCell className="rb-mono">{b.name}</TableCell>
-                    <TableCell className="rb-mono text-xs whitespace-nowrap">
+                    <TableCell className="font-mono">{b.name}</TableCell>
+                    <TableCell className="font-mono text-xs whitespace-nowrap">
                       {humanSize(b.size_bytes)}
                     </TableCell>
                     <TableCell
-                      className="rb-mono text-xs text-muted-foreground whitespace-nowrap"
+                      className="font-mono text-xs text-muted-foreground whitespace-nowrap"
                       title={b.created}
                     >
                       {relativeTime(b.created)}
@@ -157,11 +159,12 @@ export function BackupsScreen() {
 
       <p className="text-xs text-muted-foreground">
         To restore a backup, use{" "}
-        <code className="rb-mono">railbase backup restore &lt;path&gt; --force</code>{" "}
+        <code className="font-mono">railbase backup restore &lt;path&gt; --force</code>{" "}
         from the CLI. Restoring from the admin UI is intentionally not
         supported in v1.
       </p>
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }
 

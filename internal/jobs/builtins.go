@@ -936,6 +936,19 @@ func DefaultSchedules() []DefaultSchedule {
 			Expression: "0 5 * * 0", // Sunday 05:00 UTC
 			Kind:       "orphan_reaper",
 		},
+		{
+			// v1.7.43 §3.1 — welcome-email retry sweeper. Picks up
+			// admin_welcome / admin_created_notice jobs that exhausted
+			// their MaxAttempts (24) and resurrects them, so when the
+			// operator fixes SMTP an hour after admin-create, the
+			// welcome eventually lands. 30-min cadence: tight enough
+			// to feel responsive ("welcome arrived shortly after I
+			// fixed SMTP"), loose enough that an idle system isn't
+			// hammered by the sweep query.
+			Name:       "retry_failed_welcome_emails",
+			Expression: "*/30 * * * *",
+			Kind:       "retry_failed_welcome_emails",
+		},
 	}
 }
 

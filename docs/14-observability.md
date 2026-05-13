@@ -7,10 +7,39 @@
 ### Sources (precedence: ниже = выше priority)
 
 1. Built-in defaults
-2. Config file `railbase.yaml`
-3. Environment variables (`RAILBASE_*`)
-4. CLI flags (`--db-url`, etc.)
-5. **Admin UI overrides** (для runtime-изменяемых; пишутся в `_settings` table)
+2. `.env` file (`./.env` then `<DataDir>/.env`, see v1.7.45 below)
+3. Config file `railbase.yaml`
+4. Environment variables (`RAILBASE_*`)
+5. CLI flags (`--db-url`, etc.)
+6. **Admin UI overrides** (для runtime-изменяемых; пишутся в `_settings` table)
+
+#### `.env` file (v1.7.45)
+
+Railbase reads `.env` BEFORE anything else, so operators don't have to
+pass `RAILBASE_HTTP_ADDR=:8095 ./railbase serve` on every shell line.
+Two locations consulted, in order:
+
+1. `./.env` — alongside the binary / working directory
+2. `<DataDir>/.env` — alongside `pb_data/`, useful when one host runs
+   multiple Railbase instances from a shared binary
+
+Format is the standard one:
+
+```dotenv
+# Comments tolerated
+RAILBASE_HTTP_ADDR=:8095            # bare values
+RAILBASE_DSN="postgres://u:p@h/db"  # double-quoted: \n \r \t \\ \"
+RAILBASE_SECRET='literal \value'    # single-quoted: literal, no escapes
+export RAILBASE_PROD=true           # `export ` prefix tolerated
+```
+
+**Precedence**: process env wins over `.env`. You can shadow a stored
+DSN with `RAILBASE_DSN=... ./railbase serve` for a one-off run without
+editing the file. CLI flags win over both.
+
+The repo ships `.env.example` as a starter template with every known
+`RAILBASE_*` key commented out — `cp .env.example .env` is the
+operator workflow. `.env` itself is gitignored.
 
 ### Config file пример
 
@@ -267,24 +296,93 @@ Redaction layer в slog handler — explicit allowlist, deny-by-default для u
 ### First run flow
 
 ```
-$ railbase init demo
+$ railbase serve                       # без init, без env — zero-config v1.4.3
+  1. Load config (no .secret? → auto-create in dev, refuse in prod)
+  2. Open DB:
+     a. RAILBASE_DSN set     → use it
+     b. <DataDir>/.dsn exists → use persisted (v1.7.39 setup wizard saved it)
+     c. embed_pg build tag    → spin up embedded PG (dev convenience)
+     d. otherwise             → enter setup mode (only /api/_admin/_setup/* mounted)
+  3. Foreign-DB invariant (v1.7.42): if `public` non-empty AND no `_migrations`
+     marker → fail with ErrForeignDatabase (RAILBASE_FORCE_INIT=1 overrides).
+     Catches manual-`.dsn`-edit route bypassing the wizard.
+  4. Run system migrations if first run (_admins, _audit_log, etc.)
+  5. Discover user schema (Go DSL registry); diff with applied migrations
+  6. If no admin → admin UI `/_/` shows bootstrap wizard (DB setup → admin)
+  7. Start hook runtime pool, fsnotify watcher
+  8. Mount HTTP server on configured port
+  9. Print:
+       Admin UI: http://localhost:8095/_/
+       API:      http://localhost:8095/api/
+
+$ railbase init demo                   # opt-in scaffold for code-first workflow
   1. Create directory structure (pb_data/, pb_hooks/, schema/)
   2. Generate .secret (32-byte key)
-  3. Write railbase.yaml (defaults: port 8090, embed-postgres for dev convenience, override через `RAILBASE_DSN`)
+  3. Write railbase.yaml (defaults: port 8095 — IANA-unassigned, no default
+     daemon on Linux/Windows/macOS, no collision with PB :8090; DB
+     configured via setup wizard
+     on first `serve` OR via RAILBASE_DSN env var)
   4. Write schema/main.go (helloworld: одна коллекция `posts`)
   5. Write pb_hooks/example.pb.js (одна hook, demonstration)
-
-$ railbase serve
-  1. Load config
-  2. Open DB; if first run → run system migrations (_system_admins, _audit_log, etc.)
-  3. Discover user schema (Go DSL registry); diff with applied migrations
-  4. If admin не существует → print prompt: "run `railbase admin create <email>`"
-  5. Start hook runtime pool, fsnotify watcher
-  6. Mount HTTP server on configured port
-  7. Print:
-       Admin UI: http://localhost:8090/_/
-       API:      http://localhost:8090/api/
 ```
+
+### Setup wizard safety model (v1.7.42)
+
+The first-run setup wizard guards against two failure modes — neither is data-loss, both are schema pollution:
+
+| Failure mode | First layer (wizard probe) | Second layer (boot invariant) |
+|---|---|---|
+| Operator typos DB name → hits a foreign app's DB | `is_existing_railbase=false && public_table_count>0` → amber warning + Save locked behind checkbox | `internal/db/migrate.checkForeignDatabase` returns `ErrForeignDatabase` before `bootstrap()` writes the `_migrations` marker |
+| Operator hand-edits `<DataDir>/.dsn` to point at a foreign DB | (bypasses wizard entirely) | Same `internal/db/migrate` check catches it on next boot |
+
+**No destructive operations.** The setup endpoints (`probe-db`, `save-db`) never execute `DROP DATABASE`, `DROP TABLE`, or `TRUNCATE`. The `Create the database if it doesn't exist` checkbox only fires `CREATE DATABASE <name>` against the `postgres` admin DB IF the target doesn't already exist — never against an existing one (checkbox is silently ignored in that case). Probe is read-only (`SELECT version()` + one `pg_tables` count).
+
+**Escape hatch.** Legitimate co-location scenarios (Railbase alongside another app sharing a logical DB) are unblocked by `RAILBASE_FORCE_INIT=1` env var (boot side) + UI checkbox «I understand — install Railbase alongside the existing tables.» (wizard side). Env var is intentionally not a CLI flag — operator should feel the friction.
+
+**What the marker is.** The `_migrations` table created by the first successful migration run doubles as the "this DB belongs to Railbase" fingerprint. Adding a separate `_railbase_instance` table with a UUID `instance_id` for distinguishing multiple Railbase installs against the same DB is a v1.x candidate when backup/restore + cross-instance scenarios appear; not blocking SHIP.
+
+### Mandatory email on admin creation (v1.7.43)
+
+Bootstrap wizard now has THREE steps: Database → **Mailer** → Admin account. The mailer step is required before any admin can be created.
+
+**Server-side gate** (`internal/api/adminapi/bootstrap.go::mailerGateError`): `POST /api/_admin/_bootstrap` returns **412 Precondition Failed** if neither `mailer.configured_at` nor `mailer.setup_skipped_at` is set in `_settings`. The CLI `railbase admin create` bypasses the 412 gate on purpose (operator surface), but still honours the `mailer.setup_skipped_at` flag — if set, no welcome enqueues; otherwise a welcome lands like the handler path. The `--no-email` flag (CLI-only) lets operators explicitly suppress per-invocation when they're moving admin records around in scripts.
+
+**On every successful admin creation** (provided mailer NOT skipped):
+
+| Email | Template | Recipient | Purpose |
+|---|---|---|---|
+| Welcome | `admin_welcome.md` | the new admin | Login URL + onboarding (2FA, audit-log review) |
+| Broadcast notice | `admin_created_notice.md` | every OTHER admin | Compromise detection. Empty fan-out on bootstrap (first admin); N-1 emails on subsequent creates. |
+
+**Delivery durability**:
+
+- Both emails ride `send_email_async` (v1.7.30) — exp-backoff retry 30s → 1h ceiling, MaxAttempts=24 (much higher than the 5 standard so welcomes survive ~24h of SMTP downtime via the standard retry layer alone)
+- Failed sends after MaxAttempts → `_jobs` row with `status='failed'` + `last_error`, AND `_email_events` row with the outcome
+- **`retry_failed_welcome_emails` cron** (every 30 min) picks up failed welcome rows older than 15 min and younger than 7 days, flips them back to `pending` so the next worker poll re-attempts. Welcome emails that landed in failed state hours before the operator fixed SMTP eventually arrive. **Welcome-only** — password_reset / signup_verification / other templates are NOT swept (stale content + likely-expired links).
+
+**Skip path** (`POST /api/_admin/_setup/mailer-skip` with non-empty reason): stamps `mailer.setup_skipped_at` (timestamp) + `mailer.setup_skipped_reason` (free text) in `_settings`. Audit-event `settings.changed` fires automatically. With the flag set:
+
+- bootstrap-handler + CLI admin-create both proceed without enqueueing any emails
+- Mailer step renders an amber notice on return-visits ("Mailer skipped on YYYY-MM-DD, reason: ...")
+- Re-saving a valid mailer config CLEARS the skip flag automatically — operator-intent has reversed
+
+**Why mandatory by default**:
+
+1. **Compromise detection** — broadcast notice goes to every existing admin when a new admin is added. If you didn't authorise it, you find out immediately rather than via after-the-fact audit-log review.
+2. **Operational visibility** — multi-operator teams. "Alice created admin Bob" is visible to all admins, not just whoever pulls audit log.
+3. **Welcome content** — new admin gets login URL + getting-started ссылки + 2FA reminder. Audit log doesn't deliver that.
+4. **Industry parity** — Auth0 / Cognito / Supabase / Keycloak all send admin-creation emails by default.
+
+**Endpoints**:
+
+```
+GET  /api/_admin/_setup/mailer-status — current configured/skipped state + masked snapshot
+POST /api/_admin/_setup/mailer-probe  — test SMTP/console with a probe recipient
+POST /api/_admin/_setup/mailer-save   — persist driver + SMTP creds + from_address to _settings
+POST /api/_admin/_setup/mailer-skip   — record "I'll configure later" with mandatory reason
+```
+
+All four are PUBLIC (no RequireAdmin) by design — operator can't be admin until DB + mailer are resolved. Trust boundary is operator-grade access to the running process during cold-boot.
 
 ### Graceful shutdown
 
@@ -696,7 +794,7 @@ telemetry:
 ```dockerfile
 FROM scratch
 COPY railbase /railbase
-EXPOSE 8090
+EXPOSE 8095
 ENTRYPOINT ["/railbase", "serve"]
 ```
 

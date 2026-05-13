@@ -13,6 +13,8 @@ import (
 	"github.com/railbase/railbase/internal/admins"
 	"github.com/railbase/railbase/internal/audit"
 	"github.com/railbase/railbase/internal/auth/apitoken"
+	"github.com/railbase/railbase/internal/auth/recordtoken"
+	"github.com/railbase/railbase/internal/metrics"
 	"github.com/railbase/railbase/internal/notifications"
 	"github.com/railbase/railbase/internal/realtime"
 	"github.com/railbase/railbase/internal/settings"
@@ -77,6 +79,23 @@ type Deps struct {
 	// both seams.
 	Mailer notifications.Mailer
 
+	// Metrics is the process-wide in-process metric registry that
+	// backs the v1.7.x /api/_admin/metrics endpoint. Optional — when
+	// nil, /api/_admin/metrics returns an empty Snapshot (zero
+	// counters, zero histograms) rather than 503 so the admin UI's
+	// chart strip can render "no samples yet" instead of an error.
+	// Production wires the same *Registry the HTTP middleware
+	// publishes onto from pkg/railbase/app.go.
+	Metrics *metrics.Registry
+
+	// RecordTokens is the package the v1.7.46 admin password-reset
+	// flow uses to issue + consume single-use signed tokens. Optional
+	// — when nil, /forgot-password and /reset-password return 503.
+	// The endpoint is also gated by mailer-configured-at; the operator
+	// is told to use `railbase admin reset-password <email>` from the
+	// CLI when the mailer hasn't been set up yet.
+	RecordTokens *recordtoken.Store
+
 	// SetupReload is wired ONLY in the setup-mode boot path
 	// (pkg/railbase/app.go::runSetupOnly). When the operator finishes
 	// the wizard via POST /_setup/save-db, the handler pushes the new
@@ -113,10 +132,33 @@ func (d *Deps) Mount(r chi.Router) {
 		// during cold-boot setup is "operator-grade access to the
 		// running process" — same model as the v0.8 bootstrap step.
 		d.mountSetupDB(r)
+		// v1.7.43 — mailer setup wizard step. PUBLIC, mounted next to
+		// the DB setup endpoints because both run pre-admin. The
+		// bootstrap-admin handler (POST /_bootstrap) gates on the
+		// mailer.configured_at OR mailer.setup_skipped_at flags these
+		// endpoints write — admin-create returns 412 if neither is set.
+		d.mountSetupMailer(r)
+		// v1.7.47 — auth-methods setup wizard step. PUBLIC, sits between
+		// DB and Mailer in the wizard UI. Toggles password / magic-link /
+		// OTP / TOTP / WebAuthn + per-provider OAuth (google, github,
+		// apple, generic OIDC). Bootstrap-admin gate accepts either
+		// auth.configured_at OR auth.setup_skipped_at — wizard advance
+		// is non-skippable; explicit Skip stamps the latter w/ password
+		// as the safe-default fallback.
+		d.mountSetupAuth(r)
 
 		r.Post("/auth", d.authHandler)
 		r.Post("/auth-refresh", d.refreshHandler)
 		r.Post("/auth-logout", d.logoutHandler)
+
+		// v1.7.46 — admin password-reset flow. PUBLIC (no RequireAdmin):
+		//   - forgot-password issues a single-use reset token via email.
+		//     Always 200 (anti-enumeration) unless the mailer isn't
+		//     configured, in which case 503 with a CLI hint.
+		//   - reset-password consumes the token, sets the new password,
+		//     and revokes every live session for the admin.
+		r.Post("/forgot-password", d.forgotPasswordHandler)
+		r.Post("/reset-password", d.resetPasswordHandler)
 
 		// Authenticated surface.
 		r.Group(func(r chi.Router) {
@@ -127,6 +169,12 @@ func (d *Deps) Mount(r chi.Router) {
 			r.Patch("/settings/{key}", d.settingsPatchHandler)
 			r.Delete("/settings/{key}", d.settingsDeleteHandler)
 			r.Get("/audit", d.auditListHandler)
+			// v1.7.x §3.15 Block A — XLSX export of the audit log,
+			// same filter vocabulary as the list endpoint above.
+			// Streams up to 100k rows; setting X-Truncated: true when
+			// the slice was capped. Emits one `audit.exported` audit
+			// row on completion (success or error).
+			r.Get("/audit/export.xlsx", d.auditExportHandler)
 			// v1.7.6 — logs-as-records admin surface.
 			r.Get("/logs", d.logsListHandler)
 			// v1.7.7 — jobs queue browser. Read-only.
@@ -201,6 +249,13 @@ func (d *Deps) Mount(r chi.Router) {
 			// nil-guards internally so the dashboard renders even when
 			// one is wired down. Backs admin/src/screens/health.tsx.
 			d.mountHealth(r)
+			// v1.7.x §3.11 — In-process metric registry snapshot.
+			// Companion to /health: covers HTTP rps / error rates /
+			// latency histogram / hook invocations — the live "is the
+			// box healthy right now" surface the dashboard polls
+			// alongside /health. Always registered; nil-Registry returns
+			// an empty Snapshot.
+			d.mountMetrics(r)
 			// v1.7.x §3.11 — Cache inspector. Reads the package-global
 			// cache.Registry (v1.5.1) for read-only listing + a manual
 			// Clear action per instance. Always registered: the registry
@@ -209,6 +264,13 @@ func (d *Deps) Mount(r chi.Router) {
 			// empty-state. Mirrors the mountWebhooks / mountRealtime
 			// sibling pattern.
 			d.mountCache(r)
+			// v1.7.x §3.11 — Read-only browsers for the sensitive system
+			// tables (`_admins`, `_admin_sessions`, `_sessions`). Mounted
+			// under /_system/* so the routes can't collide with a future
+			// user-defined collection named "admins" or "sessions". CRUD
+			// stays on the CLI (`railbase admin create/delete`); every
+			// read emits an `admin.system_table.read` audit row.
+			d.mountSystemTables(r)
 		})
 	})
 }

@@ -28,12 +28,12 @@ export function ColorCell({ value }: { value: unknown }) {
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
       {valid ? (
         <span
-          className="inline-block h-4 w-4 rounded border border-neutral-300"
+          className="inline-block h-4 w-4 rounded border border-input"
           style={{ backgroundColor: s }}
           aria-hidden="true"
         />
       ) : null}
-      <span className="rb-mono text-xs">{s}</span>
+      <span className="font-mono text-xs">{s}</span>
     </span>
   );
 }
@@ -76,7 +76,7 @@ export function ColorInput({
             setErr(null);
             onChange(next);
           }}
-          className="h-8 w-10 rounded border border-neutral-300 p-0.5"
+          className="h-8 w-10 rounded border border-input p-0.5"
           aria-label="color picker"
         />
         <input
@@ -96,14 +96,14 @@ export function ColorInput({
           autoCapitalize="off"
           autoCorrect="off"
           className={
-            "flex-1 rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +
+            "flex-1 rounded border px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 " +
             (err
-              ? "border-red-400 focus:ring-red-500"
-              : "border-neutral-300 focus:ring-neutral-900")
+              ? "border-destructive/40 focus:ring-destructive"
+              : "border-input focus:ring-ring")
           }
         />
       </div>
-      {err ? <p className="mt-0.5 text-xs text-red-600">{err}</p> : null}
+      {err ? <p className="mt-0.5 text-xs text-destructive">{err}</p> : null}
     </div>
   );
 }

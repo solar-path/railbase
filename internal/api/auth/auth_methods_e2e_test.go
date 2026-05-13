@@ -42,6 +42,7 @@ import (
 	schemabuilder "github.com/railbase/railbase/internal/schema/builder"
 	"github.com/railbase/railbase/internal/schema/gen"
 	"github.com/railbase/railbase/internal/schema/registry"
+	"github.com/railbase/railbase/internal/settings"
 )
 
 func TestAuthMethodsE2E(t *testing.T) {
@@ -264,6 +265,61 @@ func TestAuthMethodsE2E(t *testing.T) {
 		}
 	}
 	t.Logf("[9] all 5 top-level keys present")
+
+	// === [10] v1.7.47: setup-wizard settings override capability ===
+	//
+	// Two assertions cover the override surface in one pass:
+	//   (a) password.enabled defaults true but flips false when the
+	//       wizard explicitly writes auth.password.enabled=false.
+	//   (b) oauth2 names that are code-registered AND wizard-disabled
+	//       drop out of the surface (e.g. "github" registered above but
+	//       operator hits "disable GitHub" in the admin UI).
+	settingsMgr := settings.New(settings.Options{Pool: pool})
+	// Clean slate — prior test cases may have left rows in _settings.
+	_ = settingsMgr.Delete(ctx, "auth.password.enabled")
+	_ = settingsMgr.Delete(ctx, "auth.oauth.github.enabled")
+
+	regWithGitHub := oauth.NewRegistry(key, map[string]oauth.Provider{
+		"google": &oauth.Generic{ProviderName: "google", Cfg: oauth.Config{ClientID: "c", AuthURL: "x", TokenURL: "y", UserinfoURL: "z"}},
+		"github": &oauth.Generic{ProviderName: "github", Cfg: oauth.Config{ClientID: "c", AuthURL: "x", TokenURL: "y", UserinfoURL: "z"}},
+	})
+	c10 := build(&Deps{OAuth: regWithGitHub, Settings: settingsMgr})
+
+	// 10a: no settings yet → password ON, both providers visible.
+	_, body = get(t, c10, "/api/collections/users/auth-methods")
+	pw10, _ := body["password"].(map[string]any)
+	if pw10["enabled"] != true {
+		t.Errorf("[10a] password.enabled default = %v, want true", pw10["enabled"])
+	}
+	oa10, _ := body["oauth2"].([]any)
+	if len(oa10) != 2 {
+		t.Errorf("[10a] oauth2 default len = %d, want 2", len(oa10))
+	}
+
+	// 10b: operator disables password + github via the wizard.
+	if err := settingsMgr.Set(ctx, "auth.password.enabled", false); err != nil {
+		t.Fatalf("[10b] set auth.password.enabled: %v", err)
+	}
+	if err := settingsMgr.Set(ctx, "auth.oauth.github.enabled", false); err != nil {
+		t.Fatalf("[10b] set auth.oauth.github.enabled: %v", err)
+	}
+	_, body = get(t, c10, "/api/collections/users/auth-methods")
+	pw10b, _ := body["password"].(map[string]any)
+	if pw10b["enabled"] != false {
+		t.Errorf("[10b] password.enabled override = %v, want false", pw10b["enabled"])
+	}
+	oa10b, _ := body["oauth2"].([]any)
+	if len(oa10b) != 1 {
+		t.Fatalf("[10b] oauth2 after github-disable len = %d, want 1", len(oa10b))
+	}
+	if first := oa10b[0].(map[string]any); first["name"] != "google" {
+		t.Errorf("[10b] surviving provider = %q, want google", first["name"])
+	}
+	t.Logf("[10] settings override: password OFF + github filtered out → ✓")
+
+	// Clean up so subsequent runs in -count=N don't carry state.
+	_ = settingsMgr.Delete(ctx, "auth.password.enabled")
+	_ = settingsMgr.Delete(ctx, "auth.oauth.github.enabled")
 }
 
 // captureBaseURL rewrites requests to a per-test httptest server. Lets

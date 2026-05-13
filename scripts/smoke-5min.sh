@@ -13,7 +13,7 @@
 # in .github/workflows (or equivalent). It assumes:
 #   - Go 1.26+ on $PATH
 #   - curl on $PATH
-#   - tcp port 8090 free (override via $RAILBASE_HTTP_ADDR)
+#   - tcp port 8095 free (override via $RAILBASE_HTTP_ADDR)
 #
 # Embedded postgres is downloaded on first run (~5s) and cached at
 # $TMPDIR. Total runtime ≈ 60-90s on a warm machine; under 5 min cold.
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 # === config ===
-PORT="${RAILBASE_HTTP_ADDR:-:8090}"
+PORT="${RAILBASE_HTTP_ADDR:-:8095}"
 BASE="http://localhost${PORT}"
 DATA_DIR="$(mktemp -d -t railbase-smoke-XXXX)"
 BIN="${DATA_DIR}/railbase"

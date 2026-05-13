@@ -14,6 +14,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/railbase/railbase/internal/admins"
+	"github.com/railbase/railbase/internal/auth/secret"
 	"github.com/railbase/railbase/internal/db/migrate"
 	sysmigrations "github.com/railbase/railbase/internal/db/migrate/sys"
 )
@@ -34,12 +35,13 @@ func newAdminCmd() *cobra.Command {
 		Use:   "admin",
 		Short: "Manage system administrators",
 	}
-	cmd.AddCommand(newAdminCreateCmd(), newAdminListCmd(), newAdminDeleteCmd())
+	cmd.AddCommand(newAdminCreateCmd(), newAdminListCmd(), newAdminDeleteCmd(), newAdminResetPasswordCmd())
 	return cmd
 }
 
 func newAdminCreateCmd() *cobra.Command {
 	var pw string
+	var noEmail bool
 	cmd := &cobra.Command{
 		Use:   "create <email>",
 		Short: "Create a system administrator",
@@ -76,11 +78,32 @@ func newAdminCreateCmd() *cobra.Command {
 				return err
 			}
 			fmt.Printf("created admin %s (id=%s)\n", a.Email, a.ID)
+
+			// v1.7.43 — enqueue welcome + broadcast notice unless the
+			// operator passed --no-email OR the mailer was explicitly
+			// skipped during setup. We bypass the bootstrap-handler's
+			// 412 gate here on purpose: the CLI is the operator's own
+			// surface, and they can always re-trigger emails later via
+			// `railbase jobs enqueue send_email_async ...` if they need
+			// to. The CLI just notes when emails were skipped so a
+			// distracted operator sees the consequence in stdout.
+			if noEmail {
+				fmt.Println("note: --no-email set — no welcome / broadcast emails enqueued")
+				return nil
+			}
+			if err := enqueueAdminEmailsCLI(cmd.Context(), rt, a, "CLI (`railbase admin create`)", "operator-cli"); err != nil {
+				// Best-effort — log + continue. The admin was created;
+				// failing the command because of an email-queue error
+				// would put the operator into a confusing state.
+				fmt.Fprintf(os.Stderr, "warning: enqueue welcome email failed: %v\n", err)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&pw, "password", "",
 		"Password (insecure: prefer the interactive prompt)")
+	cmd.Flags().BoolVar(&noEmail, "no-email", false,
+		"Skip welcome + broadcast notice emails (use sparingly; default is to send)")
 	return cmd
 }
 
@@ -152,6 +175,91 @@ func newAdminDeleteCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// newAdminResetPasswordCmd is the operator-grade escape hatch for
+// admin password recovery: works WITHOUT a configured mailer (which
+// the HTTP forgot-password endpoint cannot, by design). Operator
+// must have shell access to the host.
+//
+// Usage:
+//
+//	railbase admin reset-password <email>           # interactive
+//	railbase admin reset-password <email> -p <pw>   # scripted
+//
+// On success: sets the new password hash + invalidates every live
+// session for that admin (so an attacker holding a stale cookie is
+// kicked out alongside the legitimate operator who's now reset).
+func newAdminResetPasswordCmd() *cobra.Command {
+	var pw string
+	cmd := &cobra.Command{
+		Use:   "reset-password <email-or-id>",
+		Short: "Reset an administrator's password (operator escape hatch — no mailer required)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := openRuntime(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer rt.cleanup()
+			if err := applySysMigrations(cmd.Context(), rt); err != nil {
+				return err
+			}
+
+			store := admins.NewStore(rt.pool.Pool)
+			arg := strings.TrimSpace(args[0])
+			var target *admins.Admin
+			if u, err := uuid.Parse(arg); err == nil {
+				target, err = store.GetByID(cmd.Context(), u)
+				if err != nil {
+					return fmt.Errorf("admin %q not found", arg)
+				}
+			} else {
+				target, err = store.GetByEmail(cmd.Context(), arg)
+				if err != nil {
+					return fmt.Errorf("admin %q not found", arg)
+				}
+			}
+
+			if pw == "" {
+				p, err := readPasswordTwice("New password: ", "Confirm: ")
+				if err != nil {
+					return err
+				}
+				pw = p
+			}
+			if len(pw) < 8 {
+				return errors.New("password must be at least 8 characters")
+			}
+
+			if err := store.SetPassword(cmd.Context(), target.ID, pw); err != nil {
+				return fmt.Errorf("set password: %w", err)
+			}
+
+			// Best-effort: revoke every live session belonging to the
+			// admin so cookies stolen pre-reset can't survive. Failure
+			// here is non-fatal — the password is already changed; we
+			// just warn so the operator knows.
+			masterKey, mkErr := secret.LoadFromDataDir(rt.cfg.DataDir)
+			if mkErr == nil {
+				sessions := admins.NewSessionStore(rt.pool.Pool, masterKey)
+				revoked, rerr := sessions.RevokeAllFor(cmd.Context(), target.ID)
+				if rerr != nil {
+					fmt.Fprintf(os.Stderr, "warning: revoke live sessions failed: %v\n", rerr)
+				} else {
+					fmt.Printf("revoked %d live session(s)\n", revoked)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "warning: cannot read .secret, sessions not revoked: %v\n", mkErr)
+			}
+
+			fmt.Printf("password reset for admin %s (id=%s)\n", target.Email, target.ID)
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&pw, "password", "p", "",
+		"New password (skips interactive prompt; useful for scripts but avoid in shell history)")
+	return cmd
 }
 
 // readPasswordTwice prompts the user twice and confirms the entries

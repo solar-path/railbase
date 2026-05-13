@@ -49,14 +49,14 @@ export function TagsCell({ value }: { value: unknown }) {
       {visible.map((t) => (
         <span
           key={t}
-          className="inline-block rounded bg-neutral-100 text-neutral-700 text-xs px-1.5 py-0.5"
+          className="inline-block rounded bg-muted text-foreground text-xs px-1.5 py-0.5"
         >
           {t}
         </span>
       ))}
       {overflow > 0 ? (
         <span
-          className="inline-block text-xs text-neutral-500"
+          className="inline-block text-xs text-muted-foreground"
           title={tags.slice(3).join(", ")}
         >
           +{overflow} more
@@ -107,17 +107,17 @@ export function TagsInput({
   };
 
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-1 rounded border border-neutral-300 px-1.5 py-1 focus-within:ring-1 focus-within:ring-neutral-900">
+    <div className="mt-1 flex flex-wrap items-center gap-1 rounded border border-input px-1.5 py-1 focus-within:ring-1 focus-within:ring-ring">
       {tags.map((t) => (
         <span
           key={t}
-          className="inline-flex items-center gap-1 rounded bg-neutral-100 text-neutral-700 text-xs px-1.5 py-0.5"
+          className="inline-flex items-center gap-1 rounded bg-muted text-foreground text-xs px-1.5 py-0.5"
         >
           {t}
           <button
             type="button"
             onClick={() => commit(tags.filter((x) => x !== t))}
-            className="text-neutral-400 hover:text-neutral-700"
+            className="text-muted-foreground hover:text-foreground"
             aria-label={`remove ${t}`}
           >
             ×

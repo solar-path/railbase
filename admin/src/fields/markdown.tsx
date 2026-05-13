@@ -87,7 +87,7 @@ export function MarkdownCell({ value }: { value: unknown }) {
   const preview =
     stripped.length > CELL_PREVIEW_LEN ? stripped.slice(0, CELL_PREVIEW_LEN) + "…" : stripped;
   return (
-    <span className="text-xs text-neutral-700 whitespace-nowrap" title={s}>
+    <span className="text-xs text-foreground whitespace-nowrap" title={s}>
       {preview}
     </span>
   );
@@ -126,8 +126,8 @@ export function MarkdownInput({
           className={
             "rounded px-2 py-0.5 text-xs " +
             (mode === "raw"
-              ? "bg-neutral-900 text-white"
-              : "bg-neutral-100 text-neutral-700 hover:bg-neutral-200")
+              ? "bg-foreground text-background"
+              : "bg-muted text-foreground hover:bg-muted")
           }
         >
           Raw
@@ -138,8 +138,8 @@ export function MarkdownInput({
           className={
             "rounded px-2 py-0.5 text-xs " +
             (mode === "preview"
-              ? "bg-neutral-900 text-white"
-              : "bg-neutral-100 text-neutral-700 hover:bg-neutral-200")
+              ? "bg-foreground text-background"
+              : "bg-muted text-foreground hover:bg-muted")
           }
         >
           Preview
@@ -153,11 +153,11 @@ export function MarkdownInput({
           onBlur={() => onChange(draft === "" ? null : draft)}
           rows={rows}
           spellcheck={false}
-          className="w-full rounded border border-neutral-300 px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 focus:ring-neutral-900"
+          className="w-full rounded border border-input px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-ring"
         />
       ) : (
         <div
-          className="prose prose-sm max-w-none rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm"
+          className="prose prose-sm max-w-none rounded border border-border bg-muted px-3 py-2 text-sm"
           dangerouslySetInnerHTML={{ __html: html }}
         />
       )}

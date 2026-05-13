@@ -62,7 +62,7 @@ export const Carousel = forwardRef<HTMLDivElement, CarouselProps>(
       setApiState(instance)
       setApi?.(instance)
       return () => instance.destroy()
-      // eslint-disable-next-line react-hooks/exhaustive-deps
+       
     }, [orientation])
 
     useEffect(() => {
@@ -89,6 +89,7 @@ export const Carousel = forwardRef<HTMLDivElement, CarouselProps>(
       >
         <div
           ref={ref as Ref<HTMLDivElement>}
+          data-slot="carousel"
           class={cn('relative', klass as string, className)}
           role="region"
           aria-roledescription="carousel"
@@ -106,9 +107,10 @@ export const CarouselContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDiv
   ({ class: klass, className, ...props }, ref) => {
     const ctx = useCarousel()
     return (
-      <div ref={ctx.viewportRef as any} class="overflow-hidden">
+      <div ref={ctx.viewportRef as any} data-slot="carousel-viewport" class="overflow-hidden">
         <div
           ref={ref as Ref<HTMLDivElement>}
+          data-slot="carousel-content"
           class={cn(
             'flex',
             ctx.orientation === 'horizontal' ? '-ml-4' : '-mt-4 flex-col',
@@ -131,6 +133,7 @@ export const CarouselItem = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEle
         ref={ref as Ref<HTMLDivElement>}
         role="group"
         aria-roledescription="slide"
+        data-slot="carousel-item"
         class={cn(
           'min-w-0 shrink-0 grow-0 basis-full',
           ctx.orientation === 'horizontal' ? 'pl-4' : 'pt-4',

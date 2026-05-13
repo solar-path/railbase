@@ -16,7 +16,8 @@
 - **embla-carousel** — peer-dep для kit-овского `carousel.ui.tsx`.
 - **Monaco editor** для hooks JS / JSON / SQL view queries — **lazy-loaded** через `lazy(() => import("@monaco-editor/react"))` + `<Suspense>` — не входит в основной bundle, грузится только на `/hooks` экране.
 - **Tiptap** для RichText field editor (через preact/compat).
-- **Recharts** для dashboard графиков (через preact/compat).
+- **Recharts** для dashboard графиков (через preact/compat). Lazy-loaded chunk на screens #1 Dashboard + #17 Health — не входит в main bundle. Цвета series задаются явными hex/oklch значениями из `lib/ui/theme.ts`; ESLint правило `no-hardcoded-tw-color` имеет explicit escape для Recharts axis/series.
+- **Geist Variable** (`@fontsource-variable/geist`, ~35 KB) — кросс-платформенный sans, близкий по метрикам к shadcn/Vercel reference. Self-hosted (фолбэк system-ui остаётся в `font-family` stack). Загружается через `admin/src/styles.css` `@import "@fontsource-variable/geist"`. Не упоминается в kit-распространении — `lib/ui/styles.css` остаётся font-agnostic, downstream-приложения подключают собственный шрифт.
 - **Command palette** (⌘K) реализован hand-rolled в `layout/command_palette.tsx` — не используем kit-овский `<Command>` чтобы не переписывать keyboard-nav логику.
 - **Vite 5** build (`@preact/preset-vite` plugin) → один `dist/` → `go:embed` в бинарь.
 - **Использует тот же TS SDK**, что Railbase генерирует для пользователей — dogfooding (если что-то сломалось в SDK, admin UI перестаёт работать).
@@ -198,7 +199,7 @@ RHF полагается на `onChange`-per-keystroke. Preact-native `onChange`
 ### Когда `<Form>` ОБЯЗАТЕЛЕН (RHF + zod)
 
 - **Любая submit-форма с client-side validation** (login, signup, profile-edit, settings, password-change)
-- **Multi-step wizards** (bootstrap — будущая миграция)
+- **Multi-step wizards** (bootstrap ✅ v1.7.41)
 - **Dynamic field-driven forms** (`record_editor.tsx` — будущая миграция; dynamic zod schema + per-field server-error mapping на 422)
 - **Create-modals в list-views** (api_tokens.tsx, webhooks.tsx — будущая миграция)
 
@@ -246,7 +247,6 @@ const schema = useMemo(() => {
 const dbStepSchema = z.discriminatedUnion("driver", [
   z.object({ driver: z.literal("local_socket"), socket_dir: z.string().min(1), ... }),
   z.object({ driver: z.literal("external_dsn"), external_dsn: z.string().regex(/^postgres/) }),
-  z.object({ driver: z.literal("embedded") }),
 ]);
 
 const driver = form.watch("driver");
@@ -254,6 +254,8 @@ const driver = form.watch("driver");
 ```
 
 Important: switching driver via radio калит `form.reset({ driver: ..., ...defaults })`, **не** просто `setValue("driver", ...)` — иначе другая ветка union'a не пройдёт валидацию.
+
+> **v1.7.41-followup**: третья ветка union'а — `z.literal("embedded")` — была удалена. Embedded postgres теперь чисто build-time decision (`-tags embed_pg` через `make build-embed`); production-бинарник никогда не предлагает embedded оператору. Wizard видит только две ветки: local socket / external DSN.
 
 **4) Cross-field validation** (`bootstrap.tsx` AdminStep)
 
@@ -308,10 +310,12 @@ zod-`.default(value)` разводит input/output типы у схемы: inpu
 |---|---|---|---|
 | До kit'a (v1.7.40 start) | 1695 | 307 KB | 79 KB |
 | После kit migration (24 экрана) | 174 | 422 KB | 115 KB |
-| После RHF migration (8 forms) — **now** | 237 | **468 KB** | **130 KB** |
-| Δ от kit-only до full-form | +63 | +46 KB | +15 KB |
+| После RHF migration (9 forms) | 237 | 480 KB | 133 KB |
+| + Geist Variable font | ~238 | ~515 KB | ~138 KB |
+| + Recharts (lazy chunk на #1/#17) | ~245 main / +1 lazy | main ~480 KB + lazy ~155 KB | main ~138 KB + lazy ~45 KB |
+| Δ от kit-only до full-form+font+viz | +71 main | +93 KB main + 155 KB lazy | +23 KB main + 45 KB lazy |
 
-Всего ~+51 KB gzip от React 19 baseline на полностью переписанной админке с kit-овским shadcn UI + RHF-based forms. Хороший trade-off за consistency + field-level validation + ARIA-wiring во всех 8 формах.
+Main bundle target: ≤ 145 KB gzip. Lazy chunk (Recharts) грузится только при открытии Dashboard / Health и кеш-делится между ними. Бюджет проекта (`docs/18-risks-questions.md`): 3 MB gzip — запас порядка 20×. CI должен фейлиться если main bundle уходит выше 145 KB (regression-guard добавляется в Wave 4).
 
 ## Authentication & access
 
@@ -705,11 +709,25 @@ Trade-off: берём maintenance на себя, но не платим за fea
 
 ## First-run experience
 
-После `railbase init && railbase serve` admin открывает `/_/`:
+После `./railbase serve` (без `init`, без env-переменных) admin открывает `/_/`:
 
-1. **Setup wizard**: create first admin (email + password + 2FA) → choose template hint (basic/saas/mobile/ai) → configure mailer (skip → console driver) → generate first OIDC client (skip)
-2. **Tour**: 3-step intro показывающий collections, hooks, realtime
-3. **Sample data offer**: «Load sample data?»
+1. **Setup wizard** (`bootstrap.tsx`) — двухшаговый: **(1) Database** → **(2) Admin account**.
+
+   **Step 1: Database** (v1.7.39 архитектура + v1.7.41 form-strategy + v1.7.42 safety gate):
+   - `GET /api/_admin/_setup/detect` detect'ит локальные PG сокеты (Homebrew `/tmp`, Debian/Ubuntu/Fedora/RHEL `/var/run/postgresql`) + suggested username из `$USER`.
+   - Driver picker: **Local socket** (zero-password peer/trust auth) или **External DSN** (Supabase / Neon / RDS / self-hosted host). Embedded postgres НЕ предлагается — это build-time decision через `-tags embed_pg`.
+   - `POST /api/_admin/_setup/probe-db` делает безопасный `SELECT version()` round-trip + читает `pg_tables` для **foreign-DB safety scan**:
+     - `is_existing_railbase=true` (нашли `_migrations` marker) → зелёный banner «Existing Railbase instance detected», Save разрешён.
+     - `public_table_count>0 && !is_existing_railbase` → **жёлтый banner с чекбоксом**: «This database is not empty. Found N tables in `public` schema, but none is a Railbase marker.» Save заблокирован пока оператор не подтвердит «I understand — install Railbase alongside the existing tables.»
+     - empty DB → нейтральный поток, Save сразу доступен.
+   - `POST /api/_admin/_setup/save-db` опционально создаёт целевую БД (`CREATE DATABASE` против `postgres` admin DB на том же сервере), пишет `<DataDir>/.dsn` (0600), сигналит in-process reload — wizard поллит `/readyz` и сам refresh'ит страницу.
+
+   **Step 2: Admin account**: email + password + confirm. Password generator (dice icon) fan-out'ит в оба поля через `form.setValue("password" | "confirm", p, { shouldValidate: true })`. `.refine` cross-field на confirm-match. После успеха session cookie выдан + redirect на `/`.
+
+2. **Tour** (📋 v1.x-bonus): 3-step intro показывающий collections, hooks, realtime
+3. **Sample data offer** (📋 v1.x-bonus): «Load sample data?»
+
+> **Safety: foreign-DB protection** (v1.7.42). Wizard-уровень — это первый слой защиты от типового оператор-faux-pas «опечатался в имени БД → попал в чужую прод-БД». Второй слой живёт в `internal/db/migrate.Runner.checkForeignDatabase`: при boot'е если в `public` есть таблицы И нет `_migrations` marker'а — миграции отказываются стартовать с `ErrForeignDatabase`. Escape hatch: `RAILBASE_FORCE_INIT=1`. Покрывает случай ручного редактирования `.dsn`, который wizard миновал бы. Деструктивных операций (`DROP DATABASE`, `DROP TABLE`, `TRUNCATE`) в setup-коде нет ни на одном пути.
 
 ## Mobile / responsive
 

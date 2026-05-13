@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import { Pager } from "../layout/pager";
+import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
@@ -14,6 +15,7 @@ import {
   TableRow,
 } from "@/lib/ui/table.ui";
 import { Card, CardContent } from "@/lib/ui/card.ui";
+import { ScrollText } from "@/lib/ui/icons";
 
 // Logs viewer — paginated, filterable list of structured log events.
 // Backend endpoint: GET /api/_admin/logs (v1.7.6+).
@@ -49,6 +51,9 @@ export function LogsScreen() {
     setPage(1);
   }, [level, search, requestId]);
 
+  // Auto-poll while on page 1 — Logs is debug-tool first; operator
+  // expects to SEE new lines flowing. Pages 2+ stop auto-refresh so a
+  // historical browse isn't yanked from under the operator's cursor.
   const q = useQuery({
     queryKey: ["logs", { page, perPage, level, search, request_id: requestId }],
     queryFn: () =>
@@ -59,26 +64,56 @@ export function LogsScreen() {
         search: search || undefined,
         request_id: requestId || undefined,
       }),
+    refetchInterval: page === 1 ? 10_000 : false,
   });
+  const isLive = page === 1;
+  // Pulse ring next to the title every time a fresh fetch lands while
+  // on page 1 — visual signal that the tail is alive.
+  const [pulseKey, setPulseKey] = useState(0);
+  useEffect(() => {
+    if (!q.dataUpdatedAt) return;
+    setPulseKey((k) => k + 1);
+  }, [q.dataUpdatedAt]);
 
   const total = q.data?.totalItems ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / perPage));
 
   return (
-    <div className="space-y-4">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Logs</h1>
-          <p className="text-sm text-muted-foreground">
+    <AdminPage>
+      <AdminPage.Header
+        title={
+          <span className="inline-flex items-center gap-2">
+            <ScrollText className="h-5 w-5 text-muted-foreground" />
+            Logs
+            {isLive ? (
+              <span
+                key={pulseKey}
+                className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-primary"
+                title="Live tail — refetches every 10s on page 1"
+              >
+                <LivePulseDot />
+                live
+              </span>
+            ) : (
+              <Badge variant="outline" className="font-mono text-[10px] uppercase tracking-wide">
+                paused (page {page})
+              </Badge>
+            )}
+          </span>
+        }
+        description={
+          <>
             {total} event{total === 1 ? "" : "s"} total. Showing newest first.
             Past 14 days by default (configurable via{" "}
-            <code className="rb-mono">logs.retention_days</code>).
-          </p>
-        </div>
-        <Pager page={page} totalPages={totalPages} onChange={setPage} />
-      </header>
+            <code className="font-mono">logs.retention_days</code>).
+            Debug surface — for compliance / forensic review, see{" "}
+            <a href="/_/audit" className="underline">Audit log</a>.
+          </>
+        }
+        actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
+      />
 
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+      <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
           <span className="text-muted-foreground">level</span>
           <select
@@ -110,7 +145,7 @@ export function LogsScreen() {
             value={requestId}
             onInput={(e) => setRequestId(e.currentTarget.value)}
             placeholder="exact match"
-            className="w-64 h-8 rb-mono text-xs"
+            className="w-64 h-8 font-mono text-xs"
           />
         </label>
         {(level || search || requestId) ? (
@@ -127,8 +162,9 @@ export function LogsScreen() {
             clear
           </Button>
         ) : null}
-      </div>
+      </AdminPage.Toolbar>
 
+      <AdminPage.Body>
       <Card>
         <CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -151,27 +187,27 @@ export function LogsScreen() {
                       onClick={() => setExpandedId(isOpen ? null : e.id)}
                       className="cursor-pointer"
                     >
-                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
                         {e.created}
                       </TableCell>
                       <TableCell>
                         <Badge variant={levelVariant(e.level)}>{e.level}</Badge>
                       </TableCell>
                       <TableCell className="max-w-md truncate">{e.message}</TableCell>
-                      <TableCell className="rb-mono text-xs text-muted-foreground max-w-xs truncate">
+                      <TableCell className="font-mono text-xs text-muted-foreground max-w-xs truncate">
                         {attrsPreview(e.attrs)}
                       </TableCell>
-                      <TableCell className="rb-mono text-xs" title={e.request_id ?? ""}>
+                      <TableCell className="font-mono text-xs" title={e.request_id ?? ""}>
                         {e.request_id ? e.request_id.slice(0, 8) + "…" : "—"}
                       </TableCell>
-                      <TableCell className="rb-mono text-xs" title={e.user_id ?? ""}>
+                      <TableCell className="font-mono text-xs" title={e.user_id ?? ""}>
                         {e.user_id ? e.user_id.slice(0, 8) + "…" : "—"}
                       </TableCell>
                     </TableRow>
                     {isOpen ? (
                       <TableRow>
                         <TableCell colSpan={6} className="bg-muted">
-                          <pre className="rb-mono text-xs text-foreground whitespace-pre-wrap break-all p-2">
+                          <pre className="font-mono text-xs text-foreground whitespace-pre-wrap break-all p-2">
                             {JSON.stringify(e.attrs ?? {}, null, 2)}
                           </pre>
                         </TableCell>
@@ -191,7 +227,8 @@ export function LogsScreen() {
           </Table>
         </CardContent>
       </Card>
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }
 
@@ -207,6 +244,19 @@ function levelVariant(l: string): "default" | "secondary" | "destructive" | "out
     case "DEBUG": return "outline";
     default:      return "outline";
   }
+}
+
+// LivePulseDot — small green dot with a pulse animation; signals that
+// the Logs screen is in live-tail mode (refetchInterval armed). The
+// animation uses `animate-ping` (provided by tw-animate-css) on an
+// absolutely-positioned outer disc; inner disc is the static fill.
+function LivePulseDot() {
+  return (
+    <span className="relative inline-flex h-1.5 w-1.5">
+      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
+    </span>
+  );
 }
 
 // Compact one-line preview of an attrs object for the table cell.

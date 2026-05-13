@@ -46,8 +46,9 @@ export const Menubar = forwardRef<HTMLDivElement, MenubarProps>(
         <div
           ref={ref as Ref<HTMLDivElement>}
           role="menubar"
+          data-slot="menubar"
           class={cn(
-            'flex h-9 items-center space-x-1 rounded-md border bg-background p-1 shadow-sm',
+            'flex h-9 items-center gap-1 rounded-md border bg-background p-1 shadow-sm',
             klass as string,
             className,
           )}
@@ -118,6 +119,7 @@ export const MenubarTrigger = forwardRef<
         role="menuitem"
         aria-haspopup="menu"
         aria-expanded={menu.open}
+        data-slot="menubar-trigger"
         data-state={menu.open ? 'open' : 'closed'}
         onClick={(e: Event) => {
           onClick?.(e as any)
@@ -128,7 +130,7 @@ export const MenubarTrigger = forwardRef<
           if (root.value && root.value !== menu.id) menu.setOpen(true)
         }}
         class={cn(
-          'flex cursor-default select-none items-center rounded-sm px-3 py-1 text-sm font-medium outline-none',
+          'flex cursor-default select-none items-center rounded-sm px-3 py-1 text-sm font-medium outline-hidden',
           'focus:bg-accent focus:text-accent-foreground',
           'data-[state=open]:bg-accent data-[state=open]:text-accent-foreground',
           klass as string,
@@ -167,6 +169,7 @@ export const MenubarContent = forwardRef<
                 else if (ref) (ref as { current: HTMLDivElement | null }).current = el
               }}
               role="menu"
+              data-slot="menubar-content"
               data-state={menu.open ? 'open' : 'closed'}
               data-side={dataSide(floating.placement)}
               data-align={dataAlign(floating.placement)}
@@ -204,6 +207,7 @@ export const MenubarItem = forwardRef<
       ref={ref as Ref<HTMLDivElement>}
       role="menuitem"
       tabIndex={-1}
+      data-slot="menubar-item"
       data-disabled={disabled ? '' : undefined}
       onClick={(e: Event) => {
         onClick?.(e as any)
@@ -212,7 +216,7 @@ export const MenubarItem = forwardRef<
         if (!e.defaultPrevented) menu.setOpen(false)
       }}
       class={cn(
-        'relative flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none',
+        'relative flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-hidden',
         'focus:bg-accent focus:text-accent-foreground',
         'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
         inset && 'pl-8',
@@ -240,6 +244,7 @@ export const MenubarCheckboxItem = forwardRef<
       role="menuitemcheckbox"
       aria-checked={checked}
       tabIndex={-1}
+      data-slot="menubar-checkbox-item"
       data-state={checked ? 'checked' : 'unchecked'}
       data-disabled={disabled ? '' : undefined}
       onClick={(e: Event) => {
@@ -249,7 +254,7 @@ export const MenubarCheckboxItem = forwardRef<
         menu.setOpen(false)
       }}
       class={cn(
-        'relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none',
+        'relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-hidden',
         'focus:bg-accent focus:text-accent-foreground',
         klass as string,
         className,
@@ -292,6 +297,7 @@ export const MenubarRadioItem = forwardRef<
       role="menuitemradio"
       aria-checked={checked}
       tabIndex={-1}
+      data-slot="menubar-radio-item"
       data-state={checked ? 'checked' : 'unchecked'}
       data-disabled={disabled ? '' : undefined}
       onClick={(e: Event) => {
@@ -301,7 +307,7 @@ export const MenubarRadioItem = forwardRef<
         menu.setOpen(false)
       }}
       class={cn(
-        'relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none',
+        'relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-hidden',
         'focus:bg-accent focus:text-accent-foreground',
         klass as string,
         className,
@@ -323,6 +329,7 @@ export const MenubarLabel = forwardRef<
 >(({ class: klass, className, inset, ...props }, ref) => (
   <div
     ref={ref as Ref<HTMLDivElement>}
+    data-slot="menubar-label"
     class={cn('px-2 py-1.5 text-sm font-semibold', inset && 'pl-8', klass as string, className)}
     {...props}
   />
@@ -334,6 +341,7 @@ export const MenubarSeparator = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDi
     <div
       ref={ref as Ref<HTMLDivElement>}
       role="separator"
+      data-slot="menubar-separator"
       class={cn('-mx-1 my-1 h-px bg-muted', klass as string, className)}
       {...props}
     />
@@ -348,6 +356,7 @@ export function MenubarShortcut({
 }: HTMLAttributes<HTMLSpanElement>) {
   return (
     <span
+      data-slot="menubar-shortcut"
       class={cn('ml-auto text-xs tracking-widest text-muted-foreground', klass as string, className)}
       {...props}
     />
@@ -356,7 +365,7 @@ export function MenubarShortcut({
 
 export const MenubarGroup = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
   ({ class: klass, className, ...props }, ref) => (
-    <div ref={ref as Ref<HTMLDivElement>} role="group" class={cn('', klass as string, className)} {...props} />
+    <div ref={ref as Ref<HTMLDivElement>} role="group" data-slot="menubar-group" class={cn('', klass as string, className)} {...props} />
   ),
 )
 MenubarGroup.displayName = 'MenubarGroup'

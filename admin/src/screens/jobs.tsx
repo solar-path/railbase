@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import { Pager } from "../layout/pager";
+import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
@@ -61,20 +62,20 @@ export function JobsScreen() {
   const totalPages = Math.max(1, Math.ceil(total / perPage));
 
   return (
-    <div className="space-y-4">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Jobs queue</h1>
-          <p className="text-sm text-muted-foreground">
+    <AdminPage>
+      <AdminPage.Header
+        title="Jobs queue"
+        description={
+          <>
             {total} job{total === 1 ? "" : "s"} total. Showing newest first.
-            Use the <code className="rb-mono">railbase jobs</code> CLI for cancel /
+            Use the <code className="font-mono">railbase jobs</code> CLI for cancel /
             run-now / reset / recover.
-          </p>
-        </div>
-        <Pager page={page} totalPages={totalPages} onChange={setPage} />
-      </header>
+          </>
+        }
+        actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
+      />
 
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+      <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
           <span className="text-muted-foreground">status</span>
           <select
@@ -97,7 +98,7 @@ export function JobsScreen() {
             value={kindInput}
             onInput={(e) => setKindInput(e.currentTarget.value)}
             placeholder="substring"
-            className="w-56 h-8 rb-mono text-xs"
+            className="w-56 h-8 font-mono text-xs"
           />
         </label>
         {(status || kind) ? (
@@ -113,8 +114,9 @@ export function JobsScreen() {
             clear
           </Button>
         ) : null}
-      </div>
+      </AdminPage.Toolbar>
 
+      <AdminPage.Body>
       <Card>
         <CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -138,21 +140,21 @@ export function JobsScreen() {
                       onClick={() => setExpandedId(isOpen ? null : j.id)}
                       className="cursor-pointer"
                     >
-                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
                         {j.created_at}
                       </TableCell>
-                      <TableCell className="rb-mono">{j.kind}</TableCell>
-                      <TableCell className="rb-mono text-xs text-muted-foreground">{j.queue}</TableCell>
+                      <TableCell className="font-mono">{j.kind}</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">{j.queue}</TableCell>
                       <TableCell>
                         <Badge variant={statusVariant(j.status)}>{j.status}</Badge>
                       </TableCell>
-                      <TableCell className="rb-mono text-xs whitespace-nowrap">
+                      <TableCell className="font-mono text-xs whitespace-nowrap">
                         {j.attempts}/{j.max_attempts}
                       </TableCell>
                       <TableCell className="max-w-md truncate text-xs text-destructive">
                         {j.last_error ? firstLine(j.last_error) : ""}
                       </TableCell>
-                      <TableCell className="rb-mono text-xs" title={j.id}>
+                      <TableCell className="font-mono text-xs" title={j.id}>
                         {j.id.slice(0, 8)}…
                       </TableCell>
                     </TableRow>
@@ -161,26 +163,26 @@ export function JobsScreen() {
                         <TableCell colSpan={7} className="bg-muted">
                           <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 p-3 text-xs">
                             <dt className="text-muted-foreground">id</dt>
-                            <dd className="rb-mono">{j.id}</dd>
+                            <dd className="font-mono">{j.id}</dd>
                             <dt className="text-muted-foreground">queue</dt>
-                            <dd className="rb-mono">{j.queue}</dd>
+                            <dd className="font-mono">{j.queue}</dd>
                             <dt className="text-muted-foreground">run_after</dt>
-                            <dd className="rb-mono">{j.run_after}</dd>
+                            <dd className="font-mono">{j.run_after}</dd>
                             <dt className="text-muted-foreground">started_at</dt>
-                            <dd className="rb-mono">{j.started_at ?? "—"}</dd>
+                            <dd className="font-mono">{j.started_at ?? "—"}</dd>
                             <dt className="text-muted-foreground">completed_at</dt>
-                            <dd className="rb-mono">{j.completed_at ?? "—"}</dd>
+                            <dd className="font-mono">{j.completed_at ?? "—"}</dd>
                             <dt className="text-muted-foreground">locked_by</dt>
-                            <dd className="rb-mono">{j.locked_by ?? "—"}</dd>
+                            <dd className="font-mono">{j.locked_by ?? "—"}</dd>
                             <dt className="text-muted-foreground">locked_until</dt>
-                            <dd className="rb-mono">{j.locked_until ?? "—"}</dd>
+                            <dd className="font-mono">{j.locked_until ?? "—"}</dd>
                             <dt className="text-muted-foreground">cron_id</dt>
-                            <dd className="rb-mono">{j.cron_id ?? "—"}</dd>
+                            <dd className="font-mono">{j.cron_id ?? "—"}</dd>
                             {j.last_error ? (
                               <>
                                 <dt className="text-muted-foreground self-start">last_error</dt>
                                 <dd>
-                                  <pre className="rb-mono text-xs text-destructive whitespace-pre-wrap break-all m-0">
+                                  <pre className="font-mono text-xs text-destructive whitespace-pre-wrap break-all m-0">
                                     {j.last_error}
                                   </pre>
                                 </dd>
@@ -204,7 +206,8 @@ export function JobsScreen() {
           </Table>
         </CardContent>
       </Card>
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }
 

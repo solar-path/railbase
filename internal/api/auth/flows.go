@@ -398,6 +398,12 @@ func (d *Deps) requestOTPHandler(w http.ResponseWriter, r *http.Request) {
 		rerr.WriteJSON(w, rerr.New(rerr.CodeNotFound, "auth collection %q not found", collName))
 		return
 	}
+	// v1.7.48 — honour the wizard. Either otp OR magic_link being on
+	// keeps the surface live; only explicit off-on-both blocks it.
+	if denied := d.requirePasswordlessEnabled(r.Context()); denied != nil {
+		rerr.WriteJSON(w, denied)
+		return
+	}
 	if d.RecordTokens == nil || d.Mailer == nil {
 		rerr.WriteJSON(w, rerr.New(rerr.CodeInternal, "mailer/recordtoken not configured"))
 		return
@@ -461,6 +467,13 @@ func (d *Deps) authWithOTPHandler(w http.ResponseWriter, r *http.Request) {
 	collName := chi.URLParam(r, "name")
 	if !isAuthCollection(collName) {
 		rerr.WriteJSON(w, rerr.New(rerr.CodeNotFound, "auth collection %q not found", collName))
+		return
+	}
+	// v1.7.48 — same gate as requestOTPHandler. Both endpoints have to
+	// reject; otherwise an attacker could request a code via some other
+	// channel and redeem it here.
+	if denied := d.requirePasswordlessEnabled(r.Context()); denied != nil {
+		rerr.WriteJSON(w, denied)
 		return
 	}
 	if d.RecordTokens == nil {

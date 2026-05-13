@@ -35,7 +35,7 @@ export function CoordinatesCell({ value }: { value: unknown }) {
   const c = coerce(value);
   if (!c) return null;
   return (
-    <span className="rb-mono text-xs whitespace-nowrap">
+    <span className="font-mono text-xs whitespace-nowrap">
       {fmtLat(c.lat)}, {fmtLng(c.lng)}
     </span>
   );
@@ -84,16 +84,16 @@ export function CoordinatesInput({
   };
 
   const inputCls =
-    "mt-1 w-full rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +
+    "mt-1 w-full rounded border px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 " +
     (err
-      ? "border-red-400 focus:ring-red-500"
-      : "border-neutral-300 focus:ring-neutral-900");
+      ? "border-destructive/40 focus:ring-destructive"
+      : "border-input focus:ring-ring");
 
   return (
     <div>
       <div className="flex gap-2">
         <label className="flex-1">
-          <span className="text-xs text-neutral-500">lat</span>
+          <span className="text-xs text-muted-foreground">lat</span>
           <input
             type="number"
             value={lat}
@@ -110,7 +110,7 @@ export function CoordinatesInput({
           />
         </label>
         <label className="flex-1">
-          <span className="text-xs text-neutral-500">lng</span>
+          <span className="text-xs text-muted-foreground">lng</span>
           <input
             type="number"
             value={lng}
@@ -127,7 +127,7 @@ export function CoordinatesInput({
           />
         </label>
       </div>
-      {err ? <p className="mt-0.5 text-xs text-red-600">{err}</p> : null}
+      {err ? <p className="mt-0.5 text-xs text-destructive">{err}</p> : null}
     </div>
   );
 }

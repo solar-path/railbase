@@ -86,6 +86,8 @@ func (l *Listener) Listen(channel string, handler func(payload string)) error
 
 Fluent builder в Go-коде. Источник истины — `schema/*.go` файлы.
 
+> **Reserved namespace.** Имена таблиц с префиксом `_` (дандер) **зарезервированы за системой**. Schema-validator (`internal/schema/builder/validate.go`) отказывает создавать user-collection с таким именем — это гарантирует что app-коллекция `_users`/`_admins`/`_jobs` физически невозможна, и системные таблицы (`_admins`, `_admin_sessions`, `_settings`, `_audit_log`, `_sessions`, `_record_tokens`, `_jobs`, `_cron`, `_files`, `_notifications`, `_notification_preferences`, `_notification_user_settings`, `_webhooks`, `_webhook_deliveries`, `_logs`, `_exports`, `_email_events`, `_audit_seals`, `_auth_origins`, `_migrations`, `_schema_snapshots`, `_tenants`, `_roles`, `_role_actions`, `_user_roles`) живут в защищённом пространстве имён по построению. Полный список + назначение каждой — `docs/04-identity.md` (auth-track) и `docs/14-observability.md` (operational-track).
+
 ### Базовый пример
 
 ```go

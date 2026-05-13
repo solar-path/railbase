@@ -10,6 +10,7 @@ export function Pagination({ class: klass, className, ...props }: HTMLAttributes
     <nav
       role="navigation"
       aria-label="pagination"
+      data-slot="pagination"
       class={cn('mx-auto flex w-full justify-center', klass as string, className)}
       {...props}
     />
@@ -20,6 +21,7 @@ export const PaginationContent = forwardRef<HTMLUListElement, HTMLAttributes<HTM
   ({ class: klass, className, ...props }, ref) => (
     <ul
       ref={ref as Ref<HTMLUListElement>}
+      data-slot="pagination-content"
       class={cn('flex flex-row items-center gap-1', klass as string, className)}
       {...props}
     />
@@ -29,7 +31,7 @@ PaginationContent.displayName = 'PaginationContent'
 
 export const PaginationItem = forwardRef<HTMLLIElement, HTMLAttributes<HTMLLIElement>>(
   ({ class: klass, className, ...props }, ref) => (
-    <li ref={ref as Ref<HTMLLIElement>} class={cn('', klass as string, className)} {...props} />
+    <li ref={ref as Ref<HTMLLIElement>} data-slot="pagination-item" class={cn('', klass as string, className)} {...props} />
   ),
 )
 PaginationItem.displayName = 'PaginationItem'
@@ -50,6 +52,8 @@ export function PaginationLink({
   return (
     <a
       aria-current={isActive ? 'page' : undefined}
+      data-slot="pagination-link"
+      data-active={isActive ? 'true' : undefined}
       class={cn(
         buttonVariants({ variant: isActive ? 'outline' : 'ghost', size }),
         klass as string,
@@ -96,6 +100,7 @@ export function PaginationEllipsis({
   return (
     <span
       aria-hidden
+      data-slot="pagination-ellipsis"
       class={cn('flex size-9 items-center justify-center', klass as string, className)}
       {...props}
     >

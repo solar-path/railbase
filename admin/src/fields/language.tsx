@@ -37,7 +37,7 @@ export function LanguageCell({ value }: { value: unknown }) {
   const code = String(value).toLowerCase();
   return (
     <span
-      className="inline-block rounded bg-neutral-100 text-neutral-700 rb-mono text-xs px-1.5 py-0.5 tracking-wider"
+      className="inline-block rounded bg-muted text-foreground font-mono text-xs px-1.5 py-0.5 tracking-wider"
       title={COMMON_LANGUAGES[code] ?? code.toUpperCase()}
     >
       {code.toUpperCase()}
@@ -89,18 +89,18 @@ export function LanguageInput({
         autoCapitalize="off"
         autoCorrect="off"
         className={
-          "mt-1 w-full rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +
+          "mt-1 w-full rounded border px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 " +
           (showShapeError
-            ? "border-red-400 focus:ring-red-500"
-            : "border-neutral-300 focus:ring-neutral-900")
+            ? "border-destructive/40 focus:ring-destructive"
+            : "border-input focus:ring-ring")
         }
       />
       {showShapeError ? (
-        <p className="mt-0.5 text-xs text-red-600">two lowercase letters (ISO 639-1)</p>
+        <p className="mt-0.5 text-xs text-destructive">two lowercase letters (ISO 639-1)</p>
       ) : showUnknownHint ? (
-        <p className="mt-0.5 text-xs text-neutral-500">Unknown language</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">Unknown language</p>
       ) : resolved ? (
-        <p className="mt-0.5 text-xs text-neutral-500">
+        <p className="mt-0.5 text-xs text-muted-foreground">
           {draft} — {resolved}
         </p>
       ) : null}

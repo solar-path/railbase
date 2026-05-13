@@ -7,6 +7,7 @@ import { adminAPI } from "../api/admin";
 import { isAPIError } from "../api/client";
 import { useAuth } from "../auth/context";
 import { Pager } from "../layout/pager";
+import { AdminPage } from "../layout/admin_page";
 import type {
   DigestPreviewResponse,
   NotificationPrefRow,
@@ -158,19 +159,19 @@ export function NotificationsPrefsScreen() {
   const users = usersQ.data?.items ?? [];
 
   return (
-    <div className="space-y-4">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Notification preferences</h1>
-          <p className="text-sm text-muted-foreground">
+    <AdminPage>
+      <AdminPage.Header
+        title="Notification preferences"
+        description={
+          <>
             Edit per-user notification posture: per-kind/per-channel toggles
             plus quiet hours and digest mode. Changes are audited as{" "}
-            <span className="rb-mono">notifications.admin_prefs_changed</span>.
-          </p>
-        </div>
-      </header>
+            <span className="font-mono">notifications.admin_prefs_changed</span>.
+          </>
+        }
+      />
 
-      <div className="grid grid-cols-[320px_1fr] gap-4 min-h-[480px]">
+      <AdminPage.Body className="grid grid-cols-[320px_1fr] gap-4 min-h-[480px]">
         {/* Left pane: user list */}
         <Card className="flex flex-col p-0">
           <div className="px-3 py-2 border-b">
@@ -203,13 +204,13 @@ export function NotificationsPrefsScreen() {
                     className={
                       "px-3 py-2 cursor-pointer text-sm " +
                       (selectedUserID === u.user_id
-                        ? "bg-neutral-900 text-white"
+                        ? "bg-foreground text-background"
                         : "hover:bg-muted")
                     }
                   >
                     <div className="truncate font-medium">
                       {u.email || (
-                        <span className="rb-mono text-xs opacity-70">
+                        <span className="font-mono text-xs opacity-70">
                           {u.user_id.slice(0, 8)}…
                         </span>
                       )}
@@ -218,15 +219,15 @@ export function NotificationsPrefsScreen() {
                       className={
                         "text-xs " +
                         (selectedUserID === u.user_id
-                          ? "text-neutral-300"
+                          ? "text-muted-foreground"
                           : "text-muted-foreground")
                       }
                     >
-                      <span className="rb-mono">{u.user_id.slice(0, 8)}…</span>
+                      <span className="font-mono">{u.user_id.slice(0, 8)}…</span>
                       {u.collection ? (
                         <span className="ml-2">
                           ·{" "}
-                          <span className="rb-mono">{u.collection}</span>
+                          <span className="font-mono">{u.collection}</span>
                         </span>
                       ) : null}
                       {u.has_prefs ? " · prefs" : ""}
@@ -252,8 +253,8 @@ export function NotificationsPrefsScreen() {
             <EmptyDetailState />
           )}
         </div>
-      </div>
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }
 
@@ -332,7 +333,7 @@ function UserPrefsEditor({ userID }: { userID: string }) {
     );
     // settingsForm is stable per render. Avoid re-running on form
     // identity churn by depending only on the server payload.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [envQ.data]);
 
   const saveM = useMutation({
@@ -443,7 +444,7 @@ function UserPrefsEditor({ userID }: { userID: string }) {
     const err = envQ.error as Error & { code?: string };
     const is404 = err.code === "not_found";
     return (
-      <div className="rounded border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+      <div className="rounded border border-input bg-muted p-4 text-sm text-foreground">
         <div className="font-medium">
           {is404
             ? "No preferences yet for this user."
@@ -461,16 +462,16 @@ function UserPrefsEditor({ userID }: { userID: string }) {
         <div className="min-w-0">
           <div className="text-sm font-medium truncate">
             {envQ.data?.email || (
-              <span className="rb-mono text-xs">{userID}</span>
+              <span className="font-mono text-xs">{userID}</span>
             )}
           </div>
-          <div className="rb-mono text-[11px] text-muted-foreground truncate">
+          <div className="font-mono text-[11px] text-muted-foreground truncate">
             {userID}
           </div>
         </div>
         <div className="flex items-center gap-2">
           {saveM.isSuccess ? (
-            <span className="text-xs text-emerald-700">Saved.</span>
+            <span className="text-xs text-primary">Saved.</span>
           ) : null}
           {saveM.error ? (
             <span className="text-xs text-destructive">
@@ -504,7 +505,7 @@ function UserPrefsEditor({ userID }: { userID: string }) {
                 }
               }}
               placeholder="Add kind (e.g. invite_received)"
-              className="h-7 w-56 text-xs rb-mono"
+              className="h-7 w-56 text-xs font-mono"
             />
             <Button
               type="button"
@@ -539,7 +540,7 @@ function UserPrefsEditor({ userID }: { userID: string }) {
             <TableBody>
               {prefsByKind.map(({ kind, byChannel }) => (
                 <TableRow key={kind}>
-                  <TableCell className="rb-mono text-sm">{kind}</TableCell>
+                  <TableCell className="font-mono text-sm">{kind}</TableCell>
                   {CHANNELS.map((c) => {
                     const row = byChannel.get(c);
                     return (
@@ -586,7 +587,7 @@ function UserPrefsEditor({ userID }: { userID: string }) {
                 <FormItem>
                   <FormLabel>Quiet hours start</FormLabel>
                   <FormControl>
-                    <Input type="time" className="h-8 rb-mono w-auto" {...field} />
+                    <Input type="time" className="h-8 font-mono w-auto" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -599,7 +600,7 @@ function UserPrefsEditor({ userID }: { userID: string }) {
                 <FormItem>
                   <FormLabel>Quiet hours end</FormLabel>
                   <FormControl>
-                    <Input type="time" className="h-8 rb-mono w-auto" {...field} />
+                    <Input type="time" className="h-8 font-mono w-auto" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -652,7 +653,7 @@ function UserPrefsEditor({ userID }: { userID: string }) {
                       type="number"
                       min={0}
                       max={23}
-                      className="h-8 w-24 rb-mono"
+                      className="h-8 w-24 font-mono"
                       value={field.value}
                       onInput={(e) => {
                         const raw = parseInt(
@@ -784,7 +785,7 @@ function DigestPreviewControls({
         value={recipient}
         onInput={(e) => setRecipient(e.currentTarget.value)}
         placeholder={adminEmail || "operator@example.com"}
-        className="h-7 w-64 text-xs rb-mono"
+        className="h-7 w-64 text-xs font-mono"
         spellcheck={false}
         autoComplete="off"
       />
@@ -803,9 +804,9 @@ function DigestPreviewControls({
         {previewM.isPending ? "Sending…" : "Send preview"}
       </Button>
       {previewM.isSuccess && previewM.data ? (
-        <span className="text-xs text-emerald-700">
+        <span className="text-xs text-primary">
           Sent to{" "}
-          <span className="rb-mono">{previewM.data.recipient}</span>
+          <span className="font-mono">{previewM.data.recipient}</span>
           {" · "}
           {previewM.data.kind_count} item
           {previewM.data.kind_count === 1 ? "" : "s"}
@@ -838,7 +839,7 @@ function TZInput({
         onInput={(e) => onChange(e.currentTarget.value)}
         placeholder="UTC"
         list="iana-tz-quickpicks"
-        className="h-8 w-56 rb-mono"
+        className="h-8 w-56 font-mono"
       />
       <datalist id="iana-tz-quickpicks">
         {TZ_QUICKPICKS.map((tz) => (

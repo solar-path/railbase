@@ -56,8 +56,8 @@ export function QuantityCell({ value }: { value: unknown }) {
   if (!q) return null;
   return (
     <span className="whitespace-nowrap">
-      <span className="rb-mono text-xs">{q.value}</span>
-      <span className="ml-1 text-xs text-neutral-500">{q.unit}</span>
+      <span className="font-mono text-xs">{q.value}</span>
+      <span className="ml-1 text-xs text-muted-foreground">{q.unit}</span>
     </span>
   );
 }
@@ -115,10 +115,10 @@ export function QuantityInput({
           spellcheck={false}
           autoCorrect="off"
           className={
-            "mt-1 flex-1 rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +
+            "mt-1 flex-1 rounded border px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 " +
             (err
-              ? "border-red-400 focus:ring-red-500"
-              : "border-neutral-300 focus:ring-neutral-900")
+              ? "border-destructive/40 focus:ring-destructive"
+              : "border-input focus:ring-ring")
           }
         />
         <select
@@ -128,7 +128,7 @@ export function QuantityInput({
             setUnit(u);
             commit(valStr, u);
           }}
-          className="mt-1 rounded border border-neutral-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-900"
+          className="mt-1 rounded border border-input px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
         >
           {units.map((u) => (
             <option key={u} value={u}>
@@ -137,7 +137,7 @@ export function QuantityInput({
           ))}
         </select>
       </div>
-      {err ? <p className="mt-0.5 text-xs text-red-600">{err}</p> : null}
+      {err ? <p className="mt-0.5 text-xs text-destructive">{err}</p> : null}
     </div>
   );
 }

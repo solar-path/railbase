@@ -654,3 +654,108 @@ export interface HealthResponse {
   };
   request_id?: string;
 }
+
+// Metrics snapshot (v1.7.x §3.11). Companion to HealthResponse: where
+// /health surfaces external state (DB pool, jobs, audit row counts),
+// /metrics surfaces the in-process metric registry — HTTP throughput,
+// status-bucketed error counters, request-latency histogram, and
+// hook-dispatcher invocations.
+//
+// Counters are monotonic uint64s; consumers compute rates as
+// (latestValue - previousValue) / dtSeconds (see useMetricRate in
+// admin/src/hooks/use_metric_buffer.ts). Histograms expose count +
+// p50/p95/p99 in integer nanoseconds; the React side converts to ms
+// at display time so the JSON boundary stays unit-agnostic.
+//
+// Both maps are open-ended: future metric additions just appear as new
+// keys without a schema bump. Today's canonical names:
+//
+//   - counters
+//     - http.requests_total
+//     - http.errors_4xx_total
+//     - http.errors_5xx_total
+//     - hooks.invocations_total
+//   - histograms
+//     - http.latency
+export interface MetricsSnapshot {
+  snapshot_at: string;
+  counters: Record<string, number>;
+  histograms: Record<string, {
+    count: number;
+    p50_ns: number;
+    p95_ns: number;
+    p99_ns: number;
+  }>;
+}
+
+// ---- System tables (read-only browser, v1.7.x §3.11) ----
+//
+// The `_admins`, `_admin_sessions`, and `_sessions` rows are sensitive
+// enough that the admin UI surfaces only the columns the operator
+// actually needs to triage an incident — password hashes, token
+// hashes, and revocation timestamps stay server-side. CRUD is on the
+// CLI (`railbase admin create/delete`); these types back the read-only
+// browser surface only.
+
+/** One row of `_admins` shaped for the admin UI. `last_active` maps
+ *  onto the underlying `last_login_at` column; `mfa_enabled` is
+ *  derived from `_totp_enrollments` (always `false` until admin MFA
+ *  lands — the column is plumbed already so a future toggle doesn't
+ *  break the type). */
+export interface SystemAdminRow {
+  id: string;
+  email: string;
+  created: string;
+  last_active: string | null;
+  mfa_enabled: boolean;
+}
+
+export interface SystemAdminListResponse {
+  items: SystemAdminRow[];
+  page: number;
+  perPage: number;
+  totalItems: number;
+  totalPages: number;
+}
+
+/** One row of `_admin_sessions` shaped for the admin UI. `created` /
+ *  `last_used_at` map onto `created_at` / `last_active_at`. `user_agent`
+ *  is truncated server-side to 60 chars. */
+export interface SystemAdminSessionRow {
+  id: string;
+  admin_id: string;
+  created: string;
+  expires_at: string;
+  last_used_at: string;
+  ip: string | null;
+  user_agent: string | null;
+}
+
+export interface SystemAdminSessionListResponse {
+  items: SystemAdminSessionRow[];
+  page: number;
+  perPage: number;
+  totalItems: number;
+  totalPages: number;
+}
+
+/** One row of `_sessions` (user sessions) shaped for the admin UI.
+ *  `user_collection` maps onto the underlying `collection_name`. */
+export interface SystemSessionRow {
+  id: string;
+  user_id: string;
+  user_collection: string;
+  created: string;
+  expires_at: string;
+  last_used_at: string;
+  ip: string | null;
+  user_agent: string | null;
+}
+
+export interface SystemSessionListResponse {
+  items: SystemSessionRow[];
+  page: number;
+  perPage: number;
+  totalItems: number;
+  totalPages: number;
+}

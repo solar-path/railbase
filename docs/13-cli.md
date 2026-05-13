@@ -10,7 +10,7 @@
 railbase init <name> [--template basic|saas|mobile|ai]
   Scaffold pb_data/, pb_hooks/, schema/main.go, railbase.yaml.
 
-railbase serve [--addr :8090] [--dev]
+railbase serve [--addr :8095] [--dev]
   Start HTTP server. --dev: hot reload Go code via embedded air-style watcher.
 
 railbase version
@@ -271,7 +271,7 @@ railbase mcp serve
 ```
 --config <path>             Override default railbase.yaml
 --data <path>               Override pb_data/ location
---addr <addr>               HTTP listen address (default :8090)
+--addr <addr>               HTTP listen address (default :8095)
 --db-url <url>              Override RAILBASE_DB
 
 --log-level debug|info|warn|error
@@ -288,9 +288,12 @@ RAILBASE_DSN                Postgres DSN (`postgres://user:pass@host:port/db?ssl
 RAILBASE_EMBED_POSTGRES     "true" для запуска embedded PG subprocess (dev only; refused в RAILBASE_PROD=true)
 RAILBASE_ADDR               listen address
 RAILBASE_DATA               data dir
+RAILBASE_DATA_DIR           same as RAILBASE_DATA (admin setup wizard reads this when persisting .dsn)
 RAILBASE_LOG_LEVEL
 RAILBASE_PBCOMPAT           strict | native | both
 RAILBASE_PROD               production mode flag (disables dev features)
+RAILBASE_FORCE_INIT         "1" overrides v1.7.42 foreign-DB safety gate; allows migrating into a non-empty DB
+                            that lacks the `_migrations` marker (co-location with another app). Default: refuse.
 RAILBASE_CLUSTER_PEERS      cluster mode: "host1:4222,host2:4222" (для railbase-cluster plugin)
 RAILBASE_STORAGE            storage URL: fs:./storage | s3://bucket?...
 RAILBASE_SECRET_KEY         override .secret file

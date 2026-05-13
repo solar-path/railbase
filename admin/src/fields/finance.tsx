@@ -43,12 +43,12 @@ export function FinanceCell({ value }: { value: unknown }) {
   // Guard: if the value isn't a parseable decimal, render verbatim
   // (don't pretend it's a number).
   if (!/^-?\d+(\.\d+)?$/.test(raw)) {
-    return <span className="rb-mono text-xs">{raw}</span>;
+    return <span className="font-mono text-xs">{raw}</span>;
   }
   const display = formatDisplay(raw);
   return (
     <span
-      className="rb-mono text-xs tabular-nums whitespace-nowrap"
+      className="font-mono text-xs tabular-nums whitespace-nowrap"
       title={raw}
     >
       {display}
@@ -109,13 +109,13 @@ export function FinanceInput({
         }}
         placeholder="0.00"
         className={
-          "mt-1 w-full rounded border px-2 py-1.5 text-sm rb-mono text-right tabular-nums focus:outline-none focus:ring-1 " +
+          "mt-1 w-full rounded border px-2 py-1.5 text-sm font-mono text-right tabular-nums focus:outline-none focus:ring-1 " +
           (err
-            ? "border-red-400 focus:ring-red-500"
-            : "border-neutral-300 focus:ring-neutral-900")
+            ? "border-destructive/40 focus:ring-destructive"
+            : "border-input focus:ring-ring")
         }
       />
-      {err ? <p className="mt-0.5 text-xs text-red-600">{err}</p> : null}
+      {err ? <p className="mt-0.5 text-xs text-destructive">{err}</p> : null}
     </div>
   );
 }

@@ -74,6 +74,7 @@ export const DropdownMenuTrigger = forwardRef<
       <Comp
         ref={ref as Ref<HTMLButtonElement>}
         type={asChild ? undefined : (type ?? 'button')}
+        data-slot="dropdown-menu-trigger"
         aria-haspopup="menu"
         aria-expanded={ctx.open}
         data-state={ctx.open ? 'open' : 'closed'}
@@ -169,6 +170,7 @@ export const DropdownMenuContent = forwardRef<HTMLDivElement, DropdownMenuConten
                   else if (ref) (ref as { current: HTMLDivElement | null }).current = el
                 }}
                 role="menu"
+                data-slot="dropdown-menu-content"
                 data-state={ctx.open ? 'open' : 'closed'}
                 data-side={dataSide(floating.placement)}
                 data-align={dataAlign(floating.placement)}
@@ -235,6 +237,7 @@ export const DropdownMenuItem = forwardRef<HTMLDivElement, DropdownMenuItemProps
         ref={ref as Ref<HTMLDivElement>}
         role="menuitem"
         tabIndex={-1}
+        data-slot="dropdown-menu-item"
         data-disabled={disabled ? '' : undefined}
         aria-disabled={disabled || undefined}
         onClick={(e: Event) => {
@@ -249,7 +252,7 @@ export const DropdownMenuItem = forwardRef<HTMLDivElement, DropdownMenuItemProps
           }
         }}
         class={cn(
-          'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none',
+          'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden',
           'focus:bg-accent focus:text-accent-foreground',
           'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
           inset && 'pl-8',
@@ -289,6 +292,7 @@ export const DropdownMenuCheckboxItem = forwardRef<HTMLDivElement, DropdownMenuC
         role="menuitemcheckbox"
         aria-checked={checked}
         tabIndex={-1}
+        data-slot="dropdown-menu-checkbox-item"
         data-state={checked ? 'checked' : 'unchecked'}
         data-disabled={disabled ? '' : undefined}
         onClick={(e: Event) => {
@@ -296,7 +300,7 @@ export const DropdownMenuCheckboxItem = forwardRef<HTMLDivElement, DropdownMenuC
           handle(e)
         }}
         class={cn(
-          'relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none',
+          'relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-hidden',
           'focus:bg-accent focus:text-accent-foreground',
           'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
           klass as string,
@@ -346,6 +350,7 @@ export const DropdownMenuRadioItem = forwardRef<
       role="menuitemradio"
       aria-checked={checked}
       tabIndex={-1}
+      data-slot="dropdown-menu-radio-item"
       data-state={checked ? 'checked' : 'unchecked'}
       data-disabled={disabled ? '' : undefined}
       onClick={(e: Event) => {
@@ -355,7 +360,7 @@ export const DropdownMenuRadioItem = forwardRef<
         ctx.setOpen(false)
       }}
       class={cn(
-        'relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none',
+        'relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-hidden',
         'focus:bg-accent focus:text-accent-foreground',
         'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
         klass as string,
@@ -378,6 +383,7 @@ export const DropdownMenuLabel = forwardRef<
 >(({ class: klass, className, inset, ...props }, ref) => (
   <div
     ref={ref as Ref<HTMLDivElement>}
+    data-slot="dropdown-menu-label"
     class={cn('px-2 py-1.5 text-sm font-semibold', inset && 'pl-8', klass as string, className)}
     {...props}
   />
@@ -389,6 +395,7 @@ export const DropdownMenuSeparator = forwardRef<HTMLDivElement, HTMLAttributes<H
     <div
       ref={ref as Ref<HTMLDivElement>}
       role="separator"
+      data-slot="dropdown-menu-separator"
       class={cn('-mx-1 my-1 h-px bg-muted', klass as string, className)}
       {...props}
     />
@@ -403,6 +410,7 @@ export function DropdownMenuShortcut({
 }: HTMLAttributes<HTMLSpanElement>) {
   return (
     <span
+      data-slot="dropdown-menu-shortcut"
       class={cn('ml-auto text-xs tracking-widest opacity-60', klass as string, className)}
       {...props}
     />
@@ -414,6 +422,7 @@ export const DropdownMenuGroup = forwardRef<HTMLDivElement, HTMLAttributes<HTMLD
     <div
       ref={ref as Ref<HTMLDivElement>}
       role="group"
+      data-slot="dropdown-menu-group"
       class={cn('', klass as string, className)}
       {...props}
     />
@@ -491,6 +500,7 @@ export const DropdownMenuSubTrigger = forwardRef<
         aria-haspopup="menu"
         aria-expanded={sub.open}
         tabIndex={-1}
+        data-slot="dropdown-menu-sub-trigger"
         data-state={sub.open ? 'open' : 'closed'}
         data-disabled={disabled ? '' : undefined}
         onClick={(e: Event) => {
@@ -509,7 +519,7 @@ export const DropdownMenuSubTrigger = forwardRef<
           }
         }}
         class={cn(
-          'flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none',
+          'flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-hidden',
           'focus:bg-accent focus:text-accent-foreground',
           'data-[state=open]:bg-accent data-[state=open]:text-accent-foreground',
           'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
@@ -545,6 +555,7 @@ export const DropdownMenuSubContent = forwardRef<HTMLDivElement, HTMLAttributes<
                 else if (ref) (ref as { current: HTMLDivElement | null }).current = el
               }}
               role="menu"
+              data-slot="dropdown-menu-sub-content"
               data-state={sub.open ? 'open' : 'closed'}
               style={{
                 position: floating.strategy,

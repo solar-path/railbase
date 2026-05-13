@@ -29,6 +29,7 @@ export const Item = forwardRef<HTMLDivElement, ItemProps>(
   ({ class: klass, className, variant, size, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
+      data-slot="item"
       class={cn(itemVariants({ variant, size }), klass as string, className)}
       {...props}
     />
@@ -58,6 +59,7 @@ export const ItemMedia = forwardRef<HTMLDivElement, ItemMediaProps>(
   ({ class: klass, className, variant, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
+      data-slot="item-media"
       class={cn(itemMediaVariants({ variant }), klass as string, className)}
       {...props}
     />
@@ -69,6 +71,7 @@ export const ItemContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElem
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
+      data-slot="item-content"
       class={cn('flex min-w-0 flex-1 flex-col gap-0.5', klass as string, className)}
       {...props}
     />
@@ -80,6 +83,7 @@ export const ItemTitle = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElemen
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
+      data-slot="item-title"
       class={cn(
         'flex items-center gap-2 text-sm font-medium leading-tight',
         klass as string,
@@ -95,6 +99,7 @@ export const ItemDescription = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDiv
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
+      data-slot="item-description"
       class={cn('line-clamp-1 text-xs text-muted-foreground', klass as string, className)}
       {...props}
     />
@@ -106,6 +111,7 @@ export const ItemActions = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElem
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
+      data-slot="item-actions"
       class={cn('flex shrink-0 items-center gap-1', klass as string, className)}
       {...props}
     />
@@ -117,6 +123,7 @@ export const ItemFooter = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEleme
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
+      data-slot="item-footer"
       class={cn('mt-1 text-[11px] text-muted-foreground', klass as string, className)}
       {...props}
     />
@@ -129,6 +136,7 @@ export const ItemGroup = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElemen
     <div
       ref={ref as Ref<HTMLDivElement>}
       role="list"
+      data-slot="item-group"
       class={cn('divide-y overflow-hidden rounded-md border', klass as string, className)}
       {...props}
     />
@@ -141,6 +149,7 @@ export const ItemSeparator = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEl
     <div
       ref={ref as Ref<HTMLDivElement>}
       role="separator"
+      data-slot="item-separator"
       class={cn('h-px w-full bg-border', klass as string, className)}
       {...props}
     />

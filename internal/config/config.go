@@ -23,7 +23,7 @@ import (
 
 // Config is the resolved boot configuration.
 type Config struct {
-	// HTTPAddr is the bind address for the API server, e.g. ":8090".
+	// HTTPAddr is the bind address for the API server, e.g. ":8095".
 	HTTPAddr string
 
 	// DataDir is where uploaded files, hooks scaffolding, and the
@@ -85,9 +85,25 @@ type Config struct {
 }
 
 // Default returns the baseline configuration with no env/flag overlay.
+//
+// Why :8095:
+//   - IANA-unassigned (no registered service)
+//   - No default daemon on Linux, Windows, or macOS — including macOS
+//     AirPlay Receiver, which squats :5000 and :7000 on Sonoma+ and
+//     ruined both as a backend default
+//   - No collision with the usual dev/prod tools we co-locate with
+//     (PocketBase :8090, Postgres :5432, Redis :6379, nginx :80/:8080,
+//     Prometheus :9090, Cassandra :7000, Jupyter :8888, Tomcat :8080,
+//     Django :8000, Flask :5000, Grafana :3000, Vite :5173, Jenkins
+//     :8080, MinIO :9000, SonarQube :9000)
+//   - Adjacent to PocketBase's :8090 mnemonically (operators migrating
+//     from PB find it on muscle-memory's neighbouring port)
+//
+// Override with RAILBASE_HTTP_ADDR or `--addr` if 8095 is taken on the
+// host.
 func Default() Config {
 	return Config{
-		HTTPAddr:       ":8090",
+		HTTPAddr:       ":8095",
 		DataDir:        "./pb_data",
 		HooksDir:       "./pb_hooks",
 		PublicDir:      "",
@@ -104,7 +120,36 @@ func Default() Config {
 
 // Load resolves config from environment variables, layered on top of
 // the defaults. CLI flag overlay is applied by callers after Load.
+//
+// Precedence (highest wins):
+//   1. CLI flags (applied by callers after Load returns)
+//   2. Existing process env (RAILBASE_*)  ← os.Getenv path below
+//   3. `.env` file values (./.env and <DataDir>/.env, both optional)
+//   4. Defaults baked into Default()
+//
+// The `.env` step is conventional: each line is `KEY=value`, # comments
+// tolerated, `export ` prefix tolerated, double-quoted strings with
+// \n\r\t\\\" escapes, single-quoted strings literal. See dotenv.go
+// for the full grammar. Process env wins over file values, so an
+// operator can shadow a stored DSN with `RAILBASE_DSN=... ./railbase
+// serve` for one run without editing the file.
 func Load() (Config, error) {
+	// Resolve DataDir for the second .env lookup BEFORE we read env
+	// vars proper, since the .env file may itself set RAILBASE_DATA_DIR.
+	// We do this in two phases: first .env from ./.env (no DataDir
+	// override possible — there is no env yet), then re-resolve DataDir
+	// after that pass, then second .env from <DataDir>/.env.
+	if _, err := LoadDotenvFiles(".env"); err != nil {
+		return Config{}, err
+	}
+	dataDir := os.Getenv("RAILBASE_DATA_DIR")
+	if dataDir == "" {
+		dataDir = Default().DataDir
+	}
+	if _, err := LoadDotenvFiles(filepath.Join(dataDir, ".env")); err != nil {
+		return Config{}, err
+	}
+
 	c := Default()
 
 	if v := os.Getenv("RAILBASE_HTTP_ADDR"); v != "" {

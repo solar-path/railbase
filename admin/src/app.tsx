@@ -3,6 +3,8 @@ import { useBrowserLocation } from "wouter-preact/use-browser-location";
 import { AuthProvider, useAuth } from "./auth/context";
 import { LoginScreen } from "./screens/login";
 import { BootstrapScreen } from "./screens/bootstrap";
+import { ForgotPasswordScreen } from "./screens/forgot_password";
+import { ResetPasswordScreen } from "./screens/reset_password";
 import { DashboardScreen } from "./screens/dashboard";
 import { SchemaScreen } from "./screens/schema";
 import { SettingsScreen } from "./screens/settings";
@@ -16,6 +18,7 @@ import { NotificationsPrefsScreen } from "./screens/notifications-prefs";
 import { TrashScreen } from "./screens/trash";
 import { MailerTemplatesScreen } from "./screens/mailer_templates";
 import { EmailEventsScreen } from "./screens/email-events";
+import { MailerScreen } from "./screens/mailer";
 import { RealtimeScreen } from "./screens/realtime";
 import { WebhooksScreen } from "./screens/webhooks";
 import { HooksScreen } from "./screens/hooks";
@@ -24,6 +27,9 @@ import { HealthScreen } from "./screens/health";
 import { CacheScreen } from "./screens/cache";
 import { RecordsScreen } from "./screens/records";
 import { RecordEditorScreen } from "./screens/record_editor";
+import { SystemAdminsScreen } from "./screens/system_admins";
+import { SystemAdminSessionsScreen } from "./screens/system_admin_sessions";
+import { SystemSessionsScreen } from "./screens/system_sessions";
 import { Shell } from "./layout/shell";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "./api/admin";
@@ -58,7 +64,7 @@ function Routes() {
 
   if (state.kind === "loading") {
     return (
-      <div className="min-h-screen flex items-center justify-center text-neutral-500">
+      <div className="min-h-screen flex items-center justify-center text-muted-foreground">
         Loading…
       </div>
     );
@@ -68,6 +74,9 @@ function Routes() {
     return (
       <Switch>
         <Route path="/bootstrap" component={BootstrapScreen} />
+        <Route path="/forgot-password" component={ForgotPasswordScreen} />
+        <Route path="/reset-password" component={ResetPasswordScreen} />
+        <Route path="/login" component={LoginScreen} />
         <Route component={LoginGate} />
       </Switch>
     );
@@ -87,14 +96,25 @@ function Routes() {
         <Route path="/notifications/prefs" component={NotificationsPrefsScreen} />
         <Route path="/notifications" component={NotificationsScreen} />
         <Route path="/trash" component={TrashScreen} />
-        <Route path="/mailer-templates" component={MailerTemplatesScreen} />
-        <Route path="/email-events" component={EmailEventsScreen} />
+        {/* Mailer surface (Wave 2 IA reorg): /mailer is the landing
+            tab page; /mailer/templates and /mailer/events delegate to
+            the existing screens. The pre-IA paths /mailer-templates
+            and /email-events redirect to the new locations for
+            bookmark + external-link continuity. */}
+        <Route path="/mailer" component={MailerScreen} />
+        <Route path="/mailer/templates" component={MailerTemplatesScreen} />
+        <Route path="/mailer/events" component={EmailEventsScreen} />
+        <Route path="/mailer-templates" component={MailerTemplatesRedirect} />
+        <Route path="/email-events" component={EmailEventsRedirect} />
         <Route path="/realtime" component={RealtimeScreen} />
         <Route path="/webhooks" component={WebhooksScreen} />
         <Route path="/hooks" component={HooksScreen} />
         <Route path="/i18n" component={I18nScreen} />
         <Route path="/health" component={HealthScreen} />
         <Route path="/cache" component={CacheScreen} />
+        <Route path="/system/admins" component={SystemAdminsScreen} />
+        <Route path="/system/admin-sessions" component={SystemAdminSessionsScreen} />
+        <Route path="/system/sessions" component={SystemSessionsScreen} />
         <Route path="/data/:name/:id" component={RecordEditorScreen} />
         <Route path="/data/:name" component={RecordsScreen} />
         <Route component={NotFound} />
@@ -136,8 +156,26 @@ void adminAPI;
 
 function NotFound() {
   return (
-    <div className="text-sm text-neutral-500">
+    <div className="text-sm text-muted-foreground">
       Not found. <a href="/_/" className="underline">Go home</a>.
     </div>
   );
+}
+
+// Permanent client-side redirects from pre-IA-reorg paths to the new
+// Messaging-group routes. Wave 2 (docs/12 §Layout). Replace history so
+// the browser Back button doesn't bounce between the two URLs.
+function MailerTemplatesRedirect() {
+  if (typeof window !== "undefined") {
+    window.history.replaceState({}, "", "/_/mailer/templates");
+    window.location.reload();
+  }
+  return null;
+}
+function EmailEventsRedirect() {
+  if (typeof window !== "undefined") {
+    window.history.replaceState({}, "", "/_/mailer/events");
+    window.location.reload();
+  }
+  return null;
 }

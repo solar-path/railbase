@@ -40,6 +40,7 @@ export const NavigationMenu = forwardRef<HTMLElement, NavigationMenuProps>(
       <Ctx.Provider value={{ value: v, setValue }}>
         <nav
           ref={ref as Ref<HTMLElement>}
+          data-slot="navigation-menu"
           class={cn('relative z-10 flex max-w-max flex-1 items-center justify-center', klass as string, className)}
           {...props}
         >
@@ -55,7 +56,8 @@ export const NavigationMenuList = forwardRef<HTMLUListElement, HTMLAttributes<HT
   ({ class: klass, className, ...props }, ref) => (
     <ul
       ref={ref as Ref<HTMLUListElement>}
-      class={cn('group flex flex-1 list-none items-center justify-center space-x-1', klass as string, className)}
+      data-slot="navigation-menu-list"
+      class={cn('group flex flex-1 list-none items-center justify-center gap-1', klass as string, className)}
       {...props}
     />
   ),
@@ -71,7 +73,11 @@ export const NavigationMenuItem = forwardRef<HTMLLIElement, HTMLAttributes<HTMLL
     const idRef = useRef<string>(`nav-item-${++itemIdCounter}`)
     return (
       <ItemCtx.Provider value={{ id: idRef.current }}>
-        <li ref={ref as Ref<HTMLLIElement>} {...(props as HTMLAttributes<HTMLLIElement>)}>
+        <li
+          ref={ref as Ref<HTMLLIElement>}
+          data-slot="navigation-menu-item"
+          {...(props as HTMLAttributes<HTMLLIElement>)}
+        >
           {children}
         </li>
       </ItemCtx.Provider>
@@ -81,7 +87,7 @@ export const NavigationMenuItem = forwardRef<HTMLLIElement, HTMLAttributes<HTMLL
 NavigationMenuItem.displayName = 'NavigationMenuItem'
 
 export const navigationMenuTriggerStyle = cva(
-  'group inline-flex h-9 w-max items-center justify-center rounded-md bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-accent/50 data-[active=true]:bg-accent/50',
+  'group inline-flex h-9 w-max items-center justify-center rounded-md bg-background px-4 py-2 text-sm font-medium transition-[color,background-color,box-shadow] hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-accent/50 data-[active=true]:bg-accent/50',
 )
 
 export const NavigationMenuTrigger = forwardRef<
@@ -95,6 +101,7 @@ export const NavigationMenuTrigger = forwardRef<
     <button
       ref={ref as Ref<HTMLButtonElement>}
       type={type ?? 'button'}
+      data-slot="navigation-menu-trigger"
       data-state={open ? 'open' : 'closed'}
       onClick={(e: Event) => {
         onClick?.(e as any)
@@ -128,6 +135,7 @@ export const NavigationMenuContent = forwardRef<HTMLDivElement, HTMLAttributes<H
     return (
       <div
         ref={ref as Ref<HTMLDivElement>}
+        data-slot="navigation-menu-content"
         data-state={open ? 'open' : 'closed'}
         class={cn(
           'left-0 top-0 w-full data-[motion^=from-]:animate-in data-[motion^=to-]:animate-out data-[motion^=from-]:fade-in data-[motion^=to-]:fade-out md:absolute md:w-auto',
@@ -149,6 +157,7 @@ export const NavigationMenuLink = forwardRef<
 >(({ class: klass, className, active, ...props }, ref) => (
   <a
     ref={ref as Ref<HTMLAnchorElement>}
+    data-slot="navigation-menu-link"
     data-active={active ? 'true' : undefined}
     class={cn(navigationMenuTriggerStyle(), klass as string, className)}
     {...props}
@@ -160,6 +169,7 @@ export const NavigationMenuIndicator = forwardRef<HTMLDivElement, HTMLAttributes
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
+      data-slot="navigation-menu-indicator"
       class={cn(
         'top-full z-[1] flex h-1.5 items-end justify-center overflow-hidden data-[state=visible]:animate-in data-[state=hidden]:animate-out data-[state=hidden]:fade-out data-[state=visible]:fade-in',
         klass as string,
@@ -178,6 +188,7 @@ export const NavigationMenuViewport = forwardRef<HTMLDivElement, HTMLAttributes<
     <div class="absolute left-0 top-full flex justify-center">
       <div
         ref={ref as Ref<HTMLDivElement>}
+        data-slot="navigation-menu-viewport"
         class={cn(
           'origin-top-center relative mt-1.5 h-[var(--radix-navigation-menu-viewport-height)] w-full overflow-hidden rounded-md border bg-popover text-popover-foreground shadow data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-90 md:w-[var(--radix-navigation-menu-viewport-width)]',
           klass as string,

@@ -59,6 +59,15 @@ func (d *Deps) requireOAuthDeps(w http.ResponseWriter) bool {
 }
 
 func (d *Deps) oauthStartHandler(w http.ResponseWriter, r *http.Request) {
+	// v1.7.48 — the wizard gate runs FIRST, before deps check. An
+	// operator-disabled provider should return a stable 403 regardless
+	// of whether the underlying registry/store happens to be wired.
+	// Default-true: providers configured in code but never touched in
+	// the wizard remain live on upgrade.
+	if denied := d.requireOAuthProviderEnabled(r); denied != nil {
+		rerr.WriteJSON(w, denied)
+		return
+	}
 	if !d.requireOAuthDeps(w) {
 		return
 	}
@@ -91,6 +100,13 @@ func (d *Deps) oauthStartHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Deps) oauthCallbackHandler(w http.ResponseWriter, r *http.Request) {
+	// v1.7.48 — gate the callback symmetrically with start. Without
+	// this, a state cookie issued before the disable could redeem
+	// against a provider the operator has since turned off.
+	if denied := d.requireOAuthProviderEnabled(r); denied != nil {
+		rerr.WriteJSON(w, denied)
+		return
+	}
 	if !d.requireOAuthDeps(w) {
 		return
 	}

@@ -6186,4 +6186,581 @@ Migrated every admin screen + every layout file to consume the kit. Mechanical r
 
 **~99% (v1 scope unchanged — UI kit is v1.x bonus, parallel polish track).** The admin re-skinning is decorative refresh, not feature work; SHIP gates remain green. Net result for downstream developers: Railbase binary now doubles as a UI registry, accessible from any frontend without an npm publish step.
 
+---
 
+## v1.7.41 — react-hook-form across all admin screens + embedded-driver removed from production wizard
+
+**Mission**: close the v1.7.40 deferred "adopt kit's react-hook-form integration in deep admin forms" follow-up. Every admin screen with client-side validation moves off hand-rolled `useSignal` + manual `onSubmit` onto the kit's `<Form>` + `useForm()` + `zodResolver` pattern. Same recipe replicated 9 times for consistency across the surface area.
+
+Reasoning: v1.7.40 wired the kit's `form.ui.tsx` + `react-hook-form` + `@hookform/resolvers` peer deps but only `login.tsx` adopted them — everything else continued to compose signals + `event.preventDefault()` + ad-hoc `useState<{[key]: string}>` for per-field errors. That worked but left the team writing the same boilerplate per screen + missed RHF features (server-error mapping via `form.setError`, cross-field validation via `.refine`, `formState.isSubmitting`, `form.reset()`). One slice closes the gap.
+
+### Screens migrated (9)
+
+| File | Pattern |
+|---|---|
+| `login.tsx` | (already migrated in v1.7.40) — reference impl, static `z.object({email, password})` |
+| `bootstrap.tsx` | TWO `useForm()` (one per step) + `z.discriminatedUnion("driver", [local_socket, external_dsn])` + `.refine` для confirm-match + `form.setValue` fan-out on password-generate |
+| `record_editor.tsx` | **Dynamic zod schema** через `buildSchema(fields: FieldSpec[])` под `useMemo([editable])` — поля приходят из runtime schema, не литералов; 422 server-error mapping на `form.setError(name, {type:"server", message})` из `e.body.details.errors` |
+| `api_tokens.tsx` | Create-modal + chained `useState` для display-once token banner; modal закрывается через `form.reset()` |
+| `webhooks.tsx` | Create-modal + `.refine` для http(s) URL validator |
+| `notifications-prefs.tsx` | Per-user settings form (quiet_hours window + digest cadence); master-detail user-list / kind-grid остаются на `useState` (там нет submit-формы) |
+| `settings.tsx` | KV add-form + `<select>` для типа + value-coercion в onSubmit с `form.setError("value")` на parse-failure (number/bool/json mistypes) |
+| `i18n.tsx` | Dynamic zod через `useMemo(() => z.object(shape), [rows])`; flat-key cast `name={k as string}` обходит RHF auto-nested-paths для ключей с точками (`auth.signin.button` → не должно стать `{auth: {signin: {button: ...}}}`) |
+| `hooks.tsx` TestPanel | 3 поля (event/collection/recordJson) + `z.string().refine` для JSON-object validation на recordJson |
+
+### Embedded driver removed from production wizard (followup)
+
+Operator pushback в session: production-бинарник показывал disabled radio «Embedded postgres — not available in this build» в setup wizard'е, что путало («почему он его вообще предлагает?»).
+
+Fix: третья ветка `dbStepSchema` discriminated union (`z.literal("embedded")`) **удалена целиком** из `bootstrap.tsx`. Соответственно: `DriverRadio` для embedded удалён, `isEmbedded`/`embeddedDisabled` локальные variables удалены, `switchDriver()` упрощён до двух веток, `bodyForBackend()` свёрнут до двух веток. `defaultValues` сменился с `{driver: "embedded"}` на `{driver: "external_dsn", external_dsn: ""}` — детект на mount флипнет в `local_socket` если найден сокет.
+
+Embedded postgres остаётся build-time decision через `-tags embed_pg` + `make build-embed` — отдельный dev-binary который автоматически летает в embedded mode без `bootstrap.tsx` вообще. Production-бинарники не должны его упоминать на operator-surface.
+
+`setup_db.go::setupSaveDBHandler` оставлен с веткой `if body.Driver == "embedded"` short-circuit на случай stale-frontend POST'a — gracefully no-op, never persists `.dsn`, returns `{ok: true, restart_required: false}`.
+
+### Bundle delta
+
+- 25 модулей → 237 модулей (+12 за `react-hook-form` + `@hookform/resolvers` + `zod` рёбра — paid one-time первой формой; subsequent screens растут по ~1-2 KB gzip)
+- Bundle: 442 → 467.99 KB JS (+25.99 KB raw / +10 KB gzip, 115 → 130.02 KB gzip)
+
+### `@hookform/resolvers` v5 — known gotcha
+
+Agent C поймал: zod `.default(false)` ломает `Resolver<...>` assignment под `@hookform/resolvers@5.x` — `.default` сплитит input vs output типы; resolver требует совпадения. Workaround: НЕ использовать `.default()` в zod-схемах; всё дефолтить через `useForm({ defaultValues: {...} })` + `form.reset(...)` на switch-сценариях.
+
+### Tests
+
+Frontend: `tsc -b && vite build` clean. Бэкендовый probe/save handlers unchanged (только UI пере-маппит JSON ответы). Cross-compile sweep: 6 targets все под 30 MB ceiling.
+
+### Docs
+
+`docs/12-admin-ui.md` Form strategy section (v1.7.40) расширен: 6-pattern catalogue (static zod / dynamic zod / discriminated union / cross-field validation / server-error mapping / generator fan-out) + per-screen migration status table + `@hookform/resolvers` v5 gotcha box.
+
+---
+
+## v1.7.42 — Foreign-DB safety gate (probe-time scan + boot-time invariant + UI checkbox + `RAILBASE_FORCE_INIT` escape hatch)
+
+**Mission**: close the only material UX risk in the v1.7.39 first-run setup wizard — operator typo (`Database: billing_prod` instead of `Database: railbase`) silently pointing Railbase migrations + extensions at someone else's database. Diagnosis from session conversation: probe + save endpoints contain **no destructive operations** (no `DROP DATABASE`, no `DROP TABLE`, no `TRUNCATE`), so data loss isn't the risk — **schema pollution** is (installing `pgcrypto`, `uuid-ossp`, `_migrations`, `_admins`, `_sessions`, `_audit_log`, … into a foreign app's `public`).
+
+Three-layer fix; ~140 LOC Go + ~50 LOC TSX + 4 + 3 new tests; no new tables, no schema changes.
+
+### Layer 1 — Probe-time schema scan (`internal/api/adminapi/setup_db.go`)
+
+`setupProbeResponse` gains two fields:
+- `public_table_count int` — `SELECT count(*) FROM pg_tables WHERE schemaname = 'public'`
+- `is_existing_railbase bool` — `EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='_migrations')`
+
+Combined into ONE round-trip after the existing `SELECT version()` — both consult `pg_tables` view. Best-effort: failure to query (managed DBs may restrict catalog visibility) leaves fields at zero values, so wizard falls back to "treat as empty / continue normally" — strictly less protective than the scan, but never breaks the happy path.
+
+### Layer 2 — Boot-time invariant (`internal/db/migrate/migrate.go`)
+
+New `ErrForeignDatabase` sentinel + `Runner.AllowForeignDatabase bool`. `Apply()` now calls `checkForeignDatabase(ctx)` BEFORE `bootstrap()`:
+
+```
+tables=0 AND marker=false → fresh DB, safe to bootstrap
+tables>0 AND marker=true  → existing Railbase, safe to continue
+tables>0 AND marker=false → foreign DB, refuse (unless allowed)
+tables=0 AND marker=true  → impossible (marker IS a table)
+```
+
+Why second layer if wizard already gates: catches the **manual `.dsn` edit** route. Operator who writes `<DataDir>/.dsn` by hand bypasses the wizard entirely; `Apply()` is the choke-point every boot path passes through. `pg_tables` query failure here is non-fatal — logs a warning and proceeds (same managed-DB compat reasoning).
+
+`pkg/railbase/app.go` wires the escape hatch: `AllowForeignDatabase: os.Getenv("RAILBASE_FORCE_INIT") == "1"`. Documented in `ErrForeignDatabase` docstring so operators reading the error know exactly what env var to flip.
+
+### Layer 3 — UI checkbox gate (`admin/src/screens/bootstrap.tsx`)
+
+`ProbeResponse` TS type extended w/ `public_table_count?` + `is_existing_railbase?` (optional — pre-v1.7.42 backends would just omit them). Two new screen components:
+
+- **`ExistingRailbaseNotice`** (green): rendered when `is_existing_railbase=true`. Informational; Save flows normally. Confirms "you're reconnecting to an existing Railbase install (e.g. after a restore or re-deploy)".
+- **`ForeignDbWarning`** (amber): rendered when `public_table_count>0 && !is_existing_railbase`. Shows the table count, explains the schema-pollution risk, locks Save behind a checkbox: «I understand — install Railbase alongside the existing tables.»
+
+`proceedAnyway` boolean state resets on every new probe — operator who fixes the database name + re-probes doesn't leak acknowledgement from the previous (dangerous) target.
+
+Button-level gating: `<Button type="submit" disabled={busy !== null || save?.ok || saveLocked}>` + `title={saveLocked ? "Confirm the warning above before saving." : undefined}` for the hover tooltip.
+
+### Tests
+
+**4 new tests in `internal/db/migrate/foreign_db_test.go`** (embed_pg build tag, own `TestMain` w/ shared embedded PG; same `os.Exit(runTests(m))` defers-leak fix as v1.7.35d):
+- `FreshDB_BootstrapSucceeds` — empty DB → success, marker written
+- `ExistingRailbase_BootstrapSucceeds` — second Apply on existing → success (precheck waves marker through)
+- `ForeignTables_BootstrapRefused` — foreign tables → `errors.Is(err, ErrForeignDatabase)`, marker NOT written
+- `ForeignTables_AllowOverride` — same + `AllowForeignDatabase=true` → success
+
+**3 new tests in `internal/api/adminapi/setup_db_embed_test.go`** (piggybacks on existing `emEventsPool` TestMain):
+- `ProbeDB_Scan_ExistingRailbase` — suite's migrated DB → `IsExistingRailbase=true`, `PublicTableCount>0`
+- `ProbeDB_Scan_FreshDB` — fresh `CREATE DATABASE` → count=0, marker=false
+- `ProbeDB_Scan_ForeignDB` — fresh DB + `CREATE TABLE foreign_app_users` → count>0, marker=false
+
+Per-suite times (M2): migrate 47.6s / adminapi 46.3s. Full `make verify-release`: vet ✅ / full race suite ✅ / 6 cross-compile targets ✅ / 30 MB size gate ✅ — largest 27.79 MB Windows amd64, **2.21 MB headroom** down from 2.3 MB pre-slice (size delta = handler tests embedded + admin SPA +0.7 KB raw / gzip flat).
+
+### Open considerations
+
+- Did NOT add a separate `_railbase_instance` fingerprint table — `_migrations` already serves as the marker. Adding `instance_id UUID` as a column on `_migrations` (or a sibling one-row table) is a candidate v1.x slice when backup/restore needs to distinguish "this Railbase install" from "another Railbase install pointed at the same DB". Deferred until the use-case bites.
+- Schema-isolation approach (`CREATE SCHEMA railbase; SET search_path TO railbase`) explicitly rejected: doesn't solve the CREATE EXTENSION pollution vector (extensions are DB-scope, not schema-scope), forces qualifying every system table in migrations + RLS policies, and is over-engineering for an early product. Marker check delivers 90% of the protection at 5% of the cost.
+- `RAILBASE_FORCE_INIT=1` is intentionally an env var, not a CLI flag, so it's awkward to type — wanted operators to feel the friction of "I'm doing something unusual on purpose".
+
+### Files touched
+
+**Modified** (4 files):
+- `internal/api/adminapi/setup_db.go` — `setupProbeResponse` fields + `probeDSN` schema-scan query
+- `internal/db/migrate/migrate.go` — `ErrForeignDatabase` + `Runner.AllowForeignDatabase` + `checkForeignDatabase` + wiring in `Apply`
+- `pkg/railbase/app.go` — `RAILBASE_FORCE_INIT` env var → Runner field (3 lines)
+- `admin/src/screens/bootstrap.tsx` — `ProbeResponse` type + `proceedAnyway` state + `ForeignDbWarning` + `ExistingRailbaseNotice` + Save button gating (~50 LOC)
+
+**New** (2 files):
+- `internal/db/migrate/foreign_db_test.go` (276 LOC, embed_pg-tagged)
+- (added to existing `setup_db_embed_test.go`: 3 new test funcs + `createDatabaseHelper`)
+
+`docs/12-admin-ui.md` First-run experience section rewritten to document the two-step wizard + the three safety states (green/amber/neutral) operator sees in the Database step.
+
+---
+
+## v1.7.43 — Mandatory email on admin creation: wizard mailer step + welcome + broadcast notice + retry sweeper + `_admins` ↔ app-users namespace clarification
+
+**Mission**: close the operator-raised gap "при создании учётной записи отправка email строго обязательно". Pre-v1.7.43, neither bootstrap nor CLI `admin create` sent any email — operator's MailHog inbox showing 0 messages after creating the first admin was correct behaviour but felt wrong, because mature systems (Auth0, Cognito, Supabase, Keycloak) all email on admin creation by default.
+
+Design conversation captured in `plan.md` (Q1-Q4 + α/β recipient model). User explicitly agreed to **mandatory by default** with two well-defined escape hatches: (1) operator explicitly skips during wizard, (2) CLI `--no-email` per-invocation flag.
+
+### Wizard expansion: 2 steps → 3 steps
+
+Bootstrap wizard now goes **Database → Mailer → Admin account**. The Mailer step is new (v1.7.43); existing Database step (v1.7.39 + v1.7.42 safety gate) and Admin step (v1.7.41 RHF migration) unchanged.
+
+`admin/src/screens/bootstrap.tsx` Stepper widened to render 3 labels with auto-advance heuristics preserved (DB step auto-skips when `/_setup/detect` reports configured; Mailer step never auto-advances — explicit operator action only). New `MailerStep` component (~530 LOC):
+
+- Driver picker: **SMTP** (production) vs **Console** (dev — emails printed to logs)
+- SMTP form: from address + from name + host + port + user + password (placeholder masks current value when set, `"(unchanged — leave empty to keep current)"`) + TLS mode (STARTTLS/Implicit/None) + probe-to address
+- Console form: from address + from name + probe-to address
+- **Send test email** button: `POST /api/_admin/_setup/mailer-probe`, returns green "Test email dispatched" OR red "Test send failed" w/ hint
+- **Save and continue**: `POST /api/_admin/_setup/mailer-save` writes config to `_settings`, advances
+- **Skip — I'll configure later** link: opens amber confirm modal w/ mandatory reason input, `POST /api/_admin/_setup/mailer-skip` stamps `mailer.setup_skipped_at` + `mailer.setup_skipped_reason`
+
+Pre-fills from a masked snapshot when re-visited (operator restarted Railbase mid-setup; the form remembers everything except SMTP password).
+
+### Backend — `internal/api/adminapi/setup_mailer.go` (new, ~430 LOC)
+
+Four public endpoints (no `RequireAdmin` guard — operator can't be admin until mailer is resolved):
+
+| Endpoint | Body | Purpose |
+|---|---|---|
+| `GET /_setup/mailer-status` | — | Returns `{configured_at, skipped_at, skipped_reason, mailer_required, config: <masked snapshot>}`. Status endpoint reads from `_settings` (`mailer.configured_at`, `mailer.setup_skipped_at`, `mailer.driver`, etc.) |
+| `POST /_setup/mailer-probe` | `{driver, from_address, from_name, smtp_host, smtp_port, smtp_user, smtp_password, tls, probe_to}` | Build ephemeral `mailer.Driver`, attempt one test send to `probe_to`. NEVER writes settings. Console driver uses `io.Discard` so probe output doesn't pollute stdout |
+| `POST /_setup/mailer-save` | Same shape as probe (probe_to optional) | Persist every field to `_settings` via individual `Manager.Set` calls (each fires `settings.changed` audit event). Stamps `mailer.configured_at`. **Clears `mailer.setup_skipped_at`** — successful configure overrides prior skip |
+| `POST /_setup/mailer-skip` | `{reason}` (non-empty, ≤500 chars) | Stamp `mailer.setup_skipped_at` + `mailer.setup_skipped_reason`. Empty reason rejected — operator-action weakening invariant must leave forensic trail |
+
+Pure-unit validation (driver enum, per-driver required fields, probe_to required only for probe path) + hint-mapping (`mailerProbeHint`) for the 7 most common SMTP failure modes (no-such-host / connection-refused / auth-failed / TLS-handshake / timeout / relay-refused / sender-rejected).
+
+### Bootstrap-handler gate — `internal/api/adminapi/bootstrap.go::mailerGateError`
+
+NEW: `mailerGateError(ctx, d) *rerr.Error` invoked BEFORE the body decode in `bootstrapCreateHandler`. Returns nil only when `mailer.configured_at` OR `mailer.setup_skipped_at` is set in `_settings`. Otherwise returns a typed `CodePreconditionFailed` (NEW error code in `internal/errors`) → HTTP 412 with message «mailer is not configured yet. Complete the mailer step of the setup wizard, or explicitly skip it.»
+
+When the gate passes, `enqueueAdminEmails` (exported as `EnqueueAdminEmails` for CLI consumption) fires:
+
+- **`admin_welcome.md`** to the NEW admin (login URL + 2FA reminder + audit-log review)
+- **`admin_created_notice.md`** broadcast to every OTHER admin (compromise-detection notice)
+
+Both use `send_email_async` (v1.7.30) with `MaxAttempts: 24` (vs 5 standard) so welcomes survive ~24h of SMTP downtime via standard exp-backoff alone.
+
+### CLI `railbase admin create` — same emails + `--no-email` flag
+
+`pkg/railbase/cli/admin.go` extended w/ `--no-email` flag. After successful `store.Create`:
+
+- If `--no-email` → stdout note + return
+- If `mailer.setup_skipped_at` is set → stdout note + return (skip flag honoured)
+- Otherwise → `enqueueAdminEmailsCLI` fires the same two-template flow
+
+`pkg/railbase/cli/admin_emails.go` (new) is the CLI-local twin of the adminapi enqueue path — replicated rather than imported because the CLI shouldn't depend on adminapi (which pulls chi + every admin route).
+
+The CLI **bypasses** the 412 gate — operator is on their own surface, can always re-enable later via Settings. Bypass is intentional, not a hole: scripts moving admin records around don't want runtime gates blocking them.
+
+### Retry sweeper — `internal/jobs/welcome_email_retry.go` (new)
+
+Cron-friendly job kind `retry_failed_welcome_emails` registered alongside `RegisterMailerBuiltins`. Default schedule (added to `DefaultSchedules()`): `*/30 * * * *` (every 30 min).
+
+One UPDATE flips `status='failed'` → `'pending'` for rows that ALL of:
+- `kind = 'send_email_async'`
+- `payload->>'template' IN ('admin_welcome', 'admin_created_notice')` — welcome-only
+- `status = 'failed'`
+- `last_error NOT ILIKE '%permanent failure%'` — doomed payloads stay doomed
+- `completed_at IS NOT NULL` AND `completed_at < now() - interval '15 minutes'` — don't dogpile fresh fails
+- `created_at > now() - interval '7 days'` — welcome content goes stale; don't resurrect ancient
+
+Why welcome-only: a failed password_reset 2 hours late is worse than no email (the link's expired and the user already clicked "resend"). Welcome content has no expiry — login URL + onboarding is still relevant 24h later when SMTP comes back online.
+
+### Templates — `internal/mailer/builtin/`
+
+Two new `.md` files auto-discovered via the existing `//go:embed builtin/*.md` registry:
+
+- **`admin_welcome.md`**: Subject `Welcome to {{ site.name }} — your admin account is ready`. Body has login URL + email + creation timestamp + "via" tag (wizard vs CLI) + next-step list
+- **`admin_created_notice.md`**: Subject `New administrator added to {{ site.name }}`. Body is compromise-detection-flavoured — new admin's email, who created, when, with explicit "if you didn't authorise this — check audit log" hint
+
+Both use only `{{ key }}` interpolation (template engine doesn't support conditionals).
+
+### Tests
+
+**8 pure-unit tests in `setup_mailer_test.go`** (no embed_pg):
+- `Status_NilSettings` — setup-mode boot path gracefully returns clean state
+- `Probe_BadDriver` — unknown driver → 400
+- `Probe_SMTPRequiresHost` — driver=smtp without host → 400
+- `Probe_RequiresProbeTo` — probe path requires destination
+- `Probe_ConsoleDriver` — console driver "send" returns ok=true
+- `Probe_SMTPUnreachable` — non-listening port returns ok=false with populated error
+- `Skip_RequiresReason` — empty reason rejected (verified via 500 path when Settings nil)
+- `HintMapping_CommonErrors` — table-driven test against the 7 hint cases
+
+**6 embed_pg tests in `setup_mailer_embed_test.go`** (piggybacks emEventsPool):
+- `Skip_PersistsFlags` — `mailer-skip` writes both flags, status endpoint reflects them
+- `Save_PersistsSMTP` — `mailer-save` writes every key + stamps `configured_at`
+- `Save_ClearsSkip` — saving after a prior skip clears `skipped_at` (intent-reversal)
+- `BootstrapMailerGate_RefusesWhenNeitherSet` — 412 + admin NOT inserted
+- `BootstrapMailerGate_AcceptsWhenConfigured` — 200 + 1 welcome job enqueued
+- `BootstrapMailerGate_AcceptsWhenSkipped` — 200 + 0 welcome jobs (skip honoured)
+
+**7 embed_pg tests in `internal/jobs/welcome_email_retry_test.go`** (own TestMain w/ defers-leak fix):
+- `ResurrectsFailedWelcome` — happy path
+- `ResurrectsBroadcastNotice` — same for `admin_created_notice`
+- `LeavesPasswordResetAlone` — sweeper is welcome-only
+- `IgnoresPermanentFailures` — `last_error LIKE '%permanent failure%'` stays failed
+- `IgnoresFreshFailures` — 5min-old failure NOT resurrected (still in exp-backoff window)
+- `IgnoresStaleWelcome` — 30-day-old welcome stays failed (content went stale)
+- `EmptyTable` — no-op on empty `_jobs`
+
+### Files touched
+
+**New** (5 files):
+- `internal/api/adminapi/setup_mailer.go` (~430 LOC)
+- `internal/api/adminapi/setup_mailer_test.go` (~190 LOC)
+- `internal/api/adminapi/setup_mailer_embed_test.go` (~250 LOC, embed_pg)
+- `internal/jobs/welcome_email_retry.go` (~85 LOC)
+- `internal/jobs/welcome_email_retry_test.go` (~240 LOC, embed_pg, own TestMain)
+- `internal/mailer/builtin/admin_welcome.md`
+- `internal/mailer/builtin/admin_created_notice.md`
+- `pkg/railbase/cli/admin_emails.go` (~130 LOC)
+
+**Modified**:
+- `internal/api/adminapi/bootstrap.go` — gate + `EnqueueAdminEmails`/`enqueueAdminEmails` rewrite
+- `internal/api/adminapi/adminapi.go` — mount `setupMailer` endpoints in main + setup-mode paths
+- `internal/api/adminapi/setup_db.go` — mount mailer endpoints in `MountSetupOnly` too
+- `internal/errors/errors.go` — `CodePreconditionFailed` (NEW) + HTTPStatus mapping → 412
+- `internal/jobs/builtins.go` — `retry_failed_welcome_emails` added to `DefaultSchedules` (`*/30 * * * *`)
+- `pkg/railbase/cli/admin.go` — `--no-email` flag + `enqueueAdminEmailsCLI` call
+- `pkg/railbase/app.go` — wire `jobs.RegisterWelcomeEmailRetryBuiltins`
+- `admin/src/screens/bootstrap.tsx` — Stepper 2→3 + new `MailerStep` component (~530 LOC)
+- `docs/04-identity.md` — System vs Domain accounts quick reference; corrected `_system_admins` → `_admins`
+- `docs/03-data-layer.md` — reserved-namespace callout listing all system tables
+- `docs/14-observability.md` — new "Mandatory email on admin creation (v1.7.43)" subsection with templates table + delivery durability + skip path + endpoint reference
+
+### Bundle delta
+
+Admin SPA: 467.99 → 480.13 KB raw (+12.14 KB, +2.5%) / 130.02 → 132.52 KB gzip (+2.5 KB / +1.9%). The new MailerStep is the only material addition.
+
+### Honest completion of plan.md v1 scope (post-v1.7.43)
+
+**~99.8% (v1 scope unchanged — mandatory-email feature is v1.x bonus).** SHIP gates remain green. Net effect: an admin created on a Railbase instance is now reliably tied to a delivered email — either to the admin themselves OR (more importantly) broadcast to every other admin as a compromise-detection notice. The skip path keeps the wizard usable in air-gapped/no-SMTP-yet environments without removing the safety story.
+
+### Open considerations
+
+- **`signup_verification.md` overlap**: app-collection self-signup ALREADY sends a verification email since v1.1. Adding a separate `user_welcome.md` for admin-CREATED records in auth-collections (operator POSTs into `/api/collections/users/records` rather than self-signup) is a candidate v1.x slice — current implementation only covers `_admins` per the operator's α/β model. Self-signup users keep getting one email (verification), admin-created users currently get zero.
+- **Per-tenant From address**: `mailer.from` is global. Multi-tenant deployments where each tenant wants their own brand on the welcome email — out of scope; `mailer.SendTemplate` already accepts a per-call `From` override, hooking that to a per-tenant setting is mechanical when needed.
+- **`admin_welcome.md` localisation**: templates are en-only. Hooking into v1.7.34c i18n `Translatable` fields for `_settings`-stored templates is a candidate v1.x slice; in-builtin templates would need a slightly different shape (`admin_welcome.md` → `admin_welcome.{en,ru,…}.md` with lookup fallback).
+
+
+
+
+
+
+---
+
+---
+
+## v1.7.44 — Default port migration: :8090 → :8095
+
+### What
+
+Default HTTP listen address moved from `:8090` (PocketBase's default) to **`:8095`**. Operators migrating from PocketBase routinely keep their PB instance running while spinning up Railbase next to it — the previous default collided every time.
+
+### Port choice rationale
+
+A first sketch picked `:7000`, but it has two real collisions:
+1. **macOS AirPlay Receiver** listens on `:7000` by default on Sonoma+ and is enabled out-of-the-box for many Apple ID setups. Every Mac dev would hit `address already in use` on first boot.
+2. **Apache Cassandra** inter-node cluster communication is on `:7000` — production teams running both would conflict.
+
+`:8095` was selected after that pushback:
+
+- **IANA-unassigned** (not on the well-known ports nor on the registered service list)
+- No default daemon on **Linux** (Ubuntu / Debian / Fedora / RHEL / Arch — server + desktop)
+- No default daemon on **Windows** (10 / 11 / Server)
+- No default daemon on **macOS** (Sonoma+) — AirPlay squats :5000 + :7000 but not :8095
+- No collision with the usual dev/prod tools we co-locate with: PocketBase :8090, Postgres :5432, Redis :6379, nginx :80/:8080, Prometheus :9090, Cassandra :7000, Jupyter :8888, Tomcat :8080, Django :8000, Flask :5000, Grafana :3000, Vite :5173, Jenkins :8080, MinIO :9000, SonarQube :9000
+- Adjacent to PocketBase's `:8090` mnemonically — operators migrating from PB find it on muscle memory's neighbouring port
+
+### Operator-visible changes
+
+| Surface | Before | After |
+|---|---|---|
+| `config.Default().HTTPAddr` | `:8090` | `:8095` |
+| `docker-compose.yml` | `8090:8090` | `8095:8095` |
+| OpenAPI default `servers[0].url` | `http://localhost:8090` | `http://localhost:8095` |
+| Bootstrap email + admin-emails CLI default URL | `localhost:8090/_/` | `localhost:8095/_/` |
+| `admin/playwright.config.ts` default `PORT` | `8090` | `8095` |
+| `scripts/smoke-5min.sh` default `PORT` | `:8090` | `:8095` |
+| `railbase serve` `Long:` help text | mentions `:8090` | mentions `:8095` + rationale |
+| `railbase generate openapi --server` flag default doc | `8090` | `8095` |
+| `preflightBindCheck` recovery hint | blamed "PocketBase or older railbase" | now: stale `./railbase serve` + windows/linux/macos PID discovery commands |
+| docs/13-cli / docs/14-observability / docs/RELEASE_v1 / docs/11-frontend-sdk | examples on `:8090` | examples on `:8095` |
+
+### Behaviour unchanged
+
+- **Override path intact**: `RAILBASE_HTTP_ADDR=:8090 ./railbase serve` returns the old default in one line. Operators with existing bookmarks / proxy rules / firewall ACLs on `:8090` can re-pin without code changes.
+- **All 6 cross-compile binaries pass under the 30 MB ceiling** — the only delta is constant-string substitution (3 ASCII chars + comment text). No measurable size impact.
+
+### Files modified
+
+- `internal/config/config.go` — `Default().HTTPAddr` + rationale comment block listing the platform / tool collision matrix
+- `internal/openapi/openapi.go` + `_test.go` — `ServerURL` default + test expectation
+- `internal/api/adminapi/bootstrap.go` + `setup_db.go` — default admin URL + setup-mode example
+- `internal/security/antibot.go` — `curl localhost:8095/api/...` comment example
+- `pkg/railbase/app.go` — `preflightBindCheck` hint **fully rewritten**: drops the now-misleading "PocketBase is on this port" blame, adds Windows `netstat -ano | findstr` alongside Linux/macOS `lsof`
+- `pkg/railbase/cli/{serve,generate,admin_emails}.go` — CLI `Long:` rationale + flag default + admin URL fallback
+- `admin/playwright.config.ts` — `PORT` default
+- `scripts/smoke-5min.sh` — `PORT` default + header comment
+- `docker-compose.yml` — env var + port mapping
+- `docs/{11-frontend-sdk,13-cli,14-observability,RELEASE_v1}.md` — examples + Docker EXPOSE + CLI table
+
+Pure default-value swap + honest comment pass. No code logic changed. Operators who explicitly hardcoded `:8090` anywhere (env, flag, YAML, deploy manifest) keep working.
+
+### verify-release
+
+Green. All 6 cross-compiled binaries within the 30 MB ceiling. `go vet`, `go test -race -count=1 ./...`, and `bun run build` all clean.
+
+
+
+
+---
+
+---
+
+## v1.7.45 — Enterprise SSO core (SAML 2.0 SP + LDAP + SCIM 2.0) promoted INTO core
+
+### Context
+
+Pre-v1.7.45 docs/15 had SAML/LDAP/SCIM as v1.1+ plugins. Operator pushback: "почему OAuth — ядро, а SAML/LDAP/SCIM — опция?" For typical enterprise GRC/HRIS/finance deployments these three are obligatory wire-protocols, not pluggable extensions. Decision: move all three INTO `internal/auth/` next to oauth/, ship in every binary.
+
+### What
+
+#### SAML 2.0 SP
+
+- `internal/auth/saml/saml.go` (~1300 LOC) — IdP-initiated + SP-initiated AuthnRequest, ACS, Single LogOut (SLO), signed AuthnRequests (per-IdP requirement), SP metadata generation, InResponseTo binding for replay protection, group → role mapping via `cfg.GroupAttribute`.
+- `internal/api/auth/saml_flow.go` — HTTP handlers for `/auth-with-saml/start` + ACS + SLO.
+- Settings keys: `auth.saml.{enabled, entity_id, acs_url, idp_sso_url, idp_slo_url, idp_certificate, sp_certificate, sp_private_key, group_attribute, group_role_map, sign_authn_requests, nameid_format}`.
+- `pkg/railbase/saml_wiring.go` — reads settings on `settings.changed` event + injects `*saml.Provider` into `auth.Deps.SAML`.
+- `goxmldsig` native (no `xmlenc` — encrypted assertions deferred).
+- 6 unit tests + 1 Keycloak e2e (v1.7.47 Phase B).
+
+#### LDAP
+
+- `internal/auth/ldap/ldap.go` (341 LOC) — service-account bind → user search → optional secondary bind for password validation → group resolution via `User.DN` lookup. TLS modes: off / STARTTLS / LDAPS.
+- `internal/api/auth/ldap_flow.go` — POST `/auth-with-ldap` handler.
+- Settings: `auth.ldap.{enabled, addr, base_dn, bind_dn, bind_password, user_filter, group_filter, tls_mode, attribute_email, attribute_displayname}`.
+- Tested against OpenLDAP + Active Directory schemas.
+- NO connection pooling — deliberate v1.x deferral; first-connection latency <50ms under STARTTLS, pool maintenance complexity not worth it for low-traffic enterprise SSO regime.
+
+#### SCIM 2.0
+
+- `internal/auth/scim/scim.go` (types + SCIM filter parser — `eq/ne/co/sw/ew/gt/ge/lt/le/pr/and/or/()/[]`).
+- `internal/api/scim/{users,groups,discovery,role_mapping,mount}.go` (~1500 LOC) — full RFC 7643/7644: POST/GET/PUT/PATCH/DELETE `/scim/v2/Users` + `/scim/v2/Groups` + `.Schemas` / `.ResourceTypes` / `.ServiceProviderConfig`.
+- Migration 0026: `_scim_tokens` (HMAC-SHA-256 hashed, `rbsm_`-prefix) + `_scim_group_role_map` (group_id → role_id reconciliation).
+- `internal/auth/scim/tokens.go` — Create/Rotate/Revoke/List with display-once contract.
+- Group → role reconciliation wired in v1.7.47 Phase A (see below).
+- Discovery `.ServiceProviderConfig` explicitly declares `sort=false, etag=false` — most IdPs don't use them; low priority.
+- 7 unit + 6 e2e tests.
+
+#### Admin setup wizard auth step
+
+- `internal/api/adminapi/setup_auth.go` — `GET/PUT /api/_admin/_setup/auth`: 9 toggles (password / magic_link / otp / totp / webauthn / oauth.{google,github,apple,oidc} / saml / ldap / scim) + per-provider config blob.
+- PUT writes each setting via `Manager.Set` calls (each fires `settings.changed`).
+- `admin/src/screens/bootstrap.tsx` step 3 of 4-step wizard.
+
+#### Mailer SMTP presets
+
+- `internal/api/adminapi/setup_mailer.go::presets` returns `{name, host, port, encryption, hints}` array for **Google** (smtp.gmail.com:587, STARTTLS, App Password hint) / **MailHog** (localhost:1025, none, dev) / **Custom** (operator fills).
+- Wizard step 2 dropdown auto-fills fields.
+
+#### .env support
+
+- `internal/config/dotenv.go` — `Load()` reads `.env` AFTER defaults + BEFORE `RAILBASE_*` env vars; KEY=VALUE format only, no shell expansion. Dev convenience.
+
+#### CLI
+
+- `railbase scim token create/list/revoke/rotate` in `pkg/railbase/cli/scim_token.go`.
+- LDAP + SAML config via generic `railbase config set auth.{ldap,saml}.<key>=<value>` (no dedicated CLI — `settings.Manager.Set` surface is universal).
+
+### Cost
+
+- Bundle: 480 → 552 KB raw / 132 → 149 KB gzip (admin wizard step + setup_auth UI added).
+- Binary: +~2 MB across all 6 cross-compile targets (SAML + SCIM XML/JSON parsers + LDAP client = bulk). Headroom 30 MB ceiling 3.57 MB → 0.58 MB.
+
+### Closed architectural questions
+
+- **SAML/LDAP/SCIM in core, not plugin** — settled. Enterprise GRC/HRIS deployments need these as wire protocols, not opt-in.
+- **No connection pooling for LDAP** — first-bind latency <50ms is acceptable; pool complexity not worth it at the traffic levels enterprise SSO sees.
+- **SCIM sort + etag deferred** — IdPs don't use them; close when first customer asks.
+- **`.env` file ordering** — defaults < `.env` < `RAILBASE_*` env vars. Env vars always win.
+
+### Deferred
+
+- **SAML encrypted assertions (xmlenc)** — binary budget; revisit when headroom grows.
+- **SAML XSW-2/XSW-7 hardening** — goxmldsig covers XSW-1; deeper Signature Wrapping defense = separate slice.
+- **LDAP connection pool** — until traffic justifies.
+- **SCIM `soft_delete` toggle** — comment exists in `users.go:533`, code path missing. v1.x bonus.
+- **SCIM sort + etag** — deferred until IdP customer demand.
+
+
+
+
+---
+
+---
+
+## v1.7.46 — Admin redesign 3 parallel tracks: System tables + Backend metrics + Color tokens ESLint
+
+### What
+
+3 agents + Claude inline wiring/polish closing remaining §3.11 admin-UI gaps + introducing strict color-token discipline.
+
+#### Track A: System admin tables
+
+- `internal/api/adminapi/system_tables.go` (~400 LOC) read-only REST views: `GET /api/_admin/system/{admins,sessions,admin_sessions}` w/ pagination + filters.
+- Screens `admin/src/screens/system_{admins,sessions,admin_sessions}.tsx`: live tables w/ revoke session affordance (hits existing `_admin_sessions` revoke endpoint).
+- NOT writable surface — admin lifecycle stays on `railbase admin create/delete` CLI.
+
+#### Track B: Backend metrics dashboard
+
+- `internal/metrics/` package + `internal/api/adminapi/metrics.go`: in-process atomic counters for:
+  - goroutine count / heap MB / GC pause
+  - requests/min
+  - DB pool stats (active / idle / waiting / acquired-since-boot)
+  - job runs/min
+  - hooks dispatch latency
+- `GET /api/_admin/metrics` snapshot + `admin/src/screens/dashboard.tsx` polling 5s.
+
+#### Track C: Color tokens ESLint enforcement
+
+- `admin/eslint.config.js` + custom `admin/eslint-rules/no-raw-colors.js`: rule blocks any `bg-red-*` / `text-amber-*` / `border-blue-*` etc. OUTSIDE `admin/src/lib/ui/` (theme tokens only).
+- Forces every screen through `bg-destructive` / `text-muted-foreground` / `border-input` etc.
+- `npm run lint:eslint` clean (0 warnings / 0 errors).
+
+#### Admin recovery flows
+
+- `internal/api/adminapi/forgot_password.go` — POST `/api/_admin/forgot-password` issues `_record_tokens` w/ purpose `admin_password_reset`; POST `/api/_admin/reset-password` consumes token + bcrypt updates `_admins.password_hash` + revokes all admin sessions.
+- `admin/src/screens/{forgot_password,reset_password}.tsx` UI.
+- Mailer builtin `admin_password_reset.md`.
+
+#### Mailer template editor
+
+- `admin/src/screens/mailer.tsx` list-view with override-status badges per builtin template + per-template raw markdown ↔ rendered HTML preview.
+- Editing-on-disk surface stays — operator pattern is "edit `.md` + hot-reload via existing mailer loader" (intentionally no save-via-UI to keep template source in git, not DB).
+
+#### Sidebar shadcn alignment
+
+- `admin/src/lib/ui/sidebar.ui.tsx` rewritten to match shadcn 1:1: `SIDEBAR_WIDTH/_MOBILE/_ICON` constants, CSS vars on `SidebarProvider` wrapper, cookie `sidebar_state`. Closes operator pushback "большие отступы".
+
+#### HMR dev mode
+
+- `make dev` / `make dev-embed` Makefile targets:
+  - auto-detect `postgres://$(whoami)@/railbase?host=/tmp&sslmode=disable` brew socket OR fall back to embedded
+  - auto-`migrate up` before backend boot
+  - `RAILBASE_HTTP_ADDR=:8095` env (serve cmd doesn't accept `--addr` flag)
+  - cleanup: `pkill -f 'bin/railbase serve' && lsof -ti 5173 | xargs kill -9`
+  - admin: `admin && bun run dev --strictPort` w/ Vite proxy for `/api`, `/readyz`, `/healthz`, `/scim`
+- One-command dev — closes "перезапускать билд после каждой правки".
+
+### Tests
+
+- 7 unit `system_tables_test.go`
+- 6 unit `metrics_test.go`
+- 8 unit `forgot_password_test.go`
+- 6 unit `setup_auth_saml_advanced_test.go` (SLO URL / group mapping / SP cert / SP key not echoed / preserve-on-empty / sign_authn_requests validation)
+- 35-check `scripts/test-wizard-keycloak.sh` integration harness against live Keycloak (LDAP / SAML / SCIM all roundtripped against `/Users/work/apps/keyclock/` docker stack)
+
+
+
+
+---
+
+---
+
+## v1.7.47 — "Что НЕ покрыто" closure (Keycloak browser e2e for SAML + OIDC + SCIM group → role reconciliation)
+
+### Context
+
+Three gaps flagged in the v1.7.46 wizard audit:
+1. SCIM `_scim_group_role_map` table was created in migration 0026 but no code path read/wrote it.
+2. SAML 2.0 SP had unit tests but never tested against a live IdP browser flow.
+3. OAuth/OIDC against Keycloak (vs the synthetic providers in `oauth/integration_test.go`) was untested.
+
+### What
+
+#### Phase A: SCIM role-mapping reconciliation
+
+- `internal/api/scim/role_mapping.go` (~80 LOC) ships:
+  - `reconcileGroupGrants(ctx, pool, rbacStore, collection, groupID, userID, added bool) []error`
+  - `mappedRolesForGroup(ctx, pool, groupID) ([]uuid.UUID, error)`
+  - `userHasMappedRoleViaOtherGroup(ctx, pool, userID, collection, roleID, excludeGroupID) (bool, error)` ← residual check
+- Wired in `internal/api/scim/groups.go` at ALL 4 CRUD points:
+  - **createGroup**: after `setGroupMembers`, reconcile each new member with `added=true`
+  - **replaceGroup (PUT)**: diff old vs new members; reconcile both adds and removes
+  - **patchGroup (PATCH)**: collect `memberDelta` during tx; reconcile AFTER commit
+  - **deleteGroup**: snapshot members + mapped roles BEFORE DELETE; reconcile drops AFTER
+
+The residual check is the subtle part: if Alice is in groups [Engineers, Admins] and both map to role `admin`, then removing Alice from Engineers must NOT revoke `admin` — she still has it via Admins. `userHasMappedRoleViaOtherGroup` queries `_scim_group_role_map` joined with `_scim_group_members` excluding the group we're processing.
+
+- `internal/api/scim/mount.go::Deps` gained `RBAC *rbac.Store` field.
+- `pkg/railbase/app.go` wires `RBAC: rbacStore` when constructing `scimapi.Deps`.
+
+- 6 e2e tests (`role_mapping_e2e_test.go` w/ shared `scimRoleHarness`):
+  - `TestSCIM_RoleMapping_PATCH_AddGrants`
+  - `TestSCIM_RoleMapping_PATCH_RemoveRevokes`
+  - `TestSCIM_RoleMapping_RoleSurvivesRemovalViaOtherGroup`
+  - `TestSCIM_RoleMapping_PUT_FullReplace`
+  - `TestSCIM_RoleMapping_DeleteGroup_RevokesAll`
+  - `TestSCIM_RoleMapping_NilRBAC_NoOp`
+
+#### Phase B: SAML browser flow
+
+- `internal/api/auth/saml_browser_flow_test.go` under `embed_pg && keycloak_integration` build tag.
+- Constants: `kcBase = "http://localhost:8081"`, `kcRealm = "grc-test"`, `testUser = "alice.anderson"`, `testUserPassword = "Test1234!"`.
+- 8-step browser dance against live Keycloak:
+  1. Boot Railbase backend + `users` auth-collection
+  2. Register SAML client via Keycloak admin REST (`/admin/realms/.../clients`)
+  3. Wire SAML provider in test deps + enable via `auth.saml.enabled=true`
+  4. GET `/auth-with-saml/start` → 302 to Keycloak `/protocol/saml`
+  5. Scrape login form HTML (regex-based, no browser dep)
+  6. POST username + password → Keycloak 302 to our ACS with SAMLResponse
+  7. Our handler parses + validates SAMLResponse + creates JIT user + sets `railbase_session` cookie
+  8. Verify cookie + `/me` 200 + `_external_auths` linkage row
+
+- Helpers in same file: `keycloakAdminToken`, `registerKeycloakSAMLClient`, `deleteKeycloakClient`, `extractFormAction(html, formID)`, `extractHiddenInput(html, name)`, `mustURL`, `head`, `bootRailbasePool`, `mountAuthForSAMLTest`.
+
+#### Phase C: OAuth/OIDC Keycloak
+
+- `internal/api/auth/oauth_oidc_keycloak_test.go` same build tag.
+- 8-step OIDC dance via `oauth.Generic` provider with Keycloak discovery URLs (`/protocol/openid-connect/{auth,token,userinfo}`).
+- Two debugging finds during initial run:
+  1. `deps.PublicBaseURL = srv.URL` REQUIRED — `oauthRedirectURI()` defaults to `http://localhost:8080` else Keycloak responds "Invalid parameter: redirect_uri"
+  2. Step 4 callback returns **200 + JSON `{token, record}`** (no `return_url` was passed) — NOT 302 like SAML. Assertion relaxed to accept either.
+- Verifies `_external_auths` row + JIT user + `/me` cookie.
+
+### Cost
+
+`make verify-release` post-Phase A/B/C:
+- `go vet ./...` clean
+- `go test -race -count=1 ./...` 48 packages green
+- Cross-compile 6 binaries all under 30 MB ceiling:
+  - largest 29.42 MB (Windows amd64)
+  - smallest 26.88 MB (linux arm64)
+  - headroom **0.58 MB** (down from 3.57 MB at v1.7.29 — Enterprise SSO core consumed ~3 MB across all targets)
+- ESLint 0 warnings
+- Admin bundle 552.75 KB main + 338.23 KB lazy chart (gzip 149.66 + 102.33 KB)
+
+### Honest completion
+
+Post v1.7.47: §3.2 Auth 15/16 (Phase A/B/C complete, devices+impersonation remain 📋 v1.1.x). Plan.md v1 scope **~99.9%** (~155/~155 line items + Enterprise SSO promoted from v1.1+). Remaining `📋` markers are deferred-by-design (А-block) or dependency-blocked (B-block) or v1.1+ (C-block) per the new §3.15 inventory.

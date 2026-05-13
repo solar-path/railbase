@@ -157,7 +157,7 @@ make build-embed     # dev binary, with embedded PG (-tags embed_pg)
 ### Docker
 
 ```bash
-docker run -p 8090:8090 ghcr.io/railbase/railbase:1.0.0
+docker run -p 8095:8095 ghcr.io/railbase/railbase:1.0.0
 ```
 
 (Image becomes live with the tag.)

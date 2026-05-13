@@ -67,7 +67,7 @@ export function AddressCell({ value }: { value: unknown }) {
   const trimmed = s.length > 50 ? s.slice(0, 49) + "…" : s;
   return (
     <span
-      className="text-xs whitespace-nowrap text-neutral-800"
+      className="text-xs whitespace-nowrap text-foreground"
       title={s}
     >
       {trimmed}
@@ -101,12 +101,12 @@ export function AddressInput({
   const onBlurCommit = () => commit(draft);
 
   const txt =
-    "mt-1 w-full rounded border border-neutral-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-900";
+    "mt-1 w-full rounded border border-input px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring";
 
   return (
     <div className="space-y-2">
       <label className="block">
-        <span className="text-xs text-neutral-500">street</span>
+        <span className="text-xs text-muted-foreground">street</span>
         <input
           type="text"
           value={draft.street ?? ""}
@@ -117,7 +117,7 @@ export function AddressInput({
         />
       </label>
       <label className="block">
-        <span className="text-xs text-neutral-500">street 2</span>
+        <span className="text-xs text-muted-foreground">street 2</span>
         <input
           type="text"
           value={draft.street2 ?? ""}
@@ -129,7 +129,7 @@ export function AddressInput({
       </label>
       <div className="flex gap-2">
         <label className="flex-1">
-          <span className="text-xs text-neutral-500">city</span>
+          <span className="text-xs text-muted-foreground">city</span>
           <input
             type="text"
             value={draft.city ?? ""}
@@ -140,7 +140,7 @@ export function AddressInput({
           />
         </label>
         <label className="flex-1">
-          <span className="text-xs text-neutral-500">region</span>
+          <span className="text-xs text-muted-foreground">region</span>
           <input
             type="text"
             value={draft.region ?? ""}
@@ -151,7 +151,7 @@ export function AddressInput({
           />
         </label>
         <label className="flex-1">
-          <span className="text-xs text-neutral-500">postal</span>
+          <span className="text-xs text-muted-foreground">postal</span>
           <input
             type="text"
             value={draft.postal ?? ""}
@@ -163,7 +163,7 @@ export function AddressInput({
         </label>
       </div>
       <div>
-        <span className="text-xs text-neutral-500">country</span>
+        <span className="text-xs text-muted-foreground">country</span>
         <CountryInput
           value={draft.country ?? ""}
           onChange={(v) => {

@@ -172,7 +172,7 @@ export default function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center pt-[20vh] px-4"
+      className="fixed inset-0 z-50 bg-foreground/40 flex items-start justify-center pt-[20vh] px-4"
       onMouseDown={close}
       role="presentation"
     >
@@ -235,13 +235,13 @@ export default function CommandPalette() {
         </div>
         <div className="border-t px-3 py-1.5 text-[11px] text-muted-foreground flex items-center gap-3">
           <span>
-            <kbd className="rb-mono">↑↓</kbd> navigate
+            <kbd className="font-mono">↑↓</kbd> navigate
           </span>
           <span>
-            <kbd className="rb-mono">↵</kbd> open
+            <kbd className="font-mono">↵</kbd> open
           </span>
           <span>
-            <kbd className="rb-mono">esc</kbd> close
+            <kbd className="font-mono">esc</kbd> close
           </span>
         </div>
       </div>
@@ -303,7 +303,7 @@ function RowItem({
       <span className="flex-1 truncate">{row.label}</span>
       <span
         className={cn(
-          "rb-mono text-[11px]",
+          "font-mono text-[11px]",
           active ? "text-primary-foreground/70" : "text-muted-foreground",
         )}
       >

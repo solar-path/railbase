@@ -16,6 +16,7 @@ export const Progress = forwardRef<HTMLDivElement, ProgressProps>(
       <div
         ref={ref as Ref<HTMLDivElement>}
         role="progressbar"
+        data-slot="progress"
         aria-valuemin={0}
         aria-valuemax={max}
         aria-valuenow={value == null ? undefined : v}
@@ -31,6 +32,7 @@ export const Progress = forwardRef<HTMLDivElement, ProgressProps>(
         {...props}
       >
         <div
+          data-slot="progress-indicator"
           class="h-full w-full flex-1 bg-primary transition-all"
           style={{ transform: `translateX(-${100 - pct}%)` }}
         />

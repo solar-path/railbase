@@ -6,6 +6,7 @@ import { z } from "zod";
 import { adminAPI } from "../api/admin";
 import type { APIToken } from "../api/types";
 import { Pager } from "../layout/pager";
+import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
@@ -136,21 +137,23 @@ export function APITokensScreen() {
   });
 
   return (
-    <div className="space-y-4">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">API tokens</h1>
-          <p className="text-sm text-muted-foreground">
+    <AdminPage>
+      <AdminPage.Header
+        title="API tokens"
+        description={
+          <>
             {total} token{total === 1 ? "" : "s"} total. Long-lived bearer
             credentials for service-to-service auth. Raw values are shown
             exactly once on create / rotate — copy them then.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Pager page={page} totalPages={totalPages} onChange={setPage} />
-          <Button onClick={() => setCreateOpen(true)}>+ Create token</Button>
-        </div>
-      </header>
+          </>
+        }
+        actions={
+          <div className="flex items-center gap-2">
+            <Pager page={page} totalPages={totalPages} onChange={setPage} />
+            <Button onClick={() => setCreateOpen(true)}>+ Create token</Button>
+          </div>
+        }
+      />
 
       {createdToken ? (
         <CreatedBanner
@@ -161,7 +164,7 @@ export function APITokensScreen() {
         />
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+      <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
           <span className="text-muted-foreground">owner</span>
           <Input
@@ -169,7 +172,7 @@ export function APITokensScreen() {
             value={ownerInput}
             onInput={(e) => setOwnerInput(e.currentTarget.value)}
             placeholder="UUID"
-            className="w-72 h-8 rb-mono text-xs"
+            className="w-72 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
@@ -192,8 +195,9 @@ export function APITokensScreen() {
             clear
           </Button>
         ) : null}
-      </div>
+      </AdminPage.Toolbar>
 
+      <AdminPage.Body>
       <Card>
         <CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -220,19 +224,19 @@ export function APITokensScreen() {
                       className="cursor-pointer"
                     >
                       <TableCell className="font-medium">{t.name}</TableCell>
-                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
                         {t.owner_collection}/{t.owner_id.slice(0, 8)}…
                       </TableCell>
-                      <TableCell className="rb-mono text-xs">{t.fingerprint || "—"}</TableCell>
-                      <TableCell className="rb-mono text-xs text-muted-foreground">
+                      <TableCell className="font-mono text-xs">{t.fingerprint || "—"}</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">
                         {t.scopes.length === 0
                           ? <span className="text-muted-foreground/60">(owner-bounded)</span>
                           : t.scopes.join(",")}
                       </TableCell>
-                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
                         {t.last_used_at ?? "—"}
                       </TableCell>
-                      <TableCell className="rb-mono text-xs text-muted-foreground whitespace-nowrap">
+                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
                         {t.expires_at ?? "never"}
                       </TableCell>
                       <TableCell>
@@ -270,21 +274,21 @@ export function APITokensScreen() {
                         <TableCell colSpan={8} className="bg-muted">
                           <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 p-3 text-xs">
                             <dt className="text-muted-foreground">id</dt>
-                            <dd className="rb-mono">{t.id}</dd>
+                            <dd className="font-mono">{t.id}</dd>
                             <dt className="text-muted-foreground">owner_id</dt>
-                            <dd className="rb-mono">{t.owner_id}</dd>
+                            <dd className="font-mono">{t.owner_id}</dd>
                             <dt className="text-muted-foreground">created_at</dt>
-                            <dd className="rb-mono">{t.created_at}</dd>
+                            <dd className="font-mono">{t.created_at}</dd>
                             <dt className="text-muted-foreground">last_used_at</dt>
-                            <dd className="rb-mono">{t.last_used_at ?? "—"}</dd>
+                            <dd className="font-mono">{t.last_used_at ?? "—"}</dd>
                             <dt className="text-muted-foreground">expires_at</dt>
-                            <dd className="rb-mono">{t.expires_at ?? "never"}</dd>
+                            <dd className="font-mono">{t.expires_at ?? "never"}</dd>
                             <dt className="text-muted-foreground">revoked_at</dt>
-                            <dd className="rb-mono">{t.revoked_at ?? "—"}</dd>
+                            <dd className="font-mono">{t.revoked_at ?? "—"}</dd>
                             <dt className="text-muted-foreground">rotated_from</dt>
-                            <dd className="rb-mono">{t.rotated_from ?? "—"}</dd>
+                            <dd className="font-mono">{t.rotated_from ?? "—"}</dd>
                             <dt className="text-muted-foreground">scopes</dt>
-                            <dd className="rb-mono">
+                            <dd className="font-mono">
                               {t.scopes.length === 0 ? "(owner-bounded)" : t.scopes.join(", ")}
                             </dd>
                           </dl>
@@ -305,6 +309,7 @@ export function APITokensScreen() {
           </Table>
         </CardContent>
       </Card>
+      </AdminPage.Body>
 
       {createOpen ? (
         <CreateModal
@@ -326,7 +331,7 @@ export function APITokensScreen() {
           }
         />
       ) : null}
-    </div>
+    </AdminPage>
   );
 }
 
@@ -355,21 +360,21 @@ function CreatedBanner({
     }
   };
   return (
-    <Card className="border-2 border-emerald-300 bg-emerald-50">
+    <Card className="border-2 border-primary/40 bg-primary/10">
       <CardContent className="p-4 space-y-2">
         <div className="flex items-start justify-between">
           <div>
-            <div className="font-semibold text-emerald-900">
+            <div className="font-semibold text-primary">
               Token {context === "create" ? "created" : "rotated"} — copy now, it won't be shown again.
             </div>
-            <div className="text-xs text-emerald-800 mt-1">
-              <span className="rb-mono">{record.name}</span>
+            <div className="text-xs text-primary mt-1">
+              <span className="font-mono">{record.name}</span>
               {" — "}
-              fingerprint <span className="rb-mono">{record.fingerprint || "—"}</span>
+              fingerprint <span className="font-mono">{record.fingerprint || "—"}</span>
               {record.expires_at ? (
                 <>
                   {" — expires "}
-                  <span className="rb-mono">{record.expires_at}</span>
+                  <span className="font-mono">{record.expires_at}</span>
                 </>
               ) : (
                 <span> — non-expiring</span>
@@ -380,26 +385,26 @@ function CreatedBanner({
             variant="ghost"
             size="sm"
             onClick={onDismiss}
-            className="text-emerald-700 hover:text-emerald-900"
+            className="text-primary hover:text-primary"
           >
             dismiss
           </Button>
         </div>
         <div className="flex items-stretch gap-2">
-          <code className="flex-1 rounded border border-emerald-300 bg-background px-3 py-2 rb-mono text-xs break-all">
+          <code className="flex-1 rounded border border-primary/40 bg-background px-3 py-2 font-mono text-xs break-all">
             {token}
           </code>
           <Button
             variant="outline"
             size="sm"
             onClick={copy}
-            className="border-emerald-400 bg-background text-emerald-800 hover:bg-emerald-100"
+            className="border-primary/40 bg-background text-primary hover:bg-primary/20"
           >
             {copied ? "Copied!" : "Copy"}
           </Button>
         </div>
         {context === "rotate" ? (
-          <div className="text-xs text-emerald-800">
+          <div className="text-xs text-primary">
             The predecessor is still active. Once the successor is deployed,
             revoke the predecessor explicitly.
           </div>
@@ -484,7 +489,7 @@ function CreateModal({
                   <Input
                     type="text"
                     placeholder="019e8a72-…"
-                    className="rb-mono"
+                    className="font-mono"
                     {...field}
                   />
                 </FormControl>
@@ -502,7 +507,7 @@ function CreateModal({
                   <Input
                     type="text"
                     placeholder="users"
-                    className="rb-mono"
+                    className="font-mono"
                     {...field}
                   />
                 </FormControl>
@@ -520,7 +525,7 @@ function CreateModal({
                   <Input
                     type="text"
                     placeholder="post.create, post.read"
-                    className="rb-mono"
+                    className="font-mono"
                     value={field.value.join(", ")}
                     onInput={(e) => {
                       const raw = e.currentTarget.value;
@@ -674,7 +679,7 @@ function ModalShell({
 }) {
   return (
     <div
-      className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4"
+      className="fixed inset-0 z-40 bg-foreground/40 flex items-center justify-center p-4"
       onClick={onClose}
     >
       <Card
@@ -731,7 +736,7 @@ function StatusBadge({ status }: { status: "active" | "revoked" | "expired" }) {
       return (
         <Badge
           variant="outline"
-          className="border-emerald-200 bg-emerald-50 text-emerald-700"
+          className="border-primary/40 bg-primary/10 text-primary"
         >
           active
         </Badge>
@@ -746,7 +751,7 @@ function StatusBadge({ status }: { status: "active" | "revoked" | "expired" }) {
       return (
         <Badge
           variant="outline"
-          className="border-amber-200 bg-amber-50 text-amber-700"
+          className="border-input bg-muted text-foreground"
         >
           expired
         </Badge>

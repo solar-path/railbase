@@ -20,7 +20,7 @@ export function QrCodeCell({ value }: { value: unknown }) {
   const s = String(value);
   const preview = s.length > CELL_PREVIEW_LEN ? s.slice(0, CELL_PREVIEW_LEN) + "…" : s;
   return (
-    <span className="rb-mono text-xs whitespace-nowrap text-neutral-700" title={s}>
+    <span className="font-mono text-xs whitespace-nowrap text-foreground" title={s}>
       {preview}
     </span>
   );
@@ -51,20 +51,20 @@ export function QrCodeInput({
         rows={4}
         spellcheck={false}
         className={
-          "w-full rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +
+          "w-full rounded border px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 " +
           (over
-            ? "border-red-400 focus:ring-red-500"
-            : "border-neutral-300 focus:ring-neutral-900")
+            ? "border-destructive/40 focus:ring-destructive"
+            : "border-input focus:ring-ring")
         }
       />
       <div className="mt-0.5 flex items-center justify-between text-xs">
         <span
-          className="cursor-help text-neutral-400"
+          className="cursor-help text-muted-foreground"
           title="Use 'qr_code' field type — value is encoded as QR on render contexts that support it (PDF exports, mobile cards)"
         >
           ⓘ
         </span>
-        <span className={over ? "text-red-600" : "text-neutral-500"}>
+        <span className={over ? "text-destructive" : "text-muted-foreground"}>
           {draft.length}/{MAX_LEN}
         </span>
       </div>

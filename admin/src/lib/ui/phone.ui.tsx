@@ -217,7 +217,7 @@ export const PhoneInput = forwardRef<HTMLInputElement, PhoneInputProps>(
     const samplePlaceholder = formatNational(country.mask, '0'.repeat(maskCapacity(country.mask)))
 
     return (
-      <div class={cn('flex w-full items-stretch gap-0', klass as string, className)}>
+      <div data-slot="phone-input" class={cn('flex w-full items-stretch gap-0', klass as string, className)}>
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
             <Button

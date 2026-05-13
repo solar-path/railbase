@@ -6,7 +6,9 @@ import { cn } from './cn'
 import { Slot } from './_primitives/slot'
 
 export const Breadcrumb = forwardRef<HTMLElement, HTMLAttributes<HTMLElement> & { separator?: ComponentChildren }>(
-  ({ ...props }, ref) => <nav ref={ref as Ref<HTMLElement>} aria-label="breadcrumb" {...props} />,
+  ({ ...props }, ref) => (
+    <nav ref={ref as Ref<HTMLElement>} aria-label="breadcrumb" data-slot="breadcrumb" {...props} />
+  ),
 )
 Breadcrumb.displayName = 'Breadcrumb'
 
@@ -14,6 +16,7 @@ export const BreadcrumbList = forwardRef<HTMLOListElement, HTMLAttributes<HTMLOL
   ({ class: klass, className, ...props }, ref) => (
     <ol
       ref={ref as Ref<HTMLOListElement>}
+      data-slot="breadcrumb-list"
       class={cn(
         'flex flex-wrap items-center gap-1.5 break-words text-sm text-muted-foreground sm:gap-2.5',
         klass as string,
@@ -29,6 +32,7 @@ export const BreadcrumbItem = forwardRef<HTMLLIElement, HTMLAttributes<HTMLLIEle
   ({ class: klass, className, ...props }, ref) => (
     <li
       ref={ref as Ref<HTMLLIElement>}
+      data-slot="breadcrumb-item"
       class={cn('inline-flex items-center gap-1.5', klass as string, className)}
       {...props}
     />
@@ -46,6 +50,7 @@ export const BreadcrumbLink = forwardRef<HTMLAnchorElement, BreadcrumbLinkProps>
     return (
       <Comp
         ref={ref as Ref<HTMLAnchorElement>}
+        data-slot="breadcrumb-link"
         class={cn('transition-colors hover:text-foreground', klass as string, className)}
         {...props}
       />
@@ -61,6 +66,7 @@ export const BreadcrumbPage = forwardRef<HTMLSpanElement, HTMLAttributes<HTMLSpa
       role="link"
       aria-disabled="true"
       aria-current="page"
+      data-slot="breadcrumb-page"
       class={cn('font-normal text-foreground', klass as string, className)}
       {...props}
     />
@@ -78,6 +84,7 @@ export function BreadcrumbSeparator({
     <li
       role="presentation"
       aria-hidden="true"
+      data-slot="breadcrumb-separator"
       class={cn('[&>svg]:size-3.5', klass as string, className)}
       {...props}
     >
@@ -95,6 +102,7 @@ export function BreadcrumbEllipsis({
     <span
       role="presentation"
       aria-hidden="true"
+      data-slot="breadcrumb-ellipsis"
       class={cn('flex size-9 items-center justify-center', klass as string, className)}
       {...props}
     >

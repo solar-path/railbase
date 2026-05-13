@@ -51,6 +51,16 @@ export default defineConfig({
         target: "http://127.0.0.1:8080",
         changeOrigin: false,
       },
+      // Health/readiness probes (used by the bootstrap wizard's
+      // "restarting…" polling, smoke tests, and human curls). Without
+      // proxying these here the wizard hangs on the "Reloading on
+      // your new database…" screen because /readyz hits Vite (which
+      // doesn't know it) and 404s.
+      "/readyz": { target: "http://127.0.0.1:8080", changeOrigin: false },
+      "/healthz": { target: "http://127.0.0.1:8080", changeOrigin: false },
+      // SCIM endpoints — bearer-token auth, used when wizard's SCIM
+      // card or external IdP probes the live endpoint during dev.
+      "/scim": { target: "http://127.0.0.1:8080", changeOrigin: false },
     },
   },
 });

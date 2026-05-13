@@ -16,10 +16,10 @@ export function TreePathCell({ value }: { value: unknown }) {
   const s = String(value);
   const parts = s.split(".");
   return (
-    <span className="rb-mono text-xs whitespace-nowrap" title={s}>
+    <span className="font-mono text-xs whitespace-nowrap" title={s}>
       {parts.map((p, i) => (
         <span key={i}>
-          {i > 0 ? <span className="text-neutral-400 mx-1">›</span> : null}
+          {i > 0 ? <span className="text-muted-foreground mx-1">›</span> : null}
           {p}
         </span>
       ))}
@@ -69,13 +69,13 @@ export function TreePathInput({
         autoCapitalize="off"
         autoCorrect="off"
         className={
-          "mt-1 w-full rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +
+          "mt-1 w-full rounded border px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 " +
           (err
-            ? "border-red-400 focus:ring-red-500"
-            : "border-neutral-300 focus:ring-neutral-900")
+            ? "border-destructive/40 focus:ring-destructive"
+            : "border-input focus:ring-ring")
         }
       />
-      {err ? <p className="mt-0.5 text-xs text-red-600">{err}</p> : null}
+      {err ? <p className="mt-0.5 text-xs text-destructive">{err}</p> : null}
     </div>
   );
 }

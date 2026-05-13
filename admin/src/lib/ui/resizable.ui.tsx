@@ -64,6 +64,7 @@ export const ResizablePanelGroup = forwardRef<HTMLDivElement, ResizablePanelGrou
       <Ctx.Provider value={{ direction, sizes, setSize, panels, registerPanel, unregisterPanel }}>
         <div
           ref={ref as Ref<HTMLDivElement>}
+          data-slot="resizable-panel-group"
           data-panel-group-direction={direction}
           class={cn('flex h-full w-full', direction === 'vertical' && 'flex-col', klass as string, className)}
           {...props}
@@ -99,13 +100,14 @@ export const ResizablePanel = forwardRef<HTMLDivElement, ResizablePanelProps>(
       const i = ctx.registerPanel({ id: idRef.current, defaultSize, minSize, maxSize, collapsible })
       setIdx(i)
       return () => ctx.unregisterPanel(idRef.current)
-      // eslint-disable-next-line react-hooks/exhaustive-deps
+       
     }, [])
 
     const size = idx >= 0 && ctx.sizes[idx] != null ? ctx.sizes[idx] : defaultSize
     return (
       <div
         ref={ref as Ref<HTMLDivElement>}
+        data-slot="resizable-panel"
         data-panel-id={idRef.current}
         style={{ flexBasis: `${size}%`, flexGrow: 0, flexShrink: 0, overflow: 'auto' }}
         class={cn('', klass as string, className)}
@@ -193,13 +195,14 @@ export const ResizableHandle = forwardRef<HTMLDivElement, ResizableHandleProps>(
         role="separator"
         aria-orientation={ctx.direction === 'horizontal' ? 'vertical' : 'horizontal'}
         tabIndex={0}
+        data-slot="resizable-handle"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         class={cn(
           'relative flex items-center justify-center bg-border',
           ctx.direction === 'horizontal' ? 'w-px cursor-col-resize' : 'h-px cursor-row-resize',
-          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+          'outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]',
           klass as string,
           className,
         )}

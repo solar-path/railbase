@@ -7,6 +7,7 @@ export const Avatar = forwardRef<HTMLSpanElement, HTMLAttributes<HTMLSpanElement
   ({ class: klass, className, ...props }, ref) => (
     <span
       ref={ref as Ref<HTMLSpanElement>}
+      data-slot="avatar"
       class={cn(
         'relative flex size-10 shrink-0 overflow-hidden rounded-full',
         klass as string,
@@ -47,6 +48,7 @@ export const AvatarImage = forwardRef<HTMLImageElement, AvatarImageProps>(
       <img
         ref={ref as Ref<HTMLImageElement>}
         src={src}
+        data-slot="avatar-image"
         class={cn('aspect-square size-full', klass as string, className)}
         {...props}
       />
@@ -59,6 +61,7 @@ export const AvatarFallback = forwardRef<HTMLSpanElement, HTMLAttributes<HTMLSpa
   ({ class: klass, className, ...props }, ref) => (
     <span
       ref={ref as Ref<HTMLSpanElement>}
+      data-slot="avatar-fallback"
       class={cn(
         'flex size-full items-center justify-center rounded-full bg-muted',
         klass as string,

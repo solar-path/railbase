@@ -60,6 +60,7 @@ export const PopoverTrigger = forwardRef<
       <Comp
         ref={ref as Ref<HTMLButtonElement>}
         type={asChild ? undefined : (type ?? 'button')}
+        data-slot="popover-trigger"
         aria-expanded={ctx.open}
         aria-haspopup="dialog"
         data-state={ctx.open ? 'open' : 'closed'}
@@ -79,7 +80,9 @@ export const PopoverAnchor = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEl
     const ctx = usePopover()
     return (
       <PopperAnchor anchorRef={ctx.setAnchor}>
-        <div {...props}>{children}</div>
+        <div data-slot="popover-anchor" {...props}>
+          {children}
+        </div>
       </PopperAnchor>
     )
   },
@@ -150,6 +153,7 @@ export const PopoverContent = forwardRef<HTMLDivElement, PopoverContentProps>(
                   else if (ref) (ref as { current: HTMLDivElement | null }).current = el
                 }}
                 role="dialog"
+                data-slot="popover-content"
                 data-state={ctx.open ? 'open' : 'closed'}
                 data-side={dataSide(floating.placement)}
                 data-align={dataAlign(floating.placement)}

@@ -49,7 +49,7 @@ func TestEmit_BasicShape(t *testing.T) {
 	if doc.Info.Title != "Railbase API" {
 		t.Errorf("default title = %q", doc.Info.Title)
 	}
-	if len(doc.Servers) != 1 || doc.Servers[0].URL != "http://localhost:8090" {
+	if len(doc.Servers) != 1 || doc.Servers[0].URL != "http://localhost:8095" {
 		t.Errorf("default server = %+v", doc.Servers)
 	}
 }

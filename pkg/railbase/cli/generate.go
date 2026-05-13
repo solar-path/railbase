@@ -182,7 +182,7 @@ func newGenerateOpenAPICmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&out, "out", "./openapi.json", "Output file path.")
-	cmd.Flags().StringVar(&serverURL, "server", "", "Server URL embedded in the spec (default `http://localhost:8090`).")
+	cmd.Flags().StringVar(&serverURL, "server", "", "Server URL embedded in the spec (default `http://localhost:8095`).")
 	cmd.Flags().StringVar(&title, "title", "", "Spec `info.title` (default `Railbase API`).")
 	cmd.Flags().StringVar(&description, "description", "", "Spec `info.description`.")
 	cmd.Flags().BoolVar(&check, "check", false, "Exit non-zero if the on-disk spec is out of sync with the registered schema.")

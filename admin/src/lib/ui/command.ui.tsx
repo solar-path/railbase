@@ -132,6 +132,7 @@ export const Command = forwardRef<HTMLDivElement, CommandProps>(
       >
         <div
           ref={ref as Ref<HTMLDivElement>}
+          data-slot="command"
           onKeyDown={onKey}
           class={cn(
             'flex h-full w-full flex-col overflow-hidden rounded-md bg-popover text-popover-foreground',
@@ -152,17 +153,18 @@ export const CommandInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTM
   ({ class: klass, className, onInput, ...props }, ref) => {
     const ctx = useCommand()
     return (
-      <div class="flex items-center border-b px-3" cmdk-input-wrapper="">
+      <div class="flex items-center border-b px-3" data-slot="command-input-wrapper" cmdk-input-wrapper="">
         <Search class="mr-2 size-4 shrink-0 opacity-50" />
         <input
           ref={ref as Ref<HTMLInputElement>}
+          data-slot="command-input"
           value={ctx.search}
           onInput={(e: Event) => {
             onInput?.(e as any)
             ctx.setSearch((e.target as HTMLInputElement).value)
           }}
           class={cn(
-            'flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-none',
+            'flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-hidden',
             'placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
             klass as string,
             className,
@@ -180,6 +182,7 @@ export const CommandList = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElem
     <div
       ref={ref as Ref<HTMLDivElement>}
       role="listbox"
+      data-slot="command-list"
       class={cn('max-h-[300px] overflow-y-auto overflow-x-hidden p-1', klass as string, className)}
       {...props}
     />
@@ -194,6 +197,7 @@ export const CommandEmpty = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEle
     return (
       <div
         ref={ref as Ref<HTMLDivElement>}
+        data-slot="command-empty"
         class={cn('py-6 text-center text-sm', klass as string, className)}
         {...props}
       />
@@ -209,6 +213,7 @@ export const CommandGroup = forwardRef<
   <div
     ref={ref as Ref<HTMLDivElement>}
     role="group"
+    data-slot="command-group"
     cmdk-group=""
     class={cn('overflow-hidden p-1 text-foreground', klass as string, className)}
     {...props}
@@ -228,6 +233,7 @@ export const CommandSeparator = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDi
     <div
       ref={ref as Ref<HTMLDivElement>}
       role="separator"
+      data-slot="command-separator"
       class={cn('-mx-1 h-px bg-border', klass as string, className)}
       {...props}
     />
@@ -261,6 +267,7 @@ export const CommandItem = forwardRef<HTMLDivElement, CommandItemProps>(
         id={id}
         role="option"
         aria-selected={selected}
+        data-slot="command-item"
         data-selected={selected ? 'true' : undefined}
         data-disabled={disabled ? 'true' : undefined}
         onClick={(e: Event) => {
@@ -270,7 +277,7 @@ export const CommandItem = forwardRef<HTMLDivElement, CommandItemProps>(
         }}
         onMouseEnter={() => !disabled && ctx.setValue(id)}
         class={cn(
-          'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none',
+          'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden',
           'data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground',
           'data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50',
           klass as string,
@@ -292,6 +299,7 @@ export function CommandShortcut({
 }: HTMLAttributes<HTMLSpanElement>) {
   return (
     <span
+      data-slot="command-shortcut"
       class={cn('ml-auto text-xs tracking-widest text-muted-foreground', klass as string, className)}
       {...props}
     />

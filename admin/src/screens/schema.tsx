@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import type { CollectionSpec, FieldSpec } from "../api/types";
+import { AdminPage } from "../layout/admin_page";
 import { Card, CardContent, CardHeader } from "@/lib/ui/card.ui";
 import { Badge } from "@/lib/ui/badge.ui";
 import {
@@ -28,20 +29,22 @@ export function SchemaScreen() {
   const collections = q.data?.collections ?? [];
 
   return (
-    <div class="space-y-6">
-      <header>
-        <h1 class="text-2xl font-semibold">Schema</h1>
-        <p class="text-sm text-muted-foreground">
-          {collections.length} collection{collections.length === 1 ? "" : "s"} registered.
-        </p>
-      </header>
+    <AdminPage className="space-y-6">
+      <AdminPage.Header
+        title="Schema"
+        description={
+          <>
+            {collections.length} collection{collections.length === 1 ? "" : "s"} registered.
+          </>
+        }
+      />
 
-      <div class="space-y-4">
+      <AdminPage.Body className="space-y-4">
         {collections.map((c) => (
           <CollectionCard key={c.name} c={c} />
         ))}
-      </div>
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }
 
@@ -50,7 +53,7 @@ function CollectionCard({ c }: { c: CollectionSpec }) {
     <Card>
       <CardHeader class="flex flex-row items-center justify-between border-b p-4 space-y-0">
         <div class="flex items-center gap-2">
-          <h2 class="font-semibold rb-mono text-base">{c.name}</h2>
+          <h2 class="font-semibold font-mono text-base">{c.name}</h2>
           {c.auth ? <Badge variant="secondary">auth</Badge> : null}
           {c.tenant ? <Badge variant="outline">tenant</Badge> : null}
         </div>
@@ -71,18 +74,18 @@ function CollectionCard({ c }: { c: CollectionSpec }) {
           </TableHeader>
           <TableBody>
             <TableRow class="text-muted-foreground italic">
-              <TableCell class="rb-mono">id</TableCell>
-              <TableCell class="rb-mono">uuid (system)</TableCell>
+              <TableCell class="font-mono">id</TableCell>
+              <TableCell class="font-mono">uuid (system)</TableCell>
               <TableCell colSpan={2}>auto-generated UUIDv7</TableCell>
             </TableRow>
             <TableRow class="text-muted-foreground italic">
-              <TableCell class="rb-mono">created</TableCell>
-              <TableCell class="rb-mono">timestamptz (system)</TableCell>
+              <TableCell class="font-mono">created</TableCell>
+              <TableCell class="font-mono">timestamptz (system)</TableCell>
               <TableCell colSpan={2}>set on insert</TableCell>
             </TableRow>
             <TableRow class="text-muted-foreground italic">
-              <TableCell class="rb-mono">updated</TableCell>
-              <TableCell class="rb-mono">timestamptz (system)</TableCell>
+              <TableCell class="font-mono">updated</TableCell>
+              <TableCell class="font-mono">timestamptz (system)</TableCell>
               <TableCell colSpan={2}>updated on every write</TableCell>
             </TableRow>
             {c.fields.map((f) => (
@@ -97,7 +100,7 @@ function CollectionCard({ c }: { c: CollectionSpec }) {
           <div class="text-xs font-medium text-muted-foreground mb-1">Indexes</div>
           <ul class="space-y-0.5">
             {c.indexes.map((i) => (
-              <li key={i.name} class="rb-mono text-xs text-foreground">
+              <li key={i.name} class="font-mono text-xs text-foreground">
                 {i.unique ? "UNIQUE " : ""}
                 {i.name}({i.columns.join(", ")})
               </li>
@@ -135,8 +138,8 @@ function FieldRow({ f }: { f: FieldSpec }) {
 
   return (
     <TableRow>
-      <TableCell class="rb-mono">{f.name}</TableCell>
-      <TableCell class="rb-mono text-foreground">{f.type}</TableCell>
+      <TableCell class="font-mono">{f.name}</TableCell>
+      <TableCell class="font-mono text-foreground">{f.type}</TableCell>
       <TableCell class="text-muted-foreground text-xs">{flags.join(", ") || "—"}</TableCell>
       <TableCell class="text-muted-foreground text-xs">{cons.join("; ") || "—"}</TableCell>
     </TableRow>
@@ -155,7 +158,7 @@ function RulesBlock({ rules }: { rules: NonNullable<CollectionSpec["rules"]> }) 
       <div class="text-xs font-medium text-muted-foreground mb-1">Rules</div>
       <ul class="space-y-0.5">
         {entries.map(([k, v]) => (
-          <li key={k} class="rb-mono text-xs text-foreground">
+          <li key={k} class="font-mono text-xs text-foreground">
             <span class="text-muted-foreground inline-block w-12">{k}</span>
             {v}
           </li>

@@ -65,7 +65,8 @@ export const FormItem = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement
       <FormItemCtx.Provider value={{ id }}>
         <div
           ref={ref as Ref<HTMLDivElement>}
-          class={cn('space-y-2', klass as string, className)}
+          data-slot="form-item"
+          class={cn('grid gap-2', klass as string, className)}
           {...props}
         />
       </FormItemCtx.Provider>
@@ -81,6 +82,8 @@ export const FormLabel = forwardRef<HTMLLabelElement, LabelHTMLAttributes<HTMLLa
       <Label
         ref={ref}
         htmlFor={formItemId}
+        data-slot="form-label"
+        data-error={!!error}
         class={cn(error && 'text-destructive', klass as string, className)}
         {...(props as LabelHTMLAttributes<HTMLLabelElement>)}
       />
@@ -99,6 +102,7 @@ export const FormControl = forwardRef<HTMLElement, FormControlProps>(({ ...props
     <Slot
       ref={ref}
       id={formItemId}
+      data-slot="form-control"
       aria-describedby={
         !error ? formDescriptionId : `${formDescriptionId} ${formMessageId}`
       }
@@ -116,6 +120,7 @@ export const FormDescription = forwardRef<HTMLParagraphElement, HTMLAttributes<H
       <p
         ref={ref as Ref<HTMLParagraphElement>}
         id={formDescriptionId}
+        data-slot="form-description"
         class={cn('text-sm text-muted-foreground', klass as string, className)}
         {...props}
       />
@@ -133,6 +138,7 @@ export const FormMessage = forwardRef<HTMLParagraphElement, HTMLAttributes<HTMLP
       <p
         ref={ref as Ref<HTMLParagraphElement>}
         id={formMessageId}
+        data-slot="form-message"
         class={cn('text-sm font-medium text-destructive', klass as string, className)}
         {...props}
       >

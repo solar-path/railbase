@@ -52,6 +52,7 @@ export const AlertDialogTrigger = forwardRef<HTMLButtonElement, AlertDialogTrigg
       <Comp
         ref={ref as Ref<HTMLButtonElement>}
         type={asChild ? undefined : (type ?? 'button')}
+        data-slot="alert-dialog-trigger"
         aria-haspopup="dialog"
         aria-expanded={open}
         data-state={open ? 'open' : 'closed'}
@@ -87,9 +88,11 @@ export const AlertDialogOverlay = forwardRef<HTMLDivElement, HTMLAttributes<HTML
     return (
       <div
         ref={ref as Ref<HTMLDivElement>}
+        data-slot="alert-dialog-overlay"
         data-state={open ? 'open' : 'closed'}
         class={cn(
-          'fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0',
+          /* shadcn: canonical AlertDialog overlay is a fixed bg-black/50 scrim, intentionally not theme-tokened. */
+          'fixed inset-0 z-50 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0',
           klass as string,
           className,
         )}
@@ -119,18 +122,19 @@ export const AlertDialogContent = forwardRef<HTMLDivElement, HTMLAttributes<HTML
           <DismissableLayer
             onEscapeKeyDown={(e) => e.preventDefault()}
             onPointerDownOutside={(e) => e.preventDefault()}
-            class="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none"
+            style={{ display: 'contents' }}
           >
             <div
               ref={ref as Ref<HTMLDivElement>}
               role="alertdialog"
               aria-modal="true"
+              data-slot="alert-dialog-content"
               data-state={open ? 'open' : 'closed'}
               class={cn(
-                'pointer-events-auto w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg',
+                'fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg duration-200 sm:max-w-lg',
                 'data-[state=open]:animate-in data-[state=closed]:animate-out',
                 'data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0',
-                'data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95 duration-200',
+                'data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95',
                 klass as string,
                 className,
               )}
@@ -153,7 +157,8 @@ export function AlertDialogHeader({
 }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      class={cn('flex flex-col space-y-2 text-center sm:text-left', klass as string, className)}
+      data-slot="alert-dialog-header"
+      class={cn('flex flex-col gap-2 text-center sm:text-left', klass as string, className)}
       {...props}
     />
   )
@@ -166,8 +171,9 @@ export function AlertDialogFooter({
 }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
+      data-slot="alert-dialog-footer"
       class={cn(
-        'flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2',
+        'flex flex-col-reverse gap-2 sm:flex-row sm:justify-end',
         klass as string,
         className,
       )}
@@ -180,6 +186,7 @@ export const AlertDialogTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HT
   ({ class: klass, className, ...props }, ref) => (
     <h2
       ref={ref as Ref<HTMLHeadingElement>}
+      data-slot="alert-dialog-title"
       class={cn('text-lg font-semibold', klass as string, className)}
       {...props}
     />
@@ -193,7 +200,8 @@ export const AlertDialogDescription = forwardRef<
 >(({ class: klass, className, ...props }, ref) => (
   <p
     ref={ref as Ref<HTMLParagraphElement>}
-    class={cn('text-sm text-muted-foreground', klass as string, className)}
+    data-slot="alert-dialog-description"
+    class={cn('text-muted-foreground text-sm', klass as string, className)}
     {...props}
   />
 ))
@@ -207,6 +215,7 @@ export const AlertDialogAction = forwardRef<HTMLButtonElement, AlertDialogTrigge
       <Comp
         ref={ref as Ref<HTMLButtonElement>}
         type={asChild ? undefined : (type ?? 'button')}
+        data-slot="alert-dialog-action"
         class={cn(buttonVariants(), klass as string, className)}
         onClick={(e: Event) => {
           onClick?.(e as any)
@@ -227,12 +236,8 @@ export const AlertDialogCancel = forwardRef<HTMLButtonElement, AlertDialogTrigge
       <Comp
         ref={ref as Ref<HTMLButtonElement>}
         type={asChild ? undefined : (type ?? 'button')}
-        class={cn(
-          buttonVariants({ variant: 'outline' }),
-          'mt-2 sm:mt-0',
-          klass as string,
-          className,
-        )}
+        data-slot="alert-dialog-cancel"
+        class={cn(buttonVariants({ variant: 'outline' }), klass as string, className)}
         onClick={(e: Event) => {
           onClick?.(e as any)
           setOpen(false)

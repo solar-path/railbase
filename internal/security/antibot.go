@@ -23,7 +23,7 @@
 //                  before it spends our CPU.
 //
 // Per docs/14 this is production-gated by default; dev mode keeps
-// every check off so `curl localhost:8090/api/...` Just Works for
+// every check off so `curl localhost:8095/api/...` Just Works for
 // the operator at their terminal.
 //
 // Tier-3 IP list (Tor exits / scrape ranges) is a v1.x.x follow-up —

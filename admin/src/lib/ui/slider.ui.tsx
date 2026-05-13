@@ -102,6 +102,7 @@ export const Slider = forwardRef<HTMLSpanElement, SliderProps>(
     return (
       <span
         ref={ref as Ref<HTMLSpanElement>}
+        data-slot="slider"
         data-disabled={disabled ? '' : undefined}
         data-orientation={orientation}
         class={cn(
@@ -114,6 +115,7 @@ export const Slider = forwardRef<HTMLSpanElement, SliderProps>(
       >
         <span
           ref={trackRef}
+          data-slot="slider-track"
           class={cn(
             'relative grow overflow-hidden rounded-full bg-primary/20',
             orientation === 'horizontal' ? 'h-1.5 w-full' : 'h-full w-1.5',
@@ -141,6 +143,7 @@ export const Slider = forwardRef<HTMLSpanElement, SliderProps>(
             <span
               key={i}
               role="slider"
+              data-slot="slider-thumb"
               aria-valuemin={min}
               aria-valuemax={max}
               aria-valuenow={val}
@@ -150,7 +153,7 @@ export const Slider = forwardRef<HTMLSpanElement, SliderProps>(
               onPointerMove={onPointerMove(i)}
               onPointerUp={onPointerUp}
               onKeyDown={onKey(i)}
-              class="absolute block size-4 -translate-x-1/2 rounded-full border border-primary/50 bg-background shadow transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+              class="absolute block size-4 -translate-x-1/2 rounded-full border border-primary/50 bg-background shadow transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] disabled:pointer-events-none disabled:opacity-50"
               style={
                 orientation === 'horizontal'
                   ? { left: `${pct}%`, top: '50%', transform: 'translate(-50%, -50%)' }

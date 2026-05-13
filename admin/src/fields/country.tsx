@@ -63,7 +63,7 @@ export function CountryCell({ value }: { value: unknown }) {
   const code = String(value).toUpperCase();
   return (
     <span
-      className="inline-block rounded bg-neutral-100 text-neutral-700 rb-mono text-xs px-1.5 py-0.5 tracking-wider"
+      className="inline-block rounded bg-muted text-foreground font-mono text-xs px-1.5 py-0.5 tracking-wider"
       title={COUNTRY_CODES.find((c) => c.code === code)?.name ?? code}
     >
       {code}
@@ -101,7 +101,7 @@ export function CountryInput({
         value={query}
         onChange={(e) => setQuery(e.currentTarget.value)}
         placeholder="Search code or name…"
-        className="w-full rounded border border-neutral-300 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-neutral-900"
+        className="w-full rounded border border-input px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
       />
       <select
         value={selected}
@@ -111,7 +111,7 @@ export function CountryInput({
           onChange(v || null);
         }}
         size={6}
-        className="w-full rounded border border-neutral-300 px-2 py-1 text-sm rb-mono focus:outline-none focus:ring-1 focus:ring-neutral-900"
+        className="w-full rounded border border-input px-2 py-1 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-ring"
       >
         <option value="">— none —</option>
         {filtered.map((c) => (

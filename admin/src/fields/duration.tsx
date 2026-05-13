@@ -107,7 +107,7 @@ export function DurationCell({ value }: { value: unknown }) {
   if (!p) {
     // Fall back to the raw ISO so the operator at least sees the value.
     return (
-      <span className="rb-mono text-xs whitespace-nowrap" title={s}>
+      <span className="font-mono text-xs whitespace-nowrap" title={s}>
         {s}
       </span>
     );
@@ -164,13 +164,13 @@ export function DurationInput({
         autoCapitalize="characters"
         autoCorrect="off"
         className={
-          "mt-1 w-full rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +
+          "mt-1 w-full rounded border px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 " +
           (err
-            ? "border-red-400 focus:ring-red-500"
-            : "border-neutral-300 focus:ring-neutral-900")
+            ? "border-destructive/40 focus:ring-destructive"
+            : "border-input focus:ring-ring")
         }
       />
-      {err ? <p className="mt-0.5 text-xs text-red-600">{err}</p> : null}
+      {err ? <p className="mt-0.5 text-xs text-destructive">{err}</p> : null}
     </div>
   );
 }

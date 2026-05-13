@@ -66,7 +66,7 @@ export const Accordion = forwardRef<HTMLDivElement, AccordionProps>((props, ref)
           disabled,
         }}
       >
-        <div ref={ref as Ref<HTMLDivElement>} {...(rest as HTMLAttributes<HTMLDivElement>)}>
+        <div ref={ref as Ref<HTMLDivElement>} data-slot="accordion" {...(rest as HTMLAttributes<HTMLDivElement>)}>
           {children}
         </div>
       </Ctx.Provider>
@@ -88,7 +88,7 @@ export const Accordion = forwardRef<HTMLDivElement, AccordionProps>((props, ref)
         disabled,
       }}
     >
-      <div ref={ref as Ref<HTMLDivElement>} {...(rest as HTMLAttributes<HTMLDivElement>)}>
+      <div ref={ref as Ref<HTMLDivElement>} data-slot="accordion" {...(rest as HTMLAttributes<HTMLDivElement>)}>
         {children}
       </div>
     </Ctx.Provider>
@@ -106,6 +106,7 @@ export const AccordionItem = forwardRef<
     <ItemCtx.Provider value={{ value, open, disabled: disabled ?? ctx.disabled }}>
       <div
         ref={ref as Ref<HTMLDivElement>}
+        data-slot="accordion-item"
         data-state={open ? 'open' : 'closed'}
         data-disabled={disabled ? '' : undefined}
         class={cn('border-b', klass as string, className)}
@@ -139,6 +140,7 @@ export const AccordionTrigger = forwardRef<
       <button
         ref={ref as Ref<HTMLButtonElement>}
         type={type ?? 'button'}
+        data-slot="accordion-trigger"
         aria-expanded={item.open}
         data-state={item.open ? 'open' : 'closed'}
         data-disabled={item.disabled ? '' : undefined}
@@ -148,7 +150,7 @@ export const AccordionTrigger = forwardRef<
           toggle()
         }}
         class={cn(
-          'flex flex-1 items-center justify-between py-4 font-medium transition-all hover:underline',
+          'flex flex-1 items-center justify-between py-4 font-medium transition-all hover:underline outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] disabled:pointer-events-none disabled:opacity-50',
           '[&[data-state=open]>svg]:rotate-180',
           klass as string,
           className,
@@ -170,6 +172,7 @@ export const AccordionContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDi
       <Presence present={item.open}>
         <div
           ref={ref as Ref<HTMLDivElement>}
+          data-slot="accordion-content"
           data-state={item.open ? 'open' : 'closed'}
           class={cn(
             'overflow-hidden text-sm transition-all',

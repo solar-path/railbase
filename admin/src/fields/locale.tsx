@@ -21,7 +21,7 @@ function normalise(s: string): string {
 export function LocaleCell({ value }: { value: unknown }) {
   if (value == null || value === "") return null;
   const s = String(value);
-  return <span className="rb-mono text-xs whitespace-nowrap">{s}</span>;
+  return <span className="font-mono text-xs whitespace-nowrap">{s}</span>;
 }
 
 export function LocaleInput({
@@ -67,16 +67,16 @@ export function LocaleInput({
         spellcheck={false}
         autoCorrect="off"
         className={
-          "mt-1 w-full rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +
+          "mt-1 w-full rounded border px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 " +
           (err
-            ? "border-red-400 focus:ring-red-500"
-            : "border-neutral-300 focus:ring-neutral-900")
+            ? "border-destructive/40 focus:ring-destructive"
+            : "border-input focus:ring-ring")
         }
       />
       {err ? (
-        <p className="mt-0.5 text-xs text-red-600">{err}</p>
+        <p className="mt-0.5 text-xs text-destructive">{err}</p>
       ) : (
-        <p className="mt-0.5 text-xs text-neutral-500">e.g. en, en-US, pt-BR, zh-CN</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">e.g. en, en-US, pt-BR, zh-CN</p>
       )}
     </div>
   );

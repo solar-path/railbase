@@ -24,7 +24,7 @@ export function SlugCell({ value }: { value: unknown }) {
   if (value == null || value === "") return null;
   const s = String(value);
   return (
-    <span className="rb-mono text-xs bg-neutral-100 text-neutral-700 rounded px-1.5 py-0.5">
+    <span className="font-mono text-xs bg-muted text-foreground rounded px-1.5 py-0.5">
       {s}
     </span>
   );
@@ -80,13 +80,13 @@ export function SlugInput({
         autoCapitalize="off"
         autoCorrect="off"
         className={
-          "mt-1 w-full rounded border px-2 py-1.5 text-sm rb-mono focus:outline-none focus:ring-1 " +
+          "mt-1 w-full rounded border px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 " +
           (invalid
-            ? "border-red-400 focus:ring-red-500"
-            : "border-neutral-300 focus:ring-neutral-900")
+            ? "border-destructive/40 focus:ring-destructive"
+            : "border-input focus:ring-ring")
         }
       />
-      {hint ? <p className="mt-0.5 text-xs text-red-600">{hint}</p> : null}
+      {hint ? <p className="mt-0.5 text-xs text-destructive">{hint}</p> : null}
     </div>
   );
 }

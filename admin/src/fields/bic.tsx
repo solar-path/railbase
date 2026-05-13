@@ -14,7 +14,7 @@ export function BicCell({ value }: { value: unknown }) {
   if (value == null || value === "") return null;
   const s = String(value).toUpperCase();
   return (
-    <span className="rb-mono text-xs uppercase tracking-wider whitespace-nowrap">
+    <span className="font-mono text-xs uppercase tracking-wider whitespace-nowrap">
       {s}
     </span>
   );
@@ -63,13 +63,13 @@ export function BicInput({
         autoCapitalize="characters"
         autoCorrect="off"
         className={
-          "mt-1 w-full rounded border px-2 py-1.5 text-sm rb-mono uppercase tracking-wider focus:outline-none focus:ring-1 " +
+          "mt-1 w-full rounded border px-2 py-1.5 text-sm font-mono uppercase tracking-wider focus:outline-none focus:ring-1 " +
           (err
-            ? "border-red-400 focus:ring-red-500"
-            : "border-neutral-300 focus:ring-neutral-900")
+            ? "border-destructive/40 focus:ring-destructive"
+            : "border-input focus:ring-ring")
         }
       />
-      {err ? <p className="mt-0.5 text-xs text-red-600">{err}</p> : null}
+      {err ? <p className="mt-0.5 text-xs text-destructive">{err}</p> : null}
     </div>
   );
 }

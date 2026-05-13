@@ -262,6 +262,23 @@ func (s *Store) Revoke(ctx context.Context, tok token.Token) error {
 	return nil
 }
 
+// RevokeAllFor marks EVERY live session for the (collection, user)
+// tuple revoked. Returns the count revoked. v1.7.50.2 — backs the
+// SAML SLO (Single Logout) endpoint: when the IdP tells us a user
+// has signed out globally, we drop every session we issued for them
+// so they have to re-authenticate on next access.
+//
+// Idempotent: a second call returns 0 + nil; rows already revoked
+// are skipped by the `revoked_at IS NULL` filter.
+func (s *Store) RevokeAllFor(ctx context.Context, collectionName string, userID uuid.UUID) (int64, error) {
+	const q = `UPDATE _sessions SET revoked_at = $3 WHERE collection_name = $1 AND user_id = $2 AND revoked_at IS NULL`
+	tag, err := s.pool.Exec(ctx, q, collectionName, userID, clock.Now())
+	if err != nil {
+		return 0, fmt.Errorf("session: revoke-all-for: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // IPFromRequest extracts a best-effort client IP. Trusts X-Forwarded-For
 // only when the immediate peer is loopback (assume reverse proxy);
 // otherwise it falls back to RemoteAddr. A v1 trusted-proxy config will

@@ -10,12 +10,15 @@ import { DismissableLayer } from './_primitives/dismissable-layer'
 import { useControllable } from './_primitives/use-controllable'
 import { Slot } from './_primitives/slot'
 
+export type DrawerDirection = 'top' | 'bottom' | 'left' | 'right'
+
 interface DrawerCtx {
   open: boolean
   setOpen: (v: boolean) => void
   dragY: number
   setDragY: (n: number) => void
   dismissible: boolean
+  direction: DrawerDirection
 }
 
 const Ctx = createContext<DrawerCtx | null>(null)
@@ -32,10 +35,18 @@ export interface DrawerProps {
   onOpenChange?: (open: boolean) => void
   dismissible?: boolean
   shouldScaleBackground?: boolean
+  direction?: DrawerDirection
   children?: ComponentChildren
 }
 
-export function Drawer({ open, defaultOpen, onOpenChange, dismissible = true, children }: DrawerProps) {
+export function Drawer({
+  open,
+  defaultOpen,
+  onOpenChange,
+  dismissible = true,
+  direction = 'bottom',
+  children,
+}: DrawerProps) {
   const [value, setValue] = useControllable<boolean>({
     value: open,
     defaultValue: defaultOpen ?? false,
@@ -43,7 +54,7 @@ export function Drawer({ open, defaultOpen, onOpenChange, dismissible = true, ch
   })
   const [dragY, setDragY] = useState(0)
   return (
-    <Ctx.Provider value={{ open: value, setOpen: setValue, dragY, setDragY, dismissible }}>
+    <Ctx.Provider value={{ open: value, setOpen: setValue, dragY, setDragY, dismissible, direction }}>
       {children}
     </Ctx.Provider>
   )
@@ -59,6 +70,7 @@ export const DrawerTrigger = forwardRef<
     <Comp
       ref={ref as Ref<HTMLButtonElement>}
       type={asChild ? undefined : (type ?? 'button')}
+      data-slot="drawer-trigger"
       aria-expanded={ctx.open}
       data-state={ctx.open ? 'open' : 'closed'}
       onClick={(e: Event) => {
@@ -81,6 +93,7 @@ export const DrawerClose = forwardRef<
     <Comp
       ref={ref as Ref<HTMLButtonElement>}
       type={asChild ? undefined : (type ?? 'button')}
+      data-slot="drawer-close"
       onClick={(e: Event) => {
         onClick?.(e as any)
         ctx.setOpen(false)
@@ -112,9 +125,11 @@ export const DrawerOverlay = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEl
     return (
       <div
         ref={ref as Ref<HTMLDivElement>}
+        data-slot="drawer-overlay"
         data-state={open ? 'open' : 'closed'}
         class={cn(
-          'fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0',
+          /* shadcn: canonical Drawer overlay is a fixed bg-black/50 scrim, intentionally not theme-tokened. */
+          'fixed inset-0 z-50 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0',
           klass as string,
           className,
         )}
@@ -144,8 +159,10 @@ export const DrawerContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEl
       }
     }, [ctx.open])
 
+    const isBottomDraggable = ctx.direction === 'bottom' && ctx.dismissible
+
     const onPointerDown = (e: PointerEvent) => {
-      if (!ctx.dismissible) return
+      if (!isBottomDraggable) return
       const target = e.target as HTMLElement
       if (target.closest('[data-drawer-handle]') || target === contentRef.current) {
         dragState.current.startY = e.clientY
@@ -166,11 +183,21 @@ export const DrawerContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEl
       ctx.setDragY(0)
     }
 
+    const dragTransform = isBottomDraggable
+      ? {
+          transform: `translateY(${ctx.dragY}px)`,
+          transition: ctx.dragY === 0 ? 'transform 300ms cubic-bezier(0.32,0.72,0,1)' : 'none',
+        }
+      : undefined
+
     return (
       <DrawerPortal>
         <DrawerOverlay />
         <FocusScope>
-          <DismissableLayer onDismiss={() => ctx.dismissible && ctx.setOpen(false)} style={{ display: 'contents' }}>
+          <DismissableLayer
+            onDismiss={() => ctx.dismissible && ctx.setOpen(false)}
+            style={{ display: 'contents' }}
+          >
             <div
               ref={(el) => {
                 contentRef.current = el
@@ -179,14 +206,24 @@ export const DrawerContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEl
               }}
               role="dialog"
               aria-modal="true"
+              data-slot="drawer-content"
               data-state={ctx.open ? 'open' : 'closed'}
-              onPointerDown={onPointerDown}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              style={{ transform: `translateY(${ctx.dragY}px)`, transition: ctx.dragY === 0 ? 'transform 300ms cubic-bezier(0.32,0.72,0,1)' : 'none' }}
+              data-vaul-drawer-direction={ctx.direction}
+              onPointerDown={isBottomDraggable ? onPointerDown : undefined}
+              onPointerMove={isBottomDraggable ? onPointerMove : undefined}
+              onPointerUp={isBottomDraggable ? onPointerUp : undefined}
+              style={dragTransform}
               class={cn(
-                'fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto flex-col rounded-t-[10px] border bg-background',
-                'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:slide-in-from-bottom data-[state=closed]:slide-out-to-bottom',
+                'group/drawer-content fixed z-50 flex h-auto flex-col bg-background',
+                'data-[vaul-drawer-direction=top]:inset-x-0 data-[vaul-drawer-direction=top]:top-0 data-[vaul-drawer-direction=top]:mb-24 data-[vaul-drawer-direction=top]:max-h-[80vh] data-[vaul-drawer-direction=top]:rounded-b-lg data-[vaul-drawer-direction=top]:border-b',
+                'data-[vaul-drawer-direction=bottom]:inset-x-0 data-[vaul-drawer-direction=bottom]:bottom-0 data-[vaul-drawer-direction=bottom]:mt-24 data-[vaul-drawer-direction=bottom]:max-h-[80vh] data-[vaul-drawer-direction=bottom]:rounded-t-lg data-[vaul-drawer-direction=bottom]:border-t',
+                'data-[vaul-drawer-direction=right]:inset-y-0 data-[vaul-drawer-direction=right]:right-0 data-[vaul-drawer-direction=right]:w-3/4 data-[vaul-drawer-direction=right]:border-l data-[vaul-drawer-direction=right]:sm:max-w-sm',
+                'data-[vaul-drawer-direction=left]:inset-y-0 data-[vaul-drawer-direction=left]:left-0 data-[vaul-drawer-direction=left]:w-3/4 data-[vaul-drawer-direction=left]:border-r data-[vaul-drawer-direction=left]:sm:max-w-sm',
+                'data-[state=open]:animate-in data-[state=closed]:animate-out',
+                'data-[vaul-drawer-direction=top]:data-[state=open]:slide-in-from-top data-[vaul-drawer-direction=top]:data-[state=closed]:slide-out-to-top',
+                'data-[vaul-drawer-direction=bottom]:data-[state=open]:slide-in-from-bottom data-[vaul-drawer-direction=bottom]:data-[state=closed]:slide-out-to-bottom',
+                'data-[vaul-drawer-direction=left]:data-[state=open]:slide-in-from-left data-[vaul-drawer-direction=left]:data-[state=closed]:slide-out-to-left',
+                'data-[vaul-drawer-direction=right]:data-[state=open]:slide-in-from-right data-[vaul-drawer-direction=right]:data-[state=closed]:slide-out-to-right',
                 klass as string,
                 className,
               )}
@@ -194,7 +231,7 @@ export const DrawerContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEl
             >
               <div
                 data-drawer-handle=""
-                class="mx-auto mt-4 h-2 w-[100px] rounded-full bg-muted"
+                class="bg-muted mx-auto mt-4 hidden h-2 w-[100px] shrink-0 rounded-full group-data-[vaul-drawer-direction=bottom]/drawer-content:block"
               />
               {children}
             </div>
@@ -213,7 +250,12 @@ export function DrawerHeader({
 }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      class={cn('grid gap-1.5 p-4 text-center sm:text-left', klass as string, className)}
+      data-slot="drawer-header"
+      class={cn(
+        'flex flex-col gap-0.5 p-4 group-data-[vaul-drawer-direction=bottom]/drawer-content:text-center group-data-[vaul-drawer-direction=top]/drawer-content:text-center md:gap-1.5 md:text-left',
+        klass as string,
+        className,
+      )}
       {...props}
     />
   )
@@ -224,14 +266,21 @@ export function DrawerFooter({
   className,
   ...props
 }: HTMLAttributes<HTMLDivElement>) {
-  return <div class={cn('mt-auto flex flex-col gap-2 p-4', klass as string, className)} {...props} />
+  return (
+    <div
+      data-slot="drawer-footer"
+      class={cn('mt-auto flex flex-col gap-2 p-4', klass as string, className)}
+      {...props}
+    />
+  )
 }
 
 export const DrawerTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HTMLHeadingElement>>(
   ({ class: klass, className, ...props }, ref) => (
     <h2
       ref={ref as Ref<HTMLHeadingElement>}
-      class={cn('text-lg font-semibold leading-none tracking-tight', klass as string, className)}
+      data-slot="drawer-title"
+      class={cn('text-foreground font-semibold', klass as string, className)}
       {...props}
     />
   ),
@@ -244,7 +293,8 @@ export const DrawerDescription = forwardRef<
 >(({ class: klass, className, ...props }, ref) => (
   <p
     ref={ref as Ref<HTMLParagraphElement>}
-    class={cn('text-sm text-muted-foreground', klass as string, className)}
+    data-slot="drawer-description"
+    class={cn('text-muted-foreground text-sm', klass as string, className)}
     {...props}
   />
 ))

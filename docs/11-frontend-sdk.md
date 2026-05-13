@@ -25,7 +25,7 @@ client/
 
 ```ts
 import { createRailbaseClient } from "./client"
-const rb = createRailbaseClient({ baseURL: "http://localhost:8090" })
+const rb = createRailbaseClient({ baseURL: "http://localhost:8095" })
 
 // Полностью типизированно — поля, фильтры, expand, sort
 const posts = await rb.collections.posts.list({

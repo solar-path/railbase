@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { adminAPI } from "../api/admin";
+import { AdminPage } from "../layout/admin_page";
 
 // Monaco is huge (~3 MB raw / 600 KB gzip on its own — most of admin's
 // pre-Preact bundle bulk). Lazy-loading it cuts the initial admin bundle
@@ -153,7 +154,7 @@ export function HooksScreen() {
         debounceRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [editorValue, selected, savedValue]);
 
   const handleNewFile = useCallback(() => {
@@ -246,13 +247,14 @@ export function HooksScreen() {
   }
 
   return (
+    <AdminPage>
     <div className="space-y-4 -m-6 flex flex-col" style={{ height: "calc(100vh - 4rem)" }}>
       <div className="px-6 pt-4">
         <header className="flex items-baseline justify-between">
           <div>
             <h1 className="text-2xl font-semibold">Hooks</h1>
             <p className="text-sm text-muted-foreground">
-              JavaScript hook files in <span className="rb-mono">pb_hooks/</span>.
+              JavaScript hook files in <span className="font-mono">pb_hooks/</span>.
               Changes hot-reload within 1s.
             </p>
           </div>
@@ -316,6 +318,7 @@ export function HooksScreen() {
         </div>
       </div>
     </div>
+    </AdminPage>
   );
 }
 
@@ -488,7 +491,7 @@ function TestPanel() {
                       <Input
                         type="text"
                         placeholder='"posts" or empty for wildcard'
-                        className="flex-1 h-8 rb-mono text-xs"
+                        className="flex-1 h-8 font-mono text-xs"
                         {...field}
                       />
                     </FormControl>
@@ -505,7 +508,7 @@ function TestPanel() {
                       <Textarea
                         rows={8}
                         spellcheck={false}
-                        className="rb-mono text-[12px] resize-y bg-background"
+                        className="font-mono text-[12px] resize-y bg-background"
                         {...field}
                       />
                     </FormControl>
@@ -533,7 +536,7 @@ function TestPanel() {
             {result === null && !runM.isPending && (
               <div className="text-xs text-muted-foreground italic">
                 No run yet. Configure the inputs on the left and click{" "}
-                <span className="rb-mono">Run test</span>.
+                <span className="font-mono">Run test</span>.
               </div>
             )}
             {runM.isPending && (
@@ -555,9 +558,9 @@ function TestResultPanel({ result }: { result: HookTestRunResult }) {
   // "error" (hook threw). Keep the bespoke colours.
   const pillClass =
     result.outcome === "ok"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      ? "border-primary/40 bg-primary/10 text-primary"
       : result.outcome === "rejected"
-        ? "border-amber-200 bg-amber-50 text-amber-800"
+        ? "border-input bg-muted text-foreground"
         : "border-destructive/30 bg-destructive/10 text-destructive";
 
   return (
@@ -576,7 +579,7 @@ function TestResultPanel({ result }: { result: HookTestRunResult }) {
         </span>
       </div>
       {result.error && (
-        <div className="rounded border border-destructive/30 bg-destructive/10 p-2 rb-mono text-[11px] text-destructive whitespace-pre-wrap">
+        <div className="rounded border border-destructive/30 bg-destructive/10 p-2 font-mono text-[11px] text-destructive whitespace-pre-wrap">
           {result.error}
         </div>
       )}
@@ -587,7 +590,7 @@ function TestResultPanel({ result }: { result: HookTestRunResult }) {
         {result.console.length === 0 ? (
           <div className="text-[11px] text-muted-foreground italic">(no output)</div>
         ) : (
-          <div className="rounded border border-input bg-neutral-900 text-neutral-100 p-2 rb-mono text-[11px] space-y-0.5 max-h-40 overflow-auto">
+          <div className="rounded border border-input bg-foreground text-background p-2 font-mono text-[11px] space-y-0.5 max-h-40 overflow-auto">
             {result.console.map((line, i) => (
               <div key={i}>{line}</div>
             ))}
@@ -598,7 +601,7 @@ function TestResultPanel({ result }: { result: HookTestRunResult }) {
         <div className="text-[11px] font-medium text-foreground mb-1">
           modified_record
         </div>
-        <pre className="rounded border border-input bg-background p-2 rb-mono text-[11px] overflow-auto max-h-40">
+        <pre className="rounded border border-input bg-background p-2 font-mono text-[11px] overflow-auto max-h-40">
           {JSON.stringify(result.modified_record, null, 2)}
         </pre>
       </div>
@@ -654,7 +657,7 @@ function FileTree({
           <div className="px-3 py-2 text-xs text-muted-foreground">Loading…</div>
         ) : rendered.length === 0 ? (
           <div className="px-3 py-2 text-xs text-muted-foreground">
-            No hooks yet. Click <span className="rb-mono">+ new</span> to create one.
+            No hooks yet. Click <span className="font-mono">+ new</span> to create one.
           </div>
         ) : (
           rendered.map((f) => {
@@ -665,14 +668,14 @@ function FileTree({
                 className={
                   "group flex items-center justify-between text-sm pr-2 " +
                   (active
-                    ? "bg-neutral-900 text-white"
-                    : "text-foreground hover:bg-neutral-200")
+                    ? "bg-foreground text-background"
+                    : "text-foreground hover:bg-muted")
                 }
               >
                 <button
                   type="button"
                   onClick={() => onSelect(f.path)}
-                  className="flex-1 text-left px-2 py-1 truncate rb-mono text-[12px]"
+                  className="flex-1 text-left px-2 py-1 truncate font-mono text-[12px]"
                   style={{ paddingLeft: 8 + f.depth * 12 }}
                   title={f.path}
                 >
@@ -687,7 +690,7 @@ function FileTree({
                   title="Delete"
                   className={
                     "opacity-0 group-hover:opacity-100 px-1 text-xs " +
-                    (active ? "text-white hover:text-red-200" : "text-muted-foreground hover:text-destructive")
+                    (active ? "text-background hover:text-destructive-foreground" : "text-muted-foreground hover:text-destructive")
                   }
                 >
                   🗑
@@ -721,7 +724,7 @@ function EditorToolbar({
   return (
     <div className="flex items-center justify-between px-4 py-2 border-b bg-background">
       <div className="flex items-center gap-3 min-w-0">
-        <span className="rb-mono text-sm text-foreground truncate" title={filename}>
+        <span className="font-mono text-sm text-foreground truncate" title={filename}>
           {filename}
         </span>
         <StatusPill status={status} pending={pending} detail={statusDetail} dirty={dirty} />
@@ -767,7 +770,7 @@ function StatusPill({
     return (
       <Badge
         variant="outline"
-        className="text-[11px] border-amber-200 bg-amber-50 text-amber-800"
+        className="text-[11px] border-input bg-muted text-foreground"
       >
         saving…
       </Badge>
@@ -795,7 +798,7 @@ function StatusPill({
     return (
       <Badge
         variant="outline"
-        className="text-[11px] border-emerald-200 bg-emerald-50 text-emerald-700"
+        className="text-[11px] border-primary/40 bg-primary/10 text-primary"
       >
         saved
       </Badge>
@@ -815,13 +818,13 @@ function EmptyEditorState() {
         <div className="text-sm font-medium text-foreground">No file selected.</div>
         <div className="text-xs text-muted-foreground mt-2 leading-relaxed">
           Pick a file from the sidebar, or click{" "}
-          <span className="rb-mono">+ new</span> to create one. Files are stored
-          on disk in <span className="rb-mono">pb_hooks/</span> and the runtime
+          <span className="font-mono">+ new</span> to create one. Files are stored
+          on disk in <span className="font-mono">pb_hooks/</span> and the runtime
           hot-reloads them within ~1 s of every save.
         </div>
         <div className="mt-3 text-xs text-muted-foreground">
           <div className="font-medium text-foreground mb-1">Available bindings:</div>
-          <ul className="rb-mono space-y-0.5 text-[12px]">
+          <ul className="font-mono space-y-0.5 text-[12px]">
             <li>$app.onRecordBeforeCreate("collection", (e) =&gt; …)</li>
             <li>$app.onRecordAfterCreate / Before|AfterUpdate / Before|AfterDelete</li>
             <li>$app.routerAdd("GET", "/path", (c) =&gt; …)</li>
@@ -840,19 +843,19 @@ function UnavailableState() {
       <header>
         <h1 className="text-2xl font-semibold">Hooks</h1>
         <p className="text-sm text-muted-foreground">
-          JavaScript hook files in <span className="rb-mono">pb_hooks/</span>.
+          JavaScript hook files in <span className="font-mono">pb_hooks/</span>.
         </p>
       </header>
-      <div className="rounded-lg border-2 border-dashed border-amber-300 bg-amber-50 p-6 max-w-2xl">
-        <div className="text-sm font-medium text-amber-900">
+      <div className="rounded-lg border-2 border-dashed border-input bg-muted p-6 max-w-2xl">
+        <div className="text-sm font-medium text-foreground">
           Hooks directory not configured.
         </div>
-        <div className="text-xs text-amber-800 mt-2 leading-relaxed">
-          The admin API has no <span className="rb-mono">HooksDir</span> wired up.
-          Set the <span className="rb-mono">RAILBASE_HOOKS_DIR</span> environment
-          variable (or pass <span className="rb-mono">--hooks-dir</span> on the
+        <div className="text-xs text-muted-foreground mt-2 leading-relaxed">
+          The admin API has no <span className="font-mono">HooksDir</span> wired up.
+          Set the <span className="font-mono">RAILBASE_HOOKS_DIR</span> environment
+          variable (or pass <span className="font-mono">--hooks-dir</span> on the
           CLI) and restart the server. The editor will pick up your
-          <span className="rb-mono"> pb_hooks/*.js</span> files on next load.
+          <span className="font-mono"> pb_hooks/*.js</span> files on next load.
         </div>
       </div>
     </div>

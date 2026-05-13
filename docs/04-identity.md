@@ -10,11 +10,14 @@ PB смешивал system-admins и application-users; это путало. Rai
 
 Администраторы инсталляции Railbase. Доступ к admin UI, schema, миграциям, plugins, audit.
 
-- **Таблица**: `_system_admins` (префикс `_` = system table)
-- Создаются через CLI: `railbase admin create <email>`
+- **Таблица**: `_admins` (префикс `_` = system table; в более ранних драфтах документации называлась `_system_admins` — фактическое имя в миграциях v0.5+ короче)
+- Создаются:
+  - через bootstrap wizard (`POST /api/_admin/_bootstrap` — первый админ)
+  - через CLI: `railbase admin create <email>` (любой последующий)
 - **Не** видны через REST API, **не** имеют tenant-context, **не** subject of RBAC application-rules
-- 2FA обязательно с v1
-- В PB это `_superusers` collection
+- 2FA рекомендуется с v1.1 (опционально для v1)
+- В PB это `_superusers` collection (раньше `_admins`)
+- v1.7.43 — **welcome email обязателен** при создании администратора. Bootstrap-handler + CLI оба отказываются работать пока не настроен mailer (или операторски не помечен как «настрою позже» через мастер). См. docs/14-observability.md «Setup wizard safety model» для детальной модели.
 
 #### 2. Application users
 
@@ -38,7 +41,8 @@ PB смешивал system-admins и application-users; это путало. Rai
 ### System tables
 
 ```
-_system_admins         — Railbase-managed
+_admins                — Railbase-managed (Railbase-instance operators; v1.7.43 welcome emails fire on insert)
+_admin_sessions        — Railbase-managed (admin UI session storage)
 _api_tokens            — Railbase-managed
 _sessions              — Railbase-managed, opaque tokens (hashed)
 _devices               — Railbase-managed, device trust (port из rail)
@@ -88,7 +92,17 @@ var Admins = schema.AuthCollection("admins").
 - Опционально свой mailer template set
 - Свои RBAC roles
 
-System admins (`_system_admins`) — отдельная сущность, не auth-коллекция.
+System admins (`_admins`) — отдельная сущность, не auth-коллекция. См. таблицу ниже.
+
+### System vs Domain accounts — quick reference
+
+| Слой | Имя таблицы | Кто заводит | Доступ | Email-уведомления (v1.7.43) |
+|---|---|---|---|---|
+| **System** (Railbase-instance operators) | `_admins` | bootstrap wizard (1-й) / `railbase admin create` CLI / admin UI (v1.x+) | Argon2id + `_admin_sessions`; виден только через `/api/_admin/*` | **Обязательны** на каждую creation: welcome новому + broadcast notice всем существующим (compromise detection) |
+| **App domain** (бизнес-юзеры) | `users`, `customers`, `employees`, любое имя без `_` | разработчик через Schema DSL (`schema.AuthCollection("users")`) | REST `/api/collections/{name}/*` + RBAC + tenant scope | `signup_verification.md` при self-signup (v1.1); welcome для admin-created users — 📋 v1.x candidate |
+| **Service accounts** | `_api_tokens` | `railbase token create` + admin UI v1.7.9 | Bearer-only, нет signin path | Нет — машинные идентичности; одноразовый display-once token banner на create |
+
+Дандер-префикс (`_*`) **зарезервирован** за системой — validator схемы (`internal/schema/builder/validate.go`) отказывает создавать user-collection с именем, начинающимся на `_`. Это значит app-коллекция `_users` физически невозможна, и соответствующий namespace-конфликт между «railbase-managed» и «app-managed» таблицами исключён by construction.
 
 ---
 

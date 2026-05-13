@@ -54,6 +54,7 @@ export const Tabs = forwardRef<HTMLDivElement, TabsProps>(
       <Ctx.Provider value={{ value: v, setValue: setV, orientation, activationMode, baseId }}>
         <div
           ref={ref as Ref<HTMLDivElement>}
+          data-slot="tabs"
           data-orientation={orientation}
           {...props}
         >
@@ -98,6 +99,7 @@ export const TabsList = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement
           else if (ref) (ref as { current: HTMLDivElement | null }).current = el
         }}
         role="tablist"
+        data-slot="tabs-list"
         aria-orientation={ctx.orientation}
         onKeyDown={onKeyDown}
         class={cn(
@@ -128,6 +130,7 @@ export const TabsTrigger = forwardRef<HTMLButtonElement, TabsTriggerProps>(
         type={type ?? 'button'}
         role="tab"
         id={`${ctx.baseId}-trigger-${value}`}
+        data-slot="tabs-trigger"
         aria-selected={active}
         aria-controls={`${ctx.baseId}-content-${value}`}
         tabIndex={active ? 0 : -1}
@@ -139,8 +142,8 @@ export const TabsTrigger = forwardRef<HTMLButtonElement, TabsTriggerProps>(
           ctx.setValue(value)
         }}
         class={cn(
-          'inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium ring-offset-background transition-all',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+          'inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium transition-[color,box-shadow]',
+          'outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]',
           'disabled:pointer-events-none disabled:opacity-50',
           'data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow',
           klass as string,
@@ -171,12 +174,13 @@ export const TabsContent = forwardRef<HTMLDivElement, TabsContentProps>(
         ref={ref as Ref<HTMLDivElement>}
         role="tabpanel"
         id={`${ctx.baseId}-content-${value}`}
+        data-slot="tabs-content"
         aria-labelledby={`${ctx.baseId}-trigger-${value}`}
         data-state={active ? 'active' : 'inactive'}
         tabIndex={0}
         hidden={!active && forceMount ? true : undefined}
         class={cn(
-          'mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+          'mt-2 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]',
           klass as string,
           className,
         )}

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { adminAPI, recordsAPI } from "../api/admin";
 import { Pager } from "../layout/pager";
+import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import {
   Table,
@@ -77,28 +78,28 @@ export function TrashScreen() {
   const hasSoftDelete = collections.length > 0;
 
   return (
-    <div className="space-y-4">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Trash</h1>
-          <p className="text-sm text-muted-foreground max-w-3xl">
+    <AdminPage>
+      <AdminPage.Header
+        title="Trash"
+        description={
+          <>
             Soft-deleted records across all collections with{" "}
-            <code className="rb-mono">.SoftDelete()</code>. Records here can be
+            <code className="font-mono">.SoftDelete()</code>. Records here can be
             restored or stay until your retention policy permanently purges them.
-          </p>
-        </div>
-        <Pager page={page} totalPages={totalPages} onChange={setPage} />
-      </header>
+          </>
+        }
+        actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
+      />
 
       {flash ? (
-        <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 flex items-start justify-between gap-3">
+        <div className="rounded border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-primary flex items-start justify-between gap-3">
           <div>{flash}</div>
           <Button
             variant="ghost"
             size="sm"
             onClick={() => setFlash(null)}
             aria-label="Dismiss"
-            className="text-emerald-700/70 hover:text-emerald-900 hover:bg-transparent h-auto p-0"
+            className="text-primary/70 hover:text-primary hover:bg-transparent h-auto p-0"
           >
             ×
           </Button>
@@ -108,14 +109,14 @@ export function TrashScreen() {
       {restoreM.isError ? (
         <div className="rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           Restore failed:{" "}
-          <span className="rb-mono">
+          <span className="font-mono">
             {(restoreM.error as { message?: string } | null)?.message ?? "unknown error"}
           </span>
         </div>
       ) : null}
 
       {hasSoftDelete ? (
-        <div className="flex flex-wrap items-center gap-2 text-sm">
+        <AdminPage.Toolbar>
           <label className="flex items-center gap-1">
             <span className="text-muted-foreground">collection</span>
             <select
@@ -143,9 +144,10 @@ export function TrashScreen() {
           <span className="text-xs text-muted-foreground ml-auto">
             {total} record{total === 1 ? "" : "s"} in trash
           </span>
-        </div>
+        </AdminPage.Toolbar>
       ) : null}
 
+      <AdminPage.Body>
       {q.isLoading ? (
         <div className="text-sm text-muted-foreground">Loading…</div>
       ) : !hasSoftDelete ? (
@@ -153,7 +155,7 @@ export function TrashScreen() {
         // trash". This guides the dev to the schema builder rather
         // than implying the trash is just empty.
         <div className="rounded border border-dashed border-input bg-muted px-4 py-8 text-center text-sm text-muted-foreground">
-          No collection has <code className="rb-mono">.SoftDelete()</code> enabled.
+          No collection has <code className="font-mono">.SoftDelete()</code> enabled.
           Add the flag to a collection in your schema to start collecting
           tombstones here.
         </div>
@@ -189,27 +191,27 @@ export function TrashScreen() {
                   return (
                     <TableRow key={`${it.collection}/${it.id}`}>
                       <TableCell
-                        className="rb-mono text-xs text-muted-foreground whitespace-nowrap"
+                        className="font-mono text-xs text-muted-foreground whitespace-nowrap"
                         title={it.deleted}
                       >
                         {relativeTime(it.deleted)}
                       </TableCell>
                       <TableCell>
-                        <span className="inline-block bg-muted rounded px-1.5 py-0.5 text-xs rb-mono">
+                        <span className="inline-block bg-muted rounded px-1.5 py-0.5 text-xs font-mono">
                           {it.collection}
                         </span>
                       </TableCell>
-                      <TableCell className="rb-mono text-xs" title={it.id}>
+                      <TableCell className="font-mono text-xs" title={it.id}>
                         {idShort}…
                       </TableCell>
                       <TableCell
-                        className="rb-mono text-xs text-muted-foreground whitespace-nowrap"
+                        className="font-mono text-xs text-muted-foreground whitespace-nowrap"
                         title={it.created}
                       >
                         {relativeTime(it.created)}
                       </TableCell>
                       <TableCell
-                        className="rb-mono text-xs text-muted-foreground whitespace-nowrap"
+                        className="font-mono text-xs text-muted-foreground whitespace-nowrap"
                         title={it.updated}
                       >
                         {relativeTime(it.updated)}
@@ -244,7 +246,8 @@ export function TrashScreen() {
           </CardContent>
         </Card>
       )}
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }
 

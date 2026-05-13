@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import type { CacheInstance } from "../api/types";
+import { AdminPage } from "../layout/admin_page";
 import {
   Card,
   CardContent,
@@ -74,16 +75,19 @@ export function CacheScreen() {
       : 0;
 
   return (
-    <div class="space-y-4">
-      <header>
-        <h1 class="text-2xl font-semibold">Cache inspector</h1>
-        <p class="text-sm text-muted-foreground">
-          Live snapshot of registered in-process caches. Polls every 5&nbsp;s.
-          The Clear button drops every entry AND resets the hit/miss
-          counters for the selected instance.
-        </p>
-      </header>
+    <AdminPage>
+      <AdminPage.Header
+        title="Cache inspector"
+        description={
+          <>
+            Live snapshot of registered in-process caches. Polls every 5&nbsp;s.
+            The Clear button drops every entry AND resets the hit/miss
+            counters for the selected instance.
+          </>
+        }
+      />
 
+      <AdminPage.Body className="space-y-4">
       {/* Aggregate stats — totals across every registered instance. */}
       <div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <StatCard label="Total hits" value={totals.hits.toLocaleString()} />
@@ -117,7 +121,7 @@ export function CacheScreen() {
             <div class="mt-2 max-w-xl mx-auto text-xs">
               The cache primitive ships with v1.5.1 but per-subsystem wiring is
               gradual — instances will appear here as they&apos;re registered in{" "}
-              <code class="rb-mono rounded bg-card px-1">app.go</code>.
+              <code class="font-mono rounded bg-card px-1">app.go</code>.
             </div>
           </CardContent>
         </Card>
@@ -144,7 +148,7 @@ export function CacheScreen() {
                   return (
                     <TableRow key={c.name}>
                       <TableCell class="align-top">
-                        <span class="rb-mono text-xs">{c.name}</span>
+                        <span class="font-mono text-xs">{c.name}</span>
                       </TableCell>
                       <TableCell class="text-right align-top tabular-nums">
                         {c.stats.size.toLocaleString()}
@@ -164,7 +168,7 @@ export function CacheScreen() {
                         class={
                           "text-right align-top tabular-nums " +
                           (c.stats.evictions > 0
-                            ? "text-amber-700"
+                            ? "text-foreground"
                             : "text-muted-foreground")
                         }
                       >
@@ -204,7 +208,8 @@ export function CacheScreen() {
           </AlertDescription>
         </Alert>
       ) : null}
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }
 
@@ -220,12 +225,12 @@ function StatCard({
   hint?: string;
 }) {
   return (
-    <Card class={warn ? "border-amber-300 bg-amber-50" : undefined}>
+    <Card class={warn ? "border-input bg-muted" : undefined}>
       <CardHeader class="p-3 pb-1 space-y-0">
         <CardDescription
           class={
             "text-xs uppercase tracking-wide " +
-            (warn ? "text-amber-800" : "text-muted-foreground")
+            (warn ? "text-foreground" : "text-muted-foreground")
           }
         >
           {label}
@@ -234,7 +239,7 @@ function StatCard({
       <CardContent class="p-3 pt-0">
         <CardTitle
           class={
-            "text-2xl tabular-nums " + (warn ? "text-amber-800" : "")
+            "text-2xl tabular-nums " + (warn ? "text-foreground" : "")
           }
         >
           {value}

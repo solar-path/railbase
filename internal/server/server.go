@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	rerr "github.com/railbase/railbase/internal/errors"
+	"github.com/railbase/railbase/internal/metrics"
 	"github.com/railbase/railbase/internal/security"
 )
 
@@ -56,6 +57,16 @@ type Config struct {
 	// stays consistent across environments while curl-from-localhost
 	// still Just Works.
 	AntiBot *security.AntiBot
+
+	// Metrics, when non-nil, installs the v1.7.x §3.11 per-request
+	// observer middleware: bumps http.requests_total + status-bucketed
+	// http.errors_*xx_total counters and observes elapsed time on the
+	// http.latency histogram. Sits AFTER auth / rate-limit /
+	// security-header middleware so the counters reflect actual
+	// served requests (not rate-limited drops). nil → middleware is a
+	// pass-through so unit tests that don't care about metrics see no
+	// behaviour change.
+	Metrics *metrics.Registry
 }
 
 // Server is the HTTP server lifecycle owner.
@@ -101,6 +112,13 @@ func New(cfg Config) *Server {
 	// when AntiBot is nil OR its config has Enabled=false.
 	if cfg.AntiBot != nil {
 		r.Use(cfg.AntiBot.Middleware)
+	}
+	// v1.7.x §3.11 — metric observer middleware. Sits at the END of
+	// the chain so the counters reflect requests that actually made it
+	// to a handler (post-rate-limit, post-antibot). No-op when nil so
+	// tests / embedders without a Registry see zero behaviour change.
+	if cfg.Metrics != nil {
+		r.Use(metrics.HTTPMiddleware(cfg.Metrics))
 	}
 
 	r.Get("/healthz", probeHandler(cfg.Probes.Live))

@@ -13,10 +13,10 @@ import { useEffect, useState } from "react";
 export const PRIORITY_LABELS = ["low", "normal", "high", "urgent"] as const;
 
 const PRIORITY_BADGE: Record<number, string> = {
-  0: "bg-neutral-100 text-neutral-600 ring-neutral-200",
-  1: "bg-sky-100 text-sky-800 ring-sky-200",
-  2: "bg-amber-100 text-amber-800 ring-amber-200",
-  3: "bg-rose-100 text-rose-800 ring-rose-200",
+  0: "bg-muted text-muted-foreground ring-border",
+  1: "bg-primary/20 text-primary ring-primary/40",
+  2: "bg-muted text-foreground ring-border",
+  3: "bg-destructive/20 text-destructive ring-destructive/40",
 };
 
 function coerce(value: unknown): number | null {
@@ -58,7 +58,7 @@ export function PriorityInput({
   }, [value]);
 
   return (
-    <div className="mt-1 inline-flex rounded border border-neutral-300 overflow-hidden">
+    <div className="mt-1 inline-flex rounded border border-input overflow-hidden">
       {PRIORITY_LABELS.map((lab, i) => {
         const active = level === i;
         return (
@@ -70,10 +70,10 @@ export function PriorityInput({
               onChange(i);
             }}
             className={
-              "px-2.5 py-1 text-xs border-r border-neutral-300 last:border-r-0 transition-colors " +
+              "px-2.5 py-1 text-xs border-r border-input last:border-r-0 transition-colors " +
               (active
                 ? PRIORITY_BADGE[i]
-                : "bg-white text-neutral-600 hover:bg-neutral-50")
+                : "bg-background text-muted-foreground hover:bg-muted")
             }
             aria-pressed={active}
           >

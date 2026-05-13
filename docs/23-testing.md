@@ -126,7 +126,49 @@ Configurable seed для reproducibility:
 app.Seed("users", 100, railbase.SeedOpts{Seed: 12345})
 ```
 
+## Lint enforcement для admin UI
+
+Поверх tsc + Playwright admin UI имеет третий слой защиты от design-drift — собственный ESLint plugin `eslint-plugin-railbase` (живёт в-репо, не публикуется на npm). Цель — не дать следующей волне правок незаметно вернуть UI в дрейф после Wave 0-3.
+
+**Rules** (все три — flat-config flag-driven, начинают как `warn`, флипаются в `error` после миграции всех экранов):
+
+| Rule | Что проверяет | Escape hatch |
+|---|---|---|
+| `railbase/no-raw-page-shell` | Экран в `admin/src/screens/*.tsx` должен начинаться с `<AdminPage>` либо whitelisted base (`<LoginShell>` для login, `<BootstrapShell>` для wizard) | Whitelist по filename |
+| `railbase/no-hardcoded-tw-color` | Tailwind utility classes с literal цветом (`text-red-500`, `bg-[#1a1a1a]`) запрещены — все цвета через oklch tokens из `lib/ui/theme.ts` | Comment-pragma `/* recharts: explicit hex required */` для chart series; whitelist для `currentColor` |
+| `railbase/no-list-when-data-is-paged` | `useQuery` с возвращаемым `{ items, total, page }` shape не должен рендериться через `.map()` без `<QDataTable>` либо `<Pager>` wrap | Per-line `// eslint-disable-next-line` для legitimately-small lists (≤ 5 rows known) |
+
+**Phasing**: Wave 1 включает rules в `warn` (CI green, видны в IDE). Wave 3 после полной миграции экранов на `<AdminPage>` — флип в `error`. Это предотвращает «обновлю один экран и сломаю CI на других».
+
+**Plugin source**: `admin/eslint-rules/` — три файла rule + `index.ts` aggregator. `admin/eslint.config.ts` ссылается на локальный путь, не на published package.
+
+**Не покрывается ESLint** (нужен другой механизм):
+- Bundle-size regression — отдельный CI шаг (`vite build` + size check), не lint
+- Accessibility (ARIA, focus order) — Playwright + axe-core, не ESLint
+- Visual drift — Playwright screenshot diff (см. ниже)
+
 ## Snapshot testing для admin UI
+
+Playwright scaffold уже скоммичен в `admin/playwright.config.ts` + `admin/e2e/{auth,screens}.spec.ts`. Покрывает 10 тестов (login flow + baseline для 8 ключевых экранов: schema / audit / logs / jobs / health / settings / api-tokens / mailer). Threshold `maxDiffPixelRatio: 0.2%` — толерантен к font-hinting drift между ОС, но ловит layout-регрессии.
+
+Setup (one-off per dev machine):
+
+```bash
+cd admin
+bunx playwright install chromium     # ~250 MB browser binary
+```
+
+Workflow:
+
+```bash
+bun run test:e2e          # headless, validates baseline (CI default)
+bun run test:e2e:ui       # interactive — review screenshots side-by-side
+bun run test:e2e:update   # accept new baselines after intentional UI change
+```
+
+Бэкенд для тестов поднимается отдельно (CI делает это explicitly, локально оператор делает `make run-embed` в соседнем терминале) — Playwright `webServer` нарочно НЕ настроен, чтобы было видно когда e2e-сессия использует «грязный» state из dev-БД.
+
+Baseline-изображения генерируются на первом `--update-snapshots` запуске и коммитятся в `admin/e2e/__snapshots__/`. Они platform-агностичны благодаря loose threshold + `mask:` на `.tabular-nums` / `.rb-mono` (счётчики, ids, timestamps), но при крупном tailwind-обновлении могут потребовать `--update-snapshots`.
 
 Через Playwright integration в template:
 

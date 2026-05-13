@@ -121,6 +121,7 @@ export const SelectTrigger = forwardRef<
         role="combobox"
         aria-haspopup="listbox"
         aria-expanded={ctx.open}
+        data-slot="select-trigger"
         data-state={ctx.open ? 'open' : 'closed'}
         data-placeholder={ctx.value ? undefined : ''}
         disabled={disabled ?? ctx.disabled}
@@ -136,8 +137,9 @@ export const SelectTrigger = forwardRef<
           }
         }}
         class={cn(
-          'flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm ring-offset-background',
-          'placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring',
+          'flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-[color,box-shadow]',
+          'placeholder:text-muted-foreground outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]',
+          'aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive',
           'disabled:cursor-not-allowed disabled:opacity-50',
           '[&>span]:line-clamp-1 data-[placeholder]:text-muted-foreground',
           klass as string,
@@ -162,7 +164,11 @@ export function SelectValue({
   const ctx = useSelect()
   const label = ctx.value ? ctx.labelMap.get(ctx.value) ?? ctx.value : placeholder
   return (
-    <span class={cn(klass as string, className)} {...(props as HTMLAttributes<HTMLSpanElement>)}>
+    <span
+      data-slot="select-value"
+      class={cn(klass as string, className)}
+      {...(props as HTMLAttributes<HTMLSpanElement>)}
+    >
       {label}
     </span>
   )
@@ -244,6 +250,7 @@ export const SelectContent = forwardRef<
                 else if (ref) (ref as { current: HTMLDivElement | null }).current = el
               }}
               role="listbox"
+              data-slot="select-content"
               data-state={ctx.open ? 'open' : 'closed'}
               data-side={dataSide(floating.placement)}
               data-align={dataAlign(floating.placement)}
@@ -292,6 +299,7 @@ export const SelectItem = forwardRef<HTMLDivElement, SelectItemProps>(
         role="option"
         aria-selected={selected}
         tabIndex={-1}
+        data-slot="select-item"
         data-value={value}
         data-state={selected ? 'checked' : 'unchecked'}
         data-disabled={disabled ? '' : undefined}
@@ -303,7 +311,7 @@ export const SelectItem = forwardRef<HTMLDivElement, SelectItemProps>(
           ctx.triggerElRef.current?.focus?.()
         }}
         class={cn(
-          'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none',
+          'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-hidden',
           'focus:bg-accent focus:text-accent-foreground',
           'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
           klass as string,
@@ -326,6 +334,7 @@ export const SelectSeparator = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDiv
     <div
       ref={ref as Ref<HTMLDivElement>}
       role="separator"
+      data-slot="select-separator"
       class={cn('-mx-1 my-1 h-px bg-muted', klass as string, className)}
       {...props}
     />
@@ -337,6 +346,7 @@ export const SelectLabel = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElem
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
+      data-slot="select-label"
       class={cn('px-2 py-1.5 text-sm font-semibold', klass as string, className)}
       {...props}
     />
@@ -346,7 +356,13 @@ SelectLabel.displayName = 'SelectLabel'
 
 export const SelectGroup = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
   ({ class: klass, className, ...props }, ref) => (
-    <div ref={ref as Ref<HTMLDivElement>} role="group" class={cn('', klass as string, className)} {...props} />
+    <div
+      ref={ref as Ref<HTMLDivElement>}
+      role="group"
+      data-slot="select-group"
+      class={cn('', klass as string, className)}
+      {...props}
+    />
   ),
 )
 SelectGroup.displayName = 'SelectGroup'

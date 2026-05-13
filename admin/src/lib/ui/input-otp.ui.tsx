@@ -76,7 +76,7 @@ export const InputOTP = forwardRef<HTMLInputElement, InputOTPProps>(
           setActiveIdx,
         }}
       >
-        <div class={cn('relative flex items-center gap-2', containerClassName)}>
+        <div data-slot="input-otp" class={cn('relative flex items-center gap-2', containerClassName)}>
           {children}
           <input
             ref={(el) => {
@@ -116,6 +116,7 @@ export const InputOTPGroup = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEl
   ({ class: klass, className, ...props }, ref) => (
     <div
       ref={ref as Ref<HTMLDivElement>}
+      data-slot="input-otp-group"
       class={cn('flex items-center', klass as string, className)}
       {...props}
     />
@@ -136,11 +137,13 @@ export const InputOTPSlot = forwardRef<HTMLDivElement, InputOTPSlotProps>(
     return (
       <div
         ref={ref as Ref<HTMLDivElement>}
+        data-slot="input-otp-slot"
+        data-active={active}
         onClick={() => ctx.inputRef.current?.focus()}
         class={cn(
           'relative flex h-9 w-9 items-center justify-center border-y border-r border-input text-sm shadow-sm transition-all',
           'first:rounded-l-md first:border-l last:rounded-r-md',
-          active && 'z-10 ring-1 ring-ring',
+          active && 'z-10 ring-ring/50 ring-[3px] border-ring',
           klass as string,
           className,
         )}
@@ -160,7 +163,7 @@ InputOTPSlot.displayName = 'InputOTPSlot'
 
 export function InputOTPSeparator(props: HTMLAttributes<HTMLDivElement>) {
   return (
-    <div role="separator" {...(props as HTMLAttributes<HTMLDivElement>)}>
+    <div role="separator" data-slot="input-otp-separator" {...(props as HTMLAttributes<HTMLDivElement>)}>
       <Dot class="size-4" />
     </div>
   )

@@ -4,6 +4,7 @@ package auth
 // DB. The full-stack route-level smoke lives in auth_methods_e2e_test.go.
 
 import (
+	"context"
 	"testing"
 
 	"github.com/railbase/railbase/internal/auth/recordtoken"
@@ -55,7 +56,10 @@ func TestProviderDisplayName_EmptyIsEmpty(t *testing.T) {
 }
 
 func TestBuildPasswordBlock_AlwaysEnabled(t *testing.T) {
-	b := buildPasswordBlock()
+	// v1.7.47: signature added ctx + *Deps. Default (nil Settings) still
+	// reports enabled=true so the v1.7.0 capability-baseline contract
+	// holds for every test path that doesn't wire Settings.
+	b := buildPasswordBlock(context.Background(), &Deps{})
 	if b["enabled"] != true {
 		t.Errorf("password.enabled = %v, want true", b["enabled"])
 	}
@@ -74,7 +78,7 @@ func TestBuildOAuth2Block_NilRegistry_EmptySlice(t *testing.T) {
 	// without optional-chaining the field. JSON encoders treat nil
 	// and empty []any differently — we want the empty form.
 	d := &Deps{OAuth: nil}
-	out := buildOAuth2Block(d)
+	out := buildOAuth2Block(context.Background(), d)
 	if out == nil {
 		t.Fatal("oauth2 = nil, want empty slice")
 	}
@@ -88,7 +92,7 @@ func TestBuildOTPBlock_DurationMatchesRecordTokenDefault(t *testing.T) {
 	// should track it automatically. Don't hard-code 600 here.
 	want := int(recordtoken.DefaultTTL(recordtoken.PurposeOTP).Seconds())
 	d := &Deps{}
-	b := buildOTPBlock(d)
+	b := buildOTPBlock(context.Background(), d)
 	if b["duration"] != want {
 		t.Errorf("otp.duration = %v, want %d", b["duration"], want)
 	}
@@ -97,7 +101,7 @@ func TestBuildOTPBlock_DurationMatchesRecordTokenDefault(t *testing.T) {
 func TestBuildOTPBlock_RequiresBothMailerAndStore(t *testing.T) {
 	// Mailer alone or RecordTokens alone — both must be wired for
 	// passwordless OTP to actually work end-to-end.
-	if buildOTPBlock(&Deps{})["enabled"] != false {
+	if buildOTPBlock(context.Background(), &Deps{})["enabled"] != false {
 		t.Error("otp.enabled with no deps should be false")
 	}
 }
@@ -106,13 +110,14 @@ func TestBuildMFABlock_DefaultDuration300(t *testing.T) {
 	// 5 minutes — matches mfa.DefaultChallengeTTL. Hard-coded here as
 	// a guard: if the MFA package bumps the default, this test should
 	// fail loudly so we update both sides.
-	if buildMFABlock(&Deps{})["duration"] != 300 {
-		t.Errorf("mfa.duration = %v, want 300", buildMFABlock(&Deps{})["duration"])
+	ctx := context.Background()
+	if buildMFABlock(ctx, &Deps{})["duration"] != 300 {
+		t.Errorf("mfa.duration = %v, want 300", buildMFABlock(ctx, &Deps{})["duration"])
 	}
 }
 
 func TestBuildMFABlock_RequiresBothEnrollmentAndChallenge(t *testing.T) {
-	if buildMFABlock(&Deps{})["enabled"] != false {
+	if buildMFABlock(context.Background(), &Deps{})["enabled"] != false {
 		t.Error("mfa.enabled with no deps should be false")
 	}
 }
@@ -121,7 +126,7 @@ func TestBuildWebAuthnBlock_EnabledTracksVerifier(t *testing.T) {
 	// Verifier is the load-bearing dep — the discovery block reflects
 	// its presence. Store can be wired alone (admin-API enumeration)
 	// without making the signin path advertise readiness.
-	if buildWebAuthnBlock(&Deps{})["enabled"] != false {
+	if buildWebAuthnBlock(context.Background(), &Deps{})["enabled"] != false {
 		t.Error("webauthn.enabled with nil verifier should be false")
 	}
 }

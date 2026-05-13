@@ -1,4 +1,6 @@
 import { useSignal } from "@preact/signals";
+import { Link } from "wouter-preact";
+import { useQuery } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -57,6 +59,23 @@ export function LoginScreen() {
   const busy = useSignal(false);
   const err = useSignal<string | null>(null);
 
+  // Probe whether the install has zero admins so the "create one via
+  // CLI" hint only shows in that genuinely-empty state (v1.7.46). The
+  // probe is the same one LoginGate uses; TanStack Query dedupes.
+  const bootstrapProbe = useQuery({
+    queryKey: ["bootstrap-probe"],
+    queryFn: async () => {
+      try {
+        return await fetch("/api/_admin/_bootstrap").then((r) => r.json());
+      } catch {
+        return { needsBootstrap: false } as { needsBootstrap: boolean };
+      }
+    },
+    staleTime: 60_000,
+    retry: false,
+  });
+  const noAdminsYet = bootstrapProbe.data?.needsBootstrap === true;
+
   const form = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: { email: "", password: "" },
@@ -76,6 +95,10 @@ export function LoginScreen() {
   }
 
   return (
+    // Pre-auth login form — full-viewport centered shell, intentionally
+    // not <AdminPage> (no sidebar / header context). docs/12 §Layout
+    // whitelists pre-auth screens.
+    // eslint-disable-next-line railbase/no-raw-page-shell
     <div class="min-h-screen flex items-center justify-center bg-muted p-6">
       <Card class="w-full max-w-sm">
         <CardHeader class="space-y-1">
@@ -145,13 +168,21 @@ export function LoginScreen() {
                 {busy.value ? "Signing in…" : "Sign in"}
               </Button>
 
-              <p class="text-xs text-muted-foreground">
-                No admins yet? Create one with{" "}
-                <code class="rb-mono px-1 py-0.5 bg-muted rounded">
-                  railbase admin create &lt;email&gt;
-                </code>
-                {" "}or use the bootstrap wizard.
+              <p class="text-xs text-muted-foreground text-center">
+                <Link href="/forgot-password" class="underline">
+                  Forgot password?
+                </Link>
               </p>
+
+              {noAdminsYet ? (
+                <p class="text-xs text-muted-foreground">
+                  No admins yet? Create one with{" "}
+                  <code class="font-mono px-1 py-0.5 bg-muted rounded">
+                    railbase admin create &lt;email&gt;
+                  </code>
+                  {" "}or use the bootstrap wizard.
+                </p>
+              ) : null}
             </form>
           </Form>
         </CardContent>

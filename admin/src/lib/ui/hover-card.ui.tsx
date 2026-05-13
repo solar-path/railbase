@@ -82,6 +82,7 @@ export const HoverCardTrigger = forwardRef<
     <PopperAnchor anchorRef={ctx.anchorRef}>
       <Comp
         ref={ref as Ref<HTMLAnchorElement>}
+        data-slot="hover-card-trigger"
         data-state={ctx.open ? 'open' : 'closed'}
         onMouseEnter={(e: Event) => {
           onMouseEnter?.(e as any)
@@ -143,6 +144,7 @@ export const HoverCardContent = forwardRef<HTMLDivElement, HoverCardContentProps
               if (typeof ref === 'function') ref(el)
               else if (ref) (ref as { current: HTMLDivElement | null }).current = el
             }}
+            data-slot="hover-card-content"
             data-state={ctx.open ? 'open' : 'closed'}
             data-side={dataSide(floating.placement)}
             data-align={dataAlign(floating.placement)}

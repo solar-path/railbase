@@ -58,6 +58,13 @@ func (d *Deps) totpEnrollStartHandler(w http.ResponseWriter, r *http.Request) {
 		rerr.WriteJSON(w, rerr.New(rerr.CodeNotFound, "auth collection %q not found", collName))
 		return
 	}
+	// v1.7.48 — block new TOTP enrollments when the wizard turned 2FA
+	// off. Existing enrollments stay usable (they remain in the DB);
+	// disabling at confirm/auth is what fully shuts the surface down.
+	if denied := d.requireMethod(r.Context(), "auth.totp.enabled", "totp", true); denied != nil {
+		rerr.WriteJSON(w, denied)
+		return
+	}
 	if d.TOTPEnrollments == nil {
 		rerr.WriteJSON(w, rerr.New(rerr.CodeInternal, "totp not configured"))
 		return
@@ -109,6 +116,14 @@ func (d *Deps) totpEnrollConfirmHandler(w http.ResponseWriter, r *http.Request) 
 	collName := chi.URLParam(r, "name")
 	if !isAuthCollection(collName) {
 		rerr.WriteJSON(w, rerr.New(rerr.CodeNotFound, "auth collection %q not found", collName))
+		return
+	}
+	// v1.7.48 — gated alongside the start endpoint. Without this, an
+	// enroll-start that succeeded before the disable could complete
+	// after, leaving a "live" enrollment for a method the operator
+	// has since turned off.
+	if denied := d.requireMethod(r.Context(), "auth.totp.enabled", "totp", true); denied != nil {
+		rerr.WriteJSON(w, denied)
 		return
 	}
 	if d.TOTPEnrollments == nil {
@@ -249,6 +264,17 @@ func (d *Deps) authWithTOTPHandler(w http.ResponseWriter, r *http.Request) {
 	collName := chi.URLParam(r, "name")
 	if !isAuthCollection(collName) {
 		rerr.WriteJSON(w, rerr.New(rerr.CodeNotFound, "auth collection %q not found", collName))
+		return
+	}
+	// v1.7.48 — refuse to complete a TOTP challenge when 2FA is
+	// disabled. Paired with the signinHandler MFA-branch skip: when
+	// the wizard disables TOTP, password-only signin issues a session
+	// directly without challenging the second factor. This endpoint
+	// guards against challenge tokens minted BEFORE the disable from
+	// being redeemed AFTER (the challenge cookie/token has a TTL but
+	// not a "is the method still enabled?" check otherwise).
+	if denied := d.requireMethod(r.Context(), "auth.totp.enabled", "totp", true); denied != nil {
+		rerr.WriteJSON(w, denied)
 		return
 	}
 	if d.MFAChallenges == nil || d.TOTPEnrollments == nil {

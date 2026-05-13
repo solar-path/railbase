@@ -33,11 +33,11 @@ services:
         condition: service_healthy
     environment:
       RAILBASE_DSN: postgres://railbase:railbase@postgres:5432/railbase?sslmode=disable
-      RAILBASE_HTTP_ADDR: ":8090"
+      RAILBASE_HTTP_ADDR: ":8095"
       RAILBASE_LOG_LEVEL: info
       RAILBASE_LOG_FORMAT: json
     ports:
-      - "8090:8090"
+      - "8095:8095"
     restart: unless-stopped
 
 volumes:

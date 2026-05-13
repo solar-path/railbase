@@ -28,6 +28,10 @@ import type {
   RecordsListResponse,
   RealtimeStats,
   HealthResponse,
+  MetricsSnapshot,
+  SystemAdminListResponse,
+  SystemAdminSessionListResponse,
+  SystemSessionListResponse,
   TrashListResponse,
   Webhook,
   WebhookCreatedResponse,
@@ -55,6 +59,23 @@ export const adminAPI = {
   },
   me(): Promise<{ record: AdminRecord }> {
     return api.request("GET", "/me");
+  },
+
+  // ---- password recovery (v1.7.46) ----
+  // Public endpoints; safe to call without an active session. The
+  // backend always responds 200 on forgot-password (anti-enumeration)
+  // except when the mailer is unconfigured — that returns 503 with a
+  // hint pointing at the CLI escape hatch.
+  forgotPassword(email: string): Promise<{ ok: true; message: string }> {
+    return api.request("POST", "/forgot-password", { body: { email } });
+  },
+  resetPassword(
+    token: string,
+    newPassword: string,
+  ): Promise<{ ok: true; sessions_revoked?: number; message: string }> {
+    return api.request("POST", "/reset-password", {
+      body: { token, new_password: newPassword },
+    });
   },
 
   // ---- schema ----
@@ -321,6 +342,14 @@ export const adminAPI = {
   health(): Promise<HealthResponse> {
     return api.request("GET", "/health");
   },
+  // In-process metric registry snapshot — HTTP throughput, error
+  // counters, latency histogram, hook invocations. Companion to
+  // health(): /health is point-in-time external state, /metrics is
+  // monotonic counters that the chart strip converts into rates
+  // client-side via useMetricRate.
+  metrics(): Promise<MetricsSnapshot> {
+    return api.request("GET", "/metrics");
+  },
 
   // ---- webhooks (v1.7.17 §3.11) ----
   // Outbound webhooks admin surface. Display-once secret on create
@@ -424,6 +453,32 @@ export const adminAPI = {
   },
   cacheClear(name: string): Promise<void> {
     return api.request("POST", `/cache/${encodeURIComponent(name)}/clear`);
+  },
+
+  // ---- system tables (v1.7.x §3.11) ----
+  // Read-only browsers over the sensitive `_admins`, `_admin_sessions`,
+  // and `_sessions` tables. CRUD lives on the CLI; the audit hook on
+  // each call ensures every operator read is on the chain.
+  listSystemAdmins(
+    opts: { page?: number; perPage?: number } = {},
+  ): Promise<SystemAdminListResponse> {
+    return api.request("GET", "/_system/admins", {
+      query: { page: opts.page, perPage: opts.perPage },
+    });
+  },
+  listSystemAdminSessions(
+    opts: { page?: number; perPage?: number } = {},
+  ): Promise<SystemAdminSessionListResponse> {
+    return api.request("GET", "/_system/admin-sessions", {
+      query: { page: opts.page, perPage: opts.perPage },
+    });
+  },
+  listSystemSessions(
+    opts: { page?: number; perPage?: number } = {},
+  ): Promise<SystemSessionListResponse> {
+    return api.request("GET", "/_system/sessions", {
+      query: { page: opts.page, perPage: opts.perPage },
+    });
   },
 
   // ---- trash (v1.7.x §3.11) ----

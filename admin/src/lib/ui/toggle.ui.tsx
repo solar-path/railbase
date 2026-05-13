@@ -5,7 +5,7 @@ import { cn } from './cn'
 import { useControllable } from './_primitives/use-controllable'
 
 export const toggleVariants = cva(
-  'inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors hover:bg-muted hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-[state=on]:bg-accent data-[state=on]:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
+  'inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-[color,background-color,box-shadow] hover:bg-muted hover:text-muted-foreground outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] disabled:pointer-events-none disabled:opacity-50 data-[state=on]:bg-accent data-[state=on]:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
   {
     variants: {
       variant: {
@@ -56,6 +56,7 @@ export const Toggle = forwardRef<HTMLButtonElement, ToggleProps>(
       <button
         ref={ref as Ref<HTMLButtonElement>}
         type={type ?? 'button'}
+        data-slot="toggle"
         data-state={value ? 'on' : 'off'}
         aria-pressed={value}
         class={cn(toggleVariants({ variant, size }), klass as string, className)}

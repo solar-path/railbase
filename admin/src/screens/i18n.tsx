@@ -6,10 +6,12 @@ import { z } from "zod";
 import { adminAPI } from "../api/admin";
 import { APIError, isAPIError } from "../api/client";
 import type { I18nCoverage, I18nLocalesResponse } from "../api/types";
+import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Card } from "@/lib/ui/card.ui";
 import { Badge } from "@/lib/ui/badge.ui";
+import { toast } from "@/lib/ui/sonner.ui";
 import {
   Form,
   FormControl,
@@ -69,10 +71,6 @@ const LOCALE_REGEX = /^[a-z]{2,3}(-[A-Z]{2})?$/;
 export function I18nScreen() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<string | null>(null);
-  const [toast, setToast] = useState<{
-    kind: "success" | "error";
-    msg: string;
-  } | null>(null);
 
   const localesQ = useQuery({
     queryKey: ["i18n-locales"],
@@ -153,7 +151,7 @@ export function I18nScreen() {
     if (fileQ.data.locale !== selected) return;
     form.reset(defaultValues);
     // form is stable; reset only when the loaded data changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [fileQ.data, selected, defaultValues]);
 
   const saveM = useMutation({
@@ -169,7 +167,7 @@ export function I18nScreen() {
       // settles. Pre-emptively snapshot what we just saved so the
       // dirty flag clears immediately rather than after the round-trip.
       form.reset(vars.entries);
-      setToast({ kind: "success", msg: "Saved" });
+      toast.success("Saved");
       void qc.invalidateQueries({ queryKey: ["i18n-locales"] });
       void qc.invalidateQueries({ queryKey: ["i18n-file", vars.locale] });
     },
@@ -196,36 +194,28 @@ export function I18nScreen() {
             }
           }
           if (mapped > 0) {
-            setToast({ kind: "error", msg: "Validation errors — see fields." });
+            toast.error("Validation errors — see fields.");
             return;
           }
         }
       }
       const msg = err instanceof Error ? err.message : String(err);
-      setToast({ kind: "error", msg: `Error: ${msg}` });
+      toast.error(`Error: ${msg}`);
     },
   });
 
   const deleteM = useMutation({
     mutationFn: (locale: string) => adminAPI.i18nFileDelete(locale),
     onSuccess: (_data, locale) => {
-      setToast({ kind: "success", msg: `Removed override for ${locale}` });
+      toast.success(`Removed override for ${locale}`);
       void qc.invalidateQueries({ queryKey: ["i18n-locales"] });
       void qc.invalidateQueries({ queryKey: ["i18n-file", locale] });
     },
     onError: (err) => {
       const msg = err instanceof Error ? err.message : String(err);
-      setToast({ kind: "error", msg: `Error: ${msg}` });
+      toast.error(`Error: ${msg}`);
     },
   });
-
-  // Toast auto-dismiss after 3s. Stable across rerenders because we
-  // reset the timer every time a new toast lands.
-  useEffect(() => {
-    if (!toast) return;
-    const id = window.setTimeout(() => setToast(null), 3000);
-    return () => window.clearTimeout(id);
-  }, [toast]);
 
   const handleSave = useCallback(
     () =>
@@ -295,26 +285,28 @@ export function I18nScreen() {
   }
 
   return (
-    <div className="space-y-4">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Translations</h1>
-          <p className="text-sm text-muted-foreground">
+    <AdminPage>
+      <AdminPage.Header
+        title="Translations"
+        description={
+          <>
             Edit per-locale override bundles in{" "}
-            <span className="rb-mono">pb_data/i18n/</span>. Embedded
+            <span className="font-mono">pb_data/i18n/</span>. Embedded
             defaults ship in the binary; overrides win when present.
-          </p>
-        </div>
-        <Button
-          type="button"
-          size="sm"
-          onClick={handleNewLocale}
-        >
-          + New locale
-        </Button>
-      </header>
+          </>
+        }
+        actions={
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleNewLocale}
+          >
+            + New locale
+          </Button>
+        }
+      />
 
-      <div className="space-y-3">
+      <AdminPage.Body className="space-y-3">
         {selected === null ? (
           <EmptyState />
         ) : (
@@ -353,21 +345,8 @@ export function I18nScreen() {
             )}
           </>
         )}
-      </div>
-
-      {toast ? (
-        <div
-          className={
-            "fixed bottom-4 right-4 z-50 rounded border px-3 py-2 text-sm shadow-lg " +
-            (toast.kind === "success"
-              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-              : "border-destructive/30 bg-destructive/10 text-destructive")
-          }
-        >
-          {toast.msg}
-        </div>
-      ) : null}
-    </div>
+      </AdminPage.Body>
+    </AdminPage>
   );
 }
 
@@ -387,7 +366,7 @@ function LocaleSelectItem({
   return (
     <SelectItem value={locale}>
       <span class="flex items-center gap-2">
-        <span className="rb-mono">{locale}</span>
+        <span className="font-mono">{locale}</span>
         {isEmbedded ? (
           <Badge variant="secondary" className="text-[9px] px-1 py-0">
             bin
@@ -396,13 +375,13 @@ function LocaleSelectItem({
         {isOverride ? (
           <Badge
             variant="outline"
-            className="text-[9px] px-1 py-0 border-amber-200 bg-amber-50 text-amber-700"
+            className="text-[9px] px-1 py-0 border-input bg-muted text-foreground"
           >
             ovr
           </Badge>
         ) : null}
         {cov ? (
-          <span className="text-[11px] rb-mono text-muted-foreground ml-1">
+          <span className="text-[11px] font-mono text-muted-foreground ml-1">
             {cov.translated}/{cov.total_keys}
           </span>
         ) : null}
@@ -442,7 +421,7 @@ function StatsHeader({
             <Select value={locale} onValueChange={onSelect}>
               <SelectTrigger className="w-[260px]">
                 <SelectValue>
-                  <span className="rb-mono">{locale}</span>
+                  <span className="font-mono">{locale}</span>
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -461,8 +440,8 @@ function StatsHeader({
               <span
                 className={
                   coverage.missing_keys.length === 0
-                    ? "text-emerald-700"
-                    : "text-amber-700"
+                    ? "text-primary"
+                    : "text-foreground"
                 }
               >
                 {coverage.missing_keys.length} missing
@@ -539,7 +518,7 @@ function TranslationsTable({
             const ref = reference[k];
             return (
               <TableRow key={k}>
-                <TableCell className="align-top rb-mono text-[12px] text-foreground break-all">
+                <TableCell className="align-top font-mono text-[12px] text-foreground break-all">
                   {k}
                 </TableCell>
                 <TableCell className="align-top">
@@ -566,7 +545,7 @@ function TranslationsTable({
                             />
                           </FormControl>
                           {showHint ? (
-                            <div className="mt-1 text-[11px] text-muted-foreground rb-mono break-all">
+                            <div className="mt-1 text-[11px] text-muted-foreground font-mono break-all">
                               reference: {ref}
                             </div>
                           ) : null}
@@ -602,15 +581,15 @@ function UnavailableState() {
           Per-locale override bundles for the i18n catalog.
         </p>
       </header>
-      <div className="rounded-lg border-2 border-dashed border-amber-300 bg-amber-50 p-6 max-w-2xl">
-        <div className="text-sm font-medium text-amber-900">
+      <div className="rounded-lg border-2 border-dashed border-input bg-muted p-6 max-w-2xl">
+        <div className="text-sm font-medium text-foreground">
           i18n overrides directory not configured.
         </div>
-        <div className="text-xs text-amber-800 mt-2 leading-relaxed">
+        <div className="text-xs text-foreground mt-2 leading-relaxed">
           Set the{" "}
-          <span className="rb-mono">RAILBASE_I18N_DIR</span> environment
+          <span className="font-mono">RAILBASE_I18N_DIR</span> environment
           variable (e.g.{" "}
-          <span className="rb-mono">pb_data/i18n</span>) and restart the
+          <span className="font-mono">pb_data/i18n</span>) and restart the
           server. Override files override embedded bundles per-locale; the
           editor will pick them up on next load.
         </div>

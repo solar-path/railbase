@@ -18,6 +18,11 @@ import type { FieldSpec } from "../api/types";
 
 type Palette = "green" | "blue" | "amber" | "red" | "neutral";
 
+// Status pills carry 5-state semantic meaning (workflow scannability);
+// collapsing to a single theme accent would destroy the visual signal.
+// Literals retained intentionally — disable the color rule for the
+// palette block.
+/* eslint-disable railbase/no-hardcoded-tw-color */
 export const STATUS_PALETTE: Record<Palette, string> = {
   green: "bg-emerald-100 text-emerald-800 ring-emerald-200",
   blue: "bg-sky-100 text-sky-800 ring-sky-200",
@@ -25,6 +30,7 @@ export const STATUS_PALETTE: Record<Palette, string> = {
   red: "bg-rose-100 text-rose-800 ring-rose-200",
   neutral: "bg-neutral-100 text-neutral-700 ring-neutral-200",
 };
+/* eslint-enable railbase/no-hardcoded-tw-color */
 
 // Map common workflow vocabulary to a stable palette slot. Unknown
 // strings hash to neutral so the cell never looks broken on schema
@@ -113,7 +119,7 @@ export function StatusInput({
           onChange(e.currentTarget.value === "" ? null : e.currentTarget.value);
         }}
         placeholder="status"
-        className="mt-1 w-full rounded border border-neutral-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-900"
+        className="mt-1 w-full rounded border border-input px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
       />
     );
   }
@@ -126,7 +132,7 @@ export function StatusInput({
         setDraft(v);
         onChange(v === "" ? null : v);
       }}
-      className="mt-1 w-full rounded border border-neutral-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-900"
+      className="mt-1 w-full rounded border border-input px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
     >
       <option value="">— none —</option>
       {opts.map((o) => (

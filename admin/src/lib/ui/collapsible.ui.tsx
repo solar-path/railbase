@@ -5,6 +5,7 @@ import type { ComponentChildren } from 'preact'
 import { Presence } from './_primitives/presence'
 import { useControllable } from './_primitives/use-controllable'
 import { Slot } from './_primitives/slot'
+import { cn } from './cn'
 
 interface CollapsibleCtx {
   open: boolean
@@ -39,6 +40,7 @@ export const Collapsible = forwardRef<HTMLDivElement, CollapsibleProps>(
       <Ctx.Provider value={{ open: value, setOpen: setValue, disabled }}>
         <div
           ref={ref as Ref<HTMLDivElement>}
+          data-slot="collapsible"
           data-state={value ? 'open' : 'closed'}
           data-disabled={disabled ? '' : undefined}
           {...props}
@@ -61,6 +63,7 @@ export const CollapsibleTrigger = forwardRef<
     <Comp
       ref={ref as Ref<HTMLButtonElement>}
       type={asChild ? undefined : (type ?? 'button')}
+      data-slot="collapsible-trigger"
       aria-expanded={open}
       data-state={open ? 'open' : 'closed'}
       data-disabled={disabled ? '' : undefined}
@@ -76,13 +79,21 @@ export const CollapsibleTrigger = forwardRef<
 CollapsibleTrigger.displayName = 'CollapsibleTrigger'
 
 export const CollapsibleContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
-  ({ children, ...props }, ref) => {
+  ({ class: klass, className, children, ...props }, ref) => {
     const { open } = useCollapsible()
     return (
       <Presence present={open}>
         <div
           ref={ref as Ref<HTMLDivElement>}
+          data-slot="collapsible-content"
           data-state={open ? 'open' : 'closed'}
+          class={cn(
+            'overflow-hidden',
+            'data-[state=open]:animate-in data-[state=closed]:animate-out',
+            'data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0',
+            klass as string,
+            className,
+          )}
           {...props}
         >
           {children}

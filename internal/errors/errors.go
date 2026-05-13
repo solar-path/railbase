@@ -29,14 +29,19 @@ import (
 type Code string
 
 const (
-	CodeNotFound     Code = "not_found"
-	CodeUnauthorized Code = "unauthorized"
-	CodeForbidden    Code = "forbidden"
-	CodeValidation   Code = "validation"
-	CodeConflict     Code = "conflict"
-	CodeRateLimit    Code = "rate_limit"
-	CodeUnavailable  Code = "unavailable"
-	CodeInternal     Code = "internal"
+	CodeNotFound           Code = "not_found"
+	CodeUnauthorized       Code = "unauthorized"
+	CodeForbidden          Code = "forbidden"
+	CodeValidation         Code = "validation"
+	CodeConflict           Code = "conflict"
+	CodeRateLimit          Code = "rate_limit"
+	CodeUnavailable        Code = "unavailable"
+	CodeInternal           Code = "internal"
+	// CodePreconditionFailed (v1.7.43) — request is well-formed but a
+	// server-side state invariant isn't met. First user: the mailer-
+	// gate on POST /_bootstrap (admin-create requires either mailer
+	// configured OR explicit skip).
+	CodePreconditionFailed Code = "precondition_failed"
 )
 
 // Error is the canonical Railbase error type.
@@ -117,6 +122,8 @@ func HTTPStatus(c Code) int {
 		return http.StatusBadRequest
 	case CodeConflict:
 		return http.StatusConflict
+	case CodePreconditionFailed:
+		return http.StatusPreconditionFailed
 	case CodeRateLimit:
 		return http.StatusTooManyRequests
 	case CodeUnavailable:

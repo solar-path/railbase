@@ -10,7 +10,7 @@ LDFLAGS := -s -w \
 	-X github.com/railbase/railbase/internal/buildinfo.Tag=$(TAG) \
 	-X github.com/railbase/railbase/internal/buildinfo.Date=$(DATE)
 
-DEV_DSN ?= postgres://railbase:railbase@localhost:54329/railbase?sslmode=disable
+DEV_DSN ?= postgres://$(shell whoami)@/railbase?host=/tmp&sslmode=disable
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -94,6 +94,31 @@ run-embed: build-embed ## Run with embedded postgres (downloads PG on first run)
 	RAILBASE_LOG_LEVEL=debug \
 	RAILBASE_LOG_FORMAT=text \
 	./bin/railbase-embed serve
+
+DEV_HTTP_ADDR ?= :8080
+
+dev: build ## HMR dev mode — backend on $(DEV_HTTP_ADDR) against $(DEV_DSN), auto-migrates, Vite on :5173. Open http://localhost:5173/_/
+	@echo "→ backend on $(DEV_HTTP_ADDR) → DSN=$(DEV_DSN)"
+	@echo "→ admin (HMR) on http://localhost:5173/_/"
+	@echo "→ press Ctrl-C once to stop both"
+	@pkill -f 'bin/railbase serve' 2>/dev/null || true
+	@lsof -ti 5173 2>/dev/null | xargs kill -9 2>/dev/null || true
+	@echo "→ applying migrations…"
+	@RAILBASE_DSN="$(DEV_DSN)" ./bin/railbase migrate up 2>&1 | tail -3 || true
+	@trap 'kill 0' INT TERM EXIT; \
+	  (RAILBASE_DSN="$(DEV_DSN)" RAILBASE_HTTP_ADDR="$(DEV_HTTP_ADDR)" RAILBASE_LOG_LEVEL=debug RAILBASE_LOG_FORMAT=text ./bin/railbase serve & \
+	   cd admin && npm run dev -- --port 5173 --strictPort); \
+	  wait
+
+dev-embed: build-embed ## HMR dev mode with embedded postgres (no external PG needed; downloads PG on first run)
+	@echo "→ backend (embedded PG) on $(DEV_HTTP_ADDR)  |  admin (HMR) on http://localhost:5173/_/"
+	@echo "→ press Ctrl-C once to stop both"
+	@pkill -f 'bin/railbase-embed serve' 2>/dev/null || true
+	@lsof -ti 5173 2>/dev/null | xargs kill -9 2>/dev/null || true
+	@trap 'kill 0' INT TERM EXIT; \
+	  (RAILBASE_EMBED_POSTGRES=true RAILBASE_HTTP_ADDR="$(DEV_HTTP_ADDR)" RAILBASE_LOG_LEVEL=debug RAILBASE_LOG_FORMAT=text ./bin/railbase-embed serve & \
+	   cd admin && npm run dev -- --port 5173 --strictPort); \
+	  wait
 
 compose-up: ## docker-compose up
 	docker compose up -d --build

@@ -4,7 +4,7 @@
 
 ## Идентичность
 
-**System admin (superuser)** — администратор инсталляции Railbase. Доступ к admin UI, schema, миграциям, plugins, audit. Хранится в `_system_admins`. Не subject of application RBAC.
+**System admin (superuser)** — администратор инсталляции Railbase. Доступ к admin UI, schema, миграциям, plugins, audit. Хранится в `_admins` (в более ранних драфтах документации называлась `_system_admins`; фактическое имя в миграциях v0.5+ короче). Не subject of application RBAC.
 
 **Application user** — конечный пользователь приложения, построенного на Railbase. Хранится в auth collections (`users`, `sellers`, etc.).
 

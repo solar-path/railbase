@@ -113,6 +113,7 @@ export const TooltipTrigger = forwardRef<
       <Comp
         ref={ref as Ref<HTMLButtonElement>}
         type={asChild ? undefined : 'button'}
+        data-slot="tooltip-trigger"
         data-state={ctx.open ? 'open' : 'closed'}
         onMouseEnter={(e: Event) => {
           onMouseEnter?.(e as any)
@@ -178,6 +179,7 @@ export const TooltipContent = forwardRef<HTMLDivElement, TooltipContentProps>(
               else if (ref) (ref as { current: HTMLDivElement | null }).current = el
             }}
             role="tooltip"
+            data-slot="tooltip-content"
             data-state={ctx.open ? 'open' : 'closed'}
             data-side={dataSide(floating.placement)}
             data-align={dataAlign(floating.placement)}

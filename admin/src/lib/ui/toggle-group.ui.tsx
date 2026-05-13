@@ -63,6 +63,7 @@ export const ToggleGroup = forwardRef<HTMLDivElement, ToggleGroupProps>((props, 
         <div
           ref={ref as Ref<HTMLDivElement>}
           role="group"
+          data-slot="toggle-group"
           class={cn('flex items-center justify-center gap-1', klass as string, className)}
           {...(rest as HTMLAttributes<HTMLDivElement>)}
         >
@@ -110,6 +111,7 @@ export const ToggleGroupItem = forwardRef<HTMLButtonElement, ToggleGroupItemProp
         ref={ref as Ref<HTMLButtonElement>}
         type="button"
         aria-pressed={isOn}
+        data-slot="toggle-group-item"
         data-state={isOn ? 'on' : 'off'}
         data-disabled={isDisabled ? '' : undefined}
         disabled={isDisabled}

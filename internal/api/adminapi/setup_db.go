@@ -14,7 +14,7 @@ package adminapi
 // admin creation runs AFTER db config. The security model is:
 //
 //   - In cold-boot setup mode the server is reachable on its admin port
-//     (typically :8090 on localhost). Operator-grade access to the
+//     (typically :8095 on localhost). Operator-grade access to the
 //     running process is assumed; a hostile observer on the local
 //     network would also be able to read pb_data/ directly.
 //   - The save endpoint writes to <DataDir>/.dsn at 0600 (operator-owned).
@@ -180,6 +180,13 @@ func (d *Deps) MountSetupOnly(r chi.Router) {
 	r.Get("/_bootstrap", setupBootstrapStubHandler)
 	r.Post("/_bootstrap", setupBootstrapRefuseHandler)
 	d.mountSetupDB(r)
+	// v1.7.43 — mailer-setup endpoints are public-by-design (no admin yet).
+	// In setup-mode the Settings manager isn't wired (no DB connection),
+	// so /mailer-save / /mailer-skip nil-guard early; the operator must
+	// finish DB setup first which kicks the process back into normal-boot
+	// where Settings IS wired. /mailer-status still works (returns clean
+	// state), letting the wizard render the form pre-emptively.
+	d.mountSetupMailer(r)
 }
 
 // setupBootstrapStubHandler returns the admin-SPA-compatible probe
