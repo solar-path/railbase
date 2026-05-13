@@ -90,7 +90,7 @@ export function DashboardScreen() {
       <AdminPage.Body className="space-y-6">
       <section class="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Collections" value={schemaQ.data?.count ?? "—"} href="/schema" />
-        <StatCard label="Audit events" value={auditQ.data?.totalItems ?? "—"} href="/audit" />
+        <StatCard label="Audit events" value={auditQ.data?.totalItems ?? "—"} href="/logs/audit" />
         <StatCard label="Settings" value="↗" href="/settings" />
         <StatCard label="Docs" value="↗" href="https://github.com/railbase/railbase" external />
       </section>
@@ -108,21 +108,21 @@ export function DashboardScreen() {
           title="Requests/min"
           value={reqRate.rate != null ? reqRate.rate.toFixed(0) : "—"}
           data={reqRate.samples}
-          href="/health"
+          href="/logs/health"
           intent="primary"
         />
         <TrendStripCard
           title="Errors/min"
           value={errRate.rate != null ? errRate.rate.toFixed(1) : "—"}
           data={errRate.samples}
-          href="/health"
+          href="/logs/health"
           intent={errRate.rate != null && errRate.rate > 0 ? "warn" : "neutral"}
         />
         <TrendStripCard
           title="Audit events (24h)"
           value={healthQ.data?.audit.last_24h ?? "—"}
           data={auditTrend}
-          href="/audit"
+          href="/logs/audit"
           intent="info"
         />
         <TrendStripCard
@@ -133,7 +133,7 @@ export function DashboardScreen() {
               : "—"
           }
           data={jobsTrend}
-          href="/jobs"
+          href="/data/_jobs"
           intent="primary"
         />
       </section>

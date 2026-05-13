@@ -328,30 +328,116 @@ Main bundle target: ≤ 145 KB gzip. Lazy chunk (Recharts) грузится то
 
 ## Layout
 
+### ADR (v0.9) — IA reorg to PocketBase-style 3-tab header
+
+Pre-v0.9 the sidebar grouped 28 screens into 6 labeled sections (Data /
+Auth / Operations / Observability / Messaging / System). Operationally
+this worked but the sidebar grew until it was unbrowsable at a glance.
+
+v0.9 adopts the PocketBase mental model:
+
+1. **Three top tabs** in the header — **Data / Logs / Settings** — own
+   the conceptual split between (a) writable data, (b) read-only
+   observability, (c) configuration.
+2. **Context-aware sidebar** that swaps contents based on the active
+   top tab. Single `SidebarProvider` keeps state (collapse, schema
+   query cache) across tab transitions.
+3. **Dashboard** moves off the sidebar — accessed by clicking the
+   "Railbase admin" logo. Matches PocketBase, which has no dashboard
+   widget in its sidebar at all.
+4. **System tables** (`_api_tokens`, `_admins`, `_admin_sessions`,
+   `_sessions`, `_jobs`) surface under the Data sidebar's collapsible
+   System group at `/data/_xxx`. Each maps to its existing specialized
+   screen via a dispatch in `records.tsx`.
+5. **Search input** filters the Data sidebar's collections list
+   (PocketBase-style live filter).
+
+All pre-v0.9 URLs continue to work via redirects registered in
+`app.tsx`. Bookmark + external-link continuity is preserved.
+
+### URL redirects (pre-v0.9 → v0.9)
+
+| Old | New |
+|---|---|
+| `/audit` | `/logs/audit` |
+| `/logs` | `/logs/app` |
+| `/realtime` | `/logs/realtime` |
+| `/health` | `/logs/health` |
+| `/cache` | `/logs/cache` |
+| `/notifications` | `/logs/notifications` |
+| `/notifications/prefs` | `/settings/notifications` |
+| `/email-events`, `/mailer/events` | `/logs/email-events` |
+| `/mailer-templates`, `/mailer/templates` | `/settings/mailer/templates` |
+| `/mailer` | `/settings/mailer` |
+| `/webhooks` | `/settings/webhooks` |
+| `/backups` | `/settings/backups` |
+| `/hooks` | `/settings/hooks` |
+| `/i18n` | `/settings/i18n` |
+| `/trash` | `/settings/trash` |
+| `/api-tokens` | `/data/_api_tokens` |
+| `/system/admins` | `/data/_admins` |
+| `/system/admin-sessions` | `/data/_admin_sessions` |
+| `/system/sessions` | `/data/_sessions` |
+| `/jobs` | `/data/_jobs` |
+
+### Visual layout (v0.9+)
+
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  [Railbase] Search (⌘K)            [Env: prod] [👤 Admin▾] │
-├──────────────┬──────────────────────────────────────────────┤
-│ ⊞ Dashboard  │                                              │
-│ ▼ Data       │                                              │
-│  • posts     │                                              │
-│  • users     │           Main content area                  │
-│  • + new     │                                              │
-│ ▼ Auth       │                                              │
-│  • Sessions  │                                              │
-│  • Devices   │                                              │
-│  • Tokens    │                                              │
-│ ⚙ RBAC       │                                              │
-│ ⏱ Jobs       │                                              │
-│ 📤 Realtime  │                                              │
-│ 📜 Audit     │                                              │
-│ 🛠 Hooks     │                                              │
-│ ✉ Mailer     │                                              │
-│ 📁 Documents │                                              │
-│ 💾 Backups   │                                              │
-│ 🔌 Plugins   │                                              │
-│ ⚙ Settings   │                                              │
-└──────────────┴──────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│ [Railbase admin]   Data · Logs · Settings              ⌘K  ▾ │
+├──────────────┬────────────────────────────────────────────────┤
+│  (sidebar)   │                                                │
+│              │             Main content area                  │
+│  contents    │                                                │
+│  depend on   │                                                │
+│  active tab  │                                                │
+│              │                                                │
+│ user@…       │                                                │
+│ [Sign out]   │                                                │
+└──────────────┴────────────────────────────────────────────────┘
+```
+
+**Tab: Data** (path `/data/*`, `/`, `/schema`)
+
+```
+[View schema]
+[Search collections… ]
+Collections
+  posts
+  users
+  …
+▸ System            ← collapsible (collapsed by default)
+   _api_tokens
+   _admins
+   _admin_sessions
+   _sessions
+   _jobs
+```
+
+**Tab: Logs** (path `/logs/*`)
+
+```
+Audit
+App logs
+Realtime
+Health
+Cache
+Email events
+Notifications
+```
+
+**Tab: Settings** (path `/settings/*`)
+
+```
+General
+Mailer
+  Templates
+Notifications
+Webhooks
+Backups
+Hooks
+Translations
+Trash
 ```
 
 ## Screens — полный список (22)

@@ -18,14 +18,14 @@ test.beforeEach(async ({ page }) => {
 });
 
 const screens: Array<{ path: string; name: string; landmark: RegExp }> = [
-  { path: "/_/schema",      name: "schema.png",      landmark: /Schema/i },
-  { path: "/_/audit",       name: "audit.png",       landmark: /Audit log/i },
-  { path: "/_/logs",        name: "logs.png",        landmark: /Logs/i },
-  { path: "/_/jobs",        name: "jobs.png",        landmark: /Jobs/i },
-  { path: "/_/health",      name: "health.png",      landmark: /Health/i },
-  { path: "/_/settings",    name: "settings.png",    landmark: /Settings/i },
-  { path: "/_/api-tokens",  name: "api-tokens.png",  landmark: /API tokens/i },
-  { path: "/_/mailer",      name: "mailer.png",      landmark: /Mailer/i },
+  { path: "/_/schema",              name: "schema.png",      landmark: /Schema/i },
+  { path: "/_/logs/audit",          name: "audit.png",       landmark: /Audit log/i },
+  { path: "/_/logs/app",            name: "logs.png",        landmark: /Logs/i },
+  { path: "/_/data/_jobs",          name: "jobs.png",        landmark: /Jobs/i },
+  { path: "/_/logs/health",         name: "health.png",      landmark: /Health/i },
+  { path: "/_/settings",            name: "settings.png",    landmark: /Settings/i },
+  { path: "/_/data/_api_tokens",    name: "api-tokens.png",  landmark: /API tokens/i },
+  { path: "/_/settings/mailer",     name: "mailer.png",      landmark: /Mailer/i },
 ];
 
 for (const s of screens) {

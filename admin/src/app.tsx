@@ -1,4 +1,4 @@
-import { Route, Switch, Router } from "wouter-preact";
+import { Route, Switch, Router, Redirect } from "wouter-preact";
 import { useBrowserLocation } from "wouter-preact/use-browser-location";
 import { AuthProvider, useAuth } from "./auth/context";
 import { LoginScreen } from "./screens/login";
@@ -10,8 +10,6 @@ import { SchemaScreen } from "./screens/schema";
 import { SettingsScreen } from "./screens/settings";
 import { AuditScreen } from "./screens/audit";
 import { LogsScreen } from "./screens/logs";
-import { JobsScreen } from "./screens/jobs";
-import { APITokensScreen } from "./screens/api_tokens";
 import { BackupsScreen } from "./screens/backups";
 import { NotificationsScreen } from "./screens/notifications";
 import { NotificationsPrefsScreen } from "./screens/notifications-prefs";
@@ -27,9 +25,9 @@ import { HealthScreen } from "./screens/health";
 import { CacheScreen } from "./screens/cache";
 import { RecordsScreen } from "./screens/records";
 import { RecordEditorScreen } from "./screens/record_editor";
-import { SystemAdminsScreen } from "./screens/system_admins";
-import { SystemAdminSessionsScreen } from "./screens/system_admin_sessions";
-import { SystemSessionsScreen } from "./screens/system_sessions";
+// System tables (api_tokens / admins / admin_sessions / sessions /
+// jobs) are now reached via /data/_xxx URLs and dispatched from
+// records.tsx — no direct routes in this file.
 import { Shell } from "./layout/shell";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "./api/admin";
@@ -85,42 +83,78 @@ function Routes() {
   return (
     <Shell>
       <Switch>
+        {/* v0.9 IA reorg: PocketBase-style 3-tab layout (Data / Logs /
+            Settings). Old URLs continue to work via the redirects
+            registered first, so bookmarks and external links keep
+            resolving. See docs/12-admin-ui.md §Layout for the full
+            mapping. */}
+
+        {/* --- Redirects (pre-v0.9 URLs → new locations) --- */}
+        <Route path="/audit" component={makeRedirect("/logs/audit")} />
+        <Route path="/logs" component={makeRedirect("/logs/app")} />
+        <Route path="/realtime" component={makeRedirect("/logs/realtime")} />
+        <Route path="/health" component={makeRedirect("/logs/health")} />
+        <Route path="/cache" component={makeRedirect("/logs/cache")} />
+        <Route path="/notifications/prefs" component={makeRedirect("/settings/notifications")} />
+        <Route path="/notifications" component={makeRedirect("/logs/notifications")} />
+        <Route path="/email-events" component={makeRedirect("/logs/email-events")} />
+        <Route path="/mailer/events" component={makeRedirect("/logs/email-events")} />
+        <Route path="/mailer-templates" component={makeRedirect("/settings/mailer/templates")} />
+        <Route path="/mailer/templates" component={makeRedirect("/settings/mailer/templates")} />
+        <Route path="/mailer" component={makeRedirect("/settings/mailer")} />
+        <Route path="/webhooks" component={makeRedirect("/settings/webhooks")} />
+        <Route path="/backups" component={makeRedirect("/settings/backups")} />
+        <Route path="/hooks" component={makeRedirect("/settings/hooks")} />
+        <Route path="/i18n" component={makeRedirect("/settings/i18n")} />
+        <Route path="/trash" component={makeRedirect("/settings/trash")} />
+        <Route path="/api-tokens" component={makeRedirect("/data/_api_tokens")} />
+        <Route path="/system/admins" component={makeRedirect("/data/_admins")} />
+        <Route path="/system/admin-sessions" component={makeRedirect("/data/_admin_sessions")} />
+        <Route path="/system/sessions" component={makeRedirect("/data/_sessions")} />
+        <Route path="/jobs" component={makeRedirect("/data/_jobs")} />
+
+        {/* --- Primary routes --- */}
         <Route path="/" component={DashboardScreen} />
         <Route path="/schema" component={SchemaScreen} />
-        <Route path="/settings" component={SettingsScreen} />
-        <Route path="/audit" component={AuditScreen} />
-        <Route path="/logs" component={LogsScreen} />
-        <Route path="/jobs" component={JobsScreen} />
-        <Route path="/api-tokens" component={APITokensScreen} />
-        <Route path="/backups" component={BackupsScreen} />
-        <Route path="/notifications/prefs" component={NotificationsPrefsScreen} />
-        <Route path="/notifications" component={NotificationsScreen} />
-        <Route path="/trash" component={TrashScreen} />
-        {/* Mailer surface (Wave 2 IA reorg): /mailer is the landing
-            tab page; /mailer/templates and /mailer/events delegate to
-            the existing screens. The pre-IA paths /mailer-templates
-            and /email-events redirect to the new locations for
-            bookmark + external-link continuity. */}
-        <Route path="/mailer" component={MailerScreen} />
-        <Route path="/mailer/templates" component={MailerTemplatesScreen} />
-        <Route path="/mailer/events" component={EmailEventsScreen} />
-        <Route path="/mailer-templates" component={MailerTemplatesRedirect} />
-        <Route path="/email-events" component={EmailEventsRedirect} />
-        <Route path="/realtime" component={RealtimeScreen} />
-        <Route path="/webhooks" component={WebhooksScreen} />
-        <Route path="/hooks" component={HooksScreen} />
-        <Route path="/i18n" component={I18nScreen} />
-        <Route path="/health" component={HealthScreen} />
-        <Route path="/cache" component={CacheScreen} />
-        <Route path="/system/admins" component={SystemAdminsScreen} />
-        <Route path="/system/admin-sessions" component={SystemAdminSessionsScreen} />
-        <Route path="/system/sessions" component={SystemSessionsScreen} />
+
+        {/* Data: /data/:name handles both user collections and the
+            system tables (records.tsx dispatches on the _ prefix). */}
         <Route path="/data/:name/:id" component={RecordEditorScreen} />
         <Route path="/data/:name" component={RecordsScreen} />
+
+        {/* Logs */}
+        <Route path="/logs/audit" component={AuditScreen} />
+        <Route path="/logs/app" component={LogsScreen} />
+        <Route path="/logs/realtime" component={RealtimeScreen} />
+        <Route path="/logs/health" component={HealthScreen} />
+        <Route path="/logs/cache" component={CacheScreen} />
+        <Route path="/logs/email-events" component={EmailEventsScreen} />
+        <Route path="/logs/notifications" component={NotificationsScreen} />
+
+        {/* Settings */}
+        <Route path="/settings" component={SettingsScreen} />
+        <Route path="/settings/mailer" component={MailerScreen} />
+        <Route path="/settings/mailer/templates" component={MailerTemplatesScreen} />
+        <Route path="/settings/notifications" component={NotificationsPrefsScreen} />
+        <Route path="/settings/webhooks" component={WebhooksScreen} />
+        <Route path="/settings/backups" component={BackupsScreen} />
+        <Route path="/settings/hooks" component={HooksScreen} />
+        <Route path="/settings/i18n" component={I18nScreen} />
+        <Route path="/settings/trash" component={TrashScreen} />
+
         <Route component={NotFound} />
       </Switch>
     </Shell>
   );
+}
+
+// makeRedirect — pure SPA redirect via wouter's <Redirect>. Replaces
+// the prior hand-rolled history.replaceState + reload pattern so the
+// 20+ legacy URL mappings don't all trigger a full page reload.
+function makeRedirect(to: string) {
+  return function RedirectTo() {
+    return <Redirect to={to} replace />;
+  };
 }
 
 // LoginGate decides between login and bootstrap based on a server
@@ -162,20 +196,3 @@ function NotFound() {
   );
 }
 
-// Permanent client-side redirects from pre-IA-reorg paths to the new
-// Messaging-group routes. Wave 2 (docs/12 §Layout). Replace history so
-// the browser Back button doesn't bounce between the two URLs.
-function MailerTemplatesRedirect() {
-  if (typeof window !== "undefined") {
-    window.history.replaceState({}, "", "/_/mailer/templates");
-    window.location.reload();
-  }
-  return null;
-}
-function EmailEventsRedirect() {
-  if (typeof window !== "undefined") {
-    window.history.replaceState({}, "", "/_/mailer/events");
-    window.location.reload();
-  }
-  return null;
-}

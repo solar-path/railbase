@@ -25,26 +25,41 @@ type Row = {
   path: string;
 };
 
+// PAGES — hand-maintained list of admin destinations. Order is roughly
+// frequency-of-use, grouped by top tab (Data / Logs / Settings). Update
+// in lockstep with route changes in app.tsx — otherwise the palette
+// triggers a redirect → full reload on selection.
 const PAGES: Row[] = [
-  { kind: "page", label: "Dashboard", path: "/" },
-  { kind: "page", label: "Schema", path: "/schema" },
-  { kind: "page", label: "Settings", path: "/settings" },
-  { kind: "page", label: "Audit log", path: "/audit" },
-  { kind: "page", label: "Logs", path: "/logs" },
-  { kind: "page", label: "Jobs", path: "/jobs" },
-  { kind: "page", label: "API tokens", path: "/api-tokens" },
-  { kind: "page", label: "Backups", path: "/backups" },
-  { kind: "page", label: "Notifications", path: "/notifications" },
-  { kind: "page", label: "Notification preferences", path: "/notifications/prefs" },
-  { kind: "page", label: "Trash", path: "/trash" },
-  { kind: "page", label: "Mailer templates", path: "/mailer-templates" },
-  { kind: "page", label: "Email events", path: "/email-events" },
-  { kind: "page", label: "Realtime", path: "/realtime" },
-  { kind: "page", label: "Webhooks", path: "/webhooks" },
-  { kind: "page", label: "Hooks", path: "/hooks" },
-  { kind: "page", label: "Translations", path: "/i18n" },
-  { kind: "page", label: "Health & metrics", path: "/health" },
-  { kind: "page", label: "Cache inspector", path: "/cache" },
+  // Top-level
+  { kind: "page", label: "Dashboard",                path: "/" },
+  { kind: "page", label: "Schema",                   path: "/schema" },
+
+  // Data → System
+  { kind: "page", label: "API tokens",               path: "/data/_api_tokens" },
+  { kind: "page", label: "System admins",            path: "/data/_admins" },
+  { kind: "page", label: "Admin sessions",           path: "/data/_admin_sessions" },
+  { kind: "page", label: "User sessions",            path: "/data/_sessions" },
+  { kind: "page", label: "Jobs",                     path: "/data/_jobs" },
+
+  // Logs
+  { kind: "page", label: "Audit log",                path: "/logs/audit" },
+  { kind: "page", label: "Application logs",         path: "/logs/app" },
+  { kind: "page", label: "Realtime",                 path: "/logs/realtime" },
+  { kind: "page", label: "Health & metrics",         path: "/logs/health" },
+  { kind: "page", label: "Cache inspector",          path: "/logs/cache" },
+  { kind: "page", label: "Email events",             path: "/logs/email-events" },
+  { kind: "page", label: "Notifications log",        path: "/logs/notifications" },
+
+  // Settings
+  { kind: "page", label: "Settings",                 path: "/settings" },
+  { kind: "page", label: "Mailer",                   path: "/settings/mailer" },
+  { kind: "page", label: "Mailer templates",         path: "/settings/mailer/templates" },
+  { kind: "page", label: "Notification preferences", path: "/settings/notifications" },
+  { kind: "page", label: "Webhooks",                 path: "/settings/webhooks" },
+  { kind: "page", label: "Backups",                  path: "/settings/backups" },
+  { kind: "page", label: "Hooks",                    path: "/settings/hooks" },
+  { kind: "page", label: "Translations",             path: "/settings/i18n" },
+  { kind: "page", label: "Trash",                    path: "/settings/trash" },
 ];
 
 export default function CommandPalette() {

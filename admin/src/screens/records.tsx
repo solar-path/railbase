@@ -3,6 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "wouter-preact";
 import { adminAPI, recordsAPI } from "../api/admin";
 import { AdminPage } from "../layout/admin_page";
+import { APITokensScreen } from "./api_tokens";
+import { SystemAdminsScreen } from "./system_admins";
+import { SystemAdminSessionsScreen } from "./system_admin_sessions";
+import { SystemSessionsScreen } from "./system_sessions";
+import { JobsScreen } from "./jobs";
 import type {
   BatchResponse,
   CollectionSpec,
@@ -69,10 +74,31 @@ function isInlineEditable(t: FieldSpec["type"]): boolean {
   }
 }
 
+// v0.9 IA reorg: system tables surface under /data/_xxx. Each maps to
+// the existing specialized screen — the UX is identical to v0.8
+// (api_tokens modal-create, jobs queue tabs, etc.), only the URL
+// changed. The thin top-level component dispatches; the records-grid
+// hooks below only run for user collections, preserving React's
+// rules-of-hooks ordering.
 export function RecordsScreen() {
   const params = useParams<{ name: string }>();
   const name = params.name;
 
+  if (name === "_api_tokens") return <APITokensScreen />;
+  if (name === "_admins") return <SystemAdminsScreen />;
+  if (name === "_admin_sessions") return <SystemAdminSessionsScreen />;
+  if (name === "_sessions") return <SystemSessionsScreen />;
+  if (name === "_jobs") return <JobsScreen />;
+
+  // The actual records-grid UI (with <AdminPage>) lives in
+  // UserCollectionRecords below — this top-level screen is just a
+  // router. ESLint's no-raw-page-shell can't see through the
+  // dispatcher pattern; the user-facing shells DO use <AdminPage>.
+  // eslint-disable-next-line railbase/no-raw-page-shell
+  return <UserCollectionRecords name={name} />;
+}
+
+function UserCollectionRecords({ name }: { name: string }) {
   const qc = useQueryClient();
   const schemaQ = useQuery({ queryKey: ["schema"], queryFn: () => adminAPI.schema() });
   const spec = schemaQ.data?.collections.find((c) => c.name === name) ?? null;

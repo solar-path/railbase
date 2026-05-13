@@ -84,7 +84,7 @@ export function MailerScreen() {
         </Card>
 
         <Link
-          href="/mailer/templates"
+          href="/settings/mailer/templates"
           className="block rounded-lg border bg-card hover:bg-accent transition-colors"
         >
           <CardContent className="p-4">
@@ -101,7 +101,7 @@ export function MailerScreen() {
         </Link>
 
         <Link
-          href="/mailer/events"
+          href="/logs/email-events"
           className="block rounded-lg border bg-card hover:bg-accent transition-colors"
         >
           <CardContent className="p-4">

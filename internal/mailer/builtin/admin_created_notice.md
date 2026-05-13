@@ -19,6 +19,6 @@ If you authorised this change, no action is needed.
 If you didn't — this is a possible compromise. Review the audit log immediately and revoke the new account if necessary:
 
 - **Admin UI:** {{ admin_url }}
-- **Audit log:** {{ admin_url }}/audit
+- **Audit log:** {{ admin_url }}/logs/audit
 
 — The {{ site.name }} team

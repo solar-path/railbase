@@ -107,7 +107,7 @@ export function LogsScreen() {
             Past 14 days by default (configurable via{" "}
             <code className="font-mono">logs.retention_days</code>).
             Debug surface — for compliance / forensic review, see{" "}
-            <a href="/_/audit" className="underline">Audit log</a>.
+            <a href="/_/logs/audit" className="underline">Audit log</a>.
           </>
         }
         actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
