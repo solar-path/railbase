@@ -104,7 +104,7 @@ func TestExport_PDFTemplateE2E(t *testing.T) {
 	}
 
 	// Collection with both XLSX + PDF-template configured.
-	postsTpl := schemabuilder.NewCollection("posts").
+	postsTpl := schemabuilder.NewCollection("posts").PublicRules().
 		Field("title", schemabuilder.NewText().Required()).
 		Field("status", schemabuilder.NewText()).
 		Export(
@@ -113,7 +113,7 @@ func TestExport_PDFTemplateE2E(t *testing.T) {
 			}),
 		)
 	// Same shape but pointing at a missing template — exercises 404.
-	postsMissing := schemabuilder.NewCollection("posts_missing").
+	postsMissing := schemabuilder.NewCollection("posts_missing").PublicRules().
 		Field("title", schemabuilder.NewText().Required()).
 		Export(
 			schemabuilder.ExportPDF(schemabuilder.PDFExportConfig{
@@ -121,7 +121,7 @@ func TestExport_PDFTemplateE2E(t *testing.T) {
 			}),
 		)
 	// Template that blows up at exec time.
-	postsBroken := schemabuilder.NewCollection("posts_broken").
+	postsBroken := schemabuilder.NewCollection("posts_broken").PublicRules().
 		Field("title", schemabuilder.NewText().Required()).
 		Export(
 			schemabuilder.ExportPDF(schemabuilder.PDFExportConfig{
@@ -130,7 +130,7 @@ func TestExport_PDFTemplateE2E(t *testing.T) {
 		)
 	// Collection with Template configured but mount-time loader is
 	// nil — should fall back to data-table layout.
-	postsNoLoader := schemabuilder.NewCollection("posts_no_loader").
+	postsNoLoader := schemabuilder.NewCollection("posts_no_loader").PublicRules().
 		Field("title", schemabuilder.NewText().Required()).
 		Export(
 			schemabuilder.ExportPDF(schemabuilder.PDFExportConfig{
@@ -304,7 +304,7 @@ func TestExport_PDFTemplateE2E(t *testing.T) {
 	if err := pdfTpl.Load(); err != nil {
 		t.Fatal(err)
 	}
-	helpersCol := schemabuilder.NewCollection("helpers_smoke").
+	helpersCol := schemabuilder.NewCollection("helpers_smoke").PublicRules().
 		Field("t", schemabuilder.NewText().Required()).
 		Export(
 			schemabuilder.ExportPDF(schemabuilder.PDFExportConfig{

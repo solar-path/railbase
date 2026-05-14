@@ -64,10 +64,10 @@ func TestSoftDeleteE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	posts := schemabuilder.NewCollection("posts").
+	posts := schemabuilder.NewCollection("posts").PublicRules().
 		SoftDelete().
 		Field("title", schemabuilder.NewText().Required())
-	hardPosts := schemabuilder.NewCollection("memos").
+	hardPosts := schemabuilder.NewCollection("memos").PublicRules().
 		Field("title", schemabuilder.NewText().Required())
 	registry.Reset()
 	registry.Register(posts)

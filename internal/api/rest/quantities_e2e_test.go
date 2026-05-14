@@ -66,7 +66,7 @@ func TestQuantitiesTypesE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	products := schemabuilder.NewCollection("products").
+	products := schemabuilder.NewCollection("products").PublicRules().
 		Field("weight", schemabuilder.NewQuantity().Units("kg", "lb", "g").Required()).
 		Field("cooking_time", schemabuilder.NewDuration())
 	registry.Reset()

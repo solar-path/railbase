@@ -61,6 +61,11 @@ type ProbeResponse = {
   dsn?: string;
   version?: string;
   db_exists?: boolean;
+  // will_create_db: probe succeeded against the `postgres` maintenance
+  // DB — the target database doesn't exist yet but "Create database"
+  // is ticked, so it'll be created on save. Rendered as a neutral
+  // banner, not a red failure. See setup_db.go::probeViaMaintenanceDB.
+  will_create_db?: boolean;
   can_create_db?: boolean;
   // v1.7.42 foreign-DB safety scan. See setup_db.go::setupProbeResponse
   // docstring for the decision matrix.
@@ -970,6 +975,21 @@ function ExistingRailbaseNotice() {
 }
 
 function ProbeResult({ probe }: { probe: ProbeResponse }) {
+  if (probe.ok && probe.will_create_db) {
+    // Target DB doesn't exist yet, but "Create database" is ticked and
+    // the probe verified the server + credentials + CREATEDB privilege
+    // against the `postgres` maintenance DB. Neutral, not an error —
+    // the database is created when the operator saves.
+    return (
+      <div className="text-sm bg-muted border border-input text-foreground rounded px-3 py-2 space-y-1">
+        <p className="font-medium">Database will be created on save.</p>
+        {probe.hint ? <p className="text-xs">{probe.hint}</p> : null}
+        {probe.version ? (
+          <p className="font-mono text-xs">{probe.version}</p>
+        ) : null}
+      </div>
+    );
+  }
   if (probe.ok) {
     return (
       <div className="text-sm bg-primary/10 border border-primary/40 text-primary rounded px-3 py-2 space-y-1">

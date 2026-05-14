@@ -1,4 +1,9 @@
-.PHONY: help build build-embed test test-race vet lint run-dev run-embed clean docker compose-up compose-down smoke cross-compile check-size release-snapshot verify-release reset
+.PHONY: help admin build build-embed test test-race vet lint run-dev run-embed clean docker compose-up compose-down smoke cross-compile check-size release-snapshot verify-release reset
+
+# `make` with no args builds the correct production binary: rebuilds
+# the admin SPA, then go build into bin/dist/. Run `make help` for the
+# full target list.
+.DEFAULT_GOAL := build
 
 GOFLAGS ?=
 COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
@@ -30,18 +35,25 @@ HOST_OS   := $(shell go env GOOS)
 HOST_ARCH := $(shell go env GOARCH)
 HOST_EXT  := $(if $(filter windows,$(HOST_OS)),.exe,)
 
-build: ## Build production binary (no embedded postgres). Writes bin/dist/railbase_<host>_<arch> + updates the bin/railbase symlink.
+# Every build target writes ONLY into bin/dist/ — no symlinks, no
+# binaries loose in bin/. These are the canonical host-binary paths.
+BIN       := bin/dist/railbase_$(HOST_OS)_$(HOST_ARCH)$(HOST_EXT)
+BIN_EMBED := bin/dist/railbase-embed_$(HOST_OS)_$(HOST_ARCH)$(HOST_EXT)
+
+admin: ## Build the admin SPA into admin/dist/ (gitignored; embedded by the Go binary via //go:embed).
+	npm --prefix admin run build
+
+build: admin ## Build production binary (no embedded postgres) to bin/dist/. Rebuilds the admin SPA first.
 	@mkdir -p bin/dist
 	go build $(GOFLAGS) -trimpath -ldflags="$(LDFLAGS)" \
-	  -o bin/dist/railbase_$(HOST_OS)_$(HOST_ARCH)$(HOST_EXT) ./cmd/railbase
-	@ln -sf dist/railbase_$(HOST_OS)_$(HOST_ARCH)$(HOST_EXT) bin/railbase
-	@echo "→ bin/railbase → dist/railbase_$(HOST_OS)_$(HOST_ARCH)$(HOST_EXT)"
+	  -o $(BIN) ./cmd/railbase
+	@echo "→ $(BIN)"
 
-build-embed: ## Build dev binary with embedded postgres support (-tags embed_pg). Separate filename so it doesn't shadow the release symlink.
-	@mkdir -p bin
+build-embed: admin ## Build dev binary with embedded postgres support (-tags embed_pg) to bin/dist/. Rebuilds the admin SPA first.
+	@mkdir -p bin/dist
 	go build $(GOFLAGS) -tags embed_pg -trimpath -ldflags="$(LDFLAGS)" \
-	  -o bin/railbase-embed$(HOST_EXT) ./cmd/railbase
-	@echo "→ bin/railbase-embed$(HOST_EXT) (dev binary, includes embedded postgres)"
+	  -o $(BIN_EMBED) ./cmd/railbase
+	@echo "→ $(BIN_EMBED) (dev binary, includes embedded postgres)"
 
 test: ## Run unit tests
 	go test ./...
@@ -58,7 +70,7 @@ lint: ## golangci-lint (if installed)
 smoke: ## Run the v0.9 / docs/17 #2 5-minute smoke gate
 	bash scripts/smoke-5min.sh
 
-cross-compile: ## v1 SHIP gate — build all 6 target binaries under bin/dist/
+cross-compile: admin ## v1 SHIP gate — build all 6 target binaries under bin/dist/ (rebuilds the admin SPA first)
 	@mkdir -p bin/dist
 	@for goos in linux darwin windows; do \
 	  for goarch in amd64 arm64; do \
@@ -70,8 +82,6 @@ cross-compile: ## v1 SHIP gate — build all 6 target binaries under bin/dist/
 	        -o "$$out" ./cmd/railbase || exit $$?; \
 	  done; \
 	done
-	@ln -sf dist/railbase_$(HOST_OS)_$(HOST_ARCH)$(HOST_EXT) bin/railbase
-	@echo "→ bin/railbase → dist/railbase_$(HOST_OS)_$(HOST_ARCH)$(HOST_EXT)"
 
 check-size: ## docs/17 #1 — fail if any binary in bin/dist/ > 30 MB
 	bash scripts/check-binary-size.sh bin/dist/
@@ -96,13 +106,13 @@ run-dev: build ## Run against local Postgres at $(DEV_DSN)
 	RAILBASE_DSN=$(DEV_DSN) \
 	RAILBASE_LOG_LEVEL=debug \
 	RAILBASE_LOG_FORMAT=text \
-	./bin/railbase serve
+	./$(BIN) serve
 
 run-embed: build-embed ## Run with embedded postgres (downloads PG on first run)
 	RAILBASE_EMBED_POSTGRES=true \
 	RAILBASE_LOG_LEVEL=debug \
 	RAILBASE_LOG_FORMAT=text \
-	./bin/railbase-embed serve
+	./$(BIN_EMBED) serve
 
 DEV_HTTP_ADDR ?= :8080
 
@@ -110,22 +120,22 @@ dev: build ## HMR dev mode — backend on $(DEV_HTTP_ADDR) against $(DEV_DSN), a
 	@echo "→ backend on $(DEV_HTTP_ADDR) → DSN=$(DEV_DSN)"
 	@echo "→ admin (HMR) on http://localhost:5173/_/"
 	@echo "→ press Ctrl-C once to stop both"
-	@pkill -f 'bin/railbase serve' 2>/dev/null || true
+	@pkill -f '$(BIN) serve' 2>/dev/null || true
 	@lsof -ti 5173 2>/dev/null | xargs kill -9 2>/dev/null || true
 	@echo "→ applying migrations…"
-	@RAILBASE_DSN="$(DEV_DSN)" ./bin/railbase migrate up 2>&1 | tail -3 || true
+	@RAILBASE_DSN="$(DEV_DSN)" ./$(BIN) migrate up 2>&1 | tail -3 || true
 	@trap 'kill 0' INT TERM EXIT; \
-	  (RAILBASE_DSN="$(DEV_DSN)" RAILBASE_HTTP_ADDR="$(DEV_HTTP_ADDR)" RAILBASE_LOG_LEVEL=debug RAILBASE_LOG_FORMAT=text ./bin/railbase serve & \
+	  (RAILBASE_DSN="$(DEV_DSN)" RAILBASE_HTTP_ADDR="$(DEV_HTTP_ADDR)" RAILBASE_LOG_LEVEL=debug RAILBASE_LOG_FORMAT=text ./$(BIN) serve & \
 	   cd admin && npm run dev -- --port 5173 --strictPort); \
 	  wait
 
 dev-embed: build-embed ## HMR dev mode with embedded postgres (no external PG needed; downloads PG on first run)
 	@echo "→ backend (embedded PG) on $(DEV_HTTP_ADDR)  |  admin (HMR) on http://localhost:5173/_/"
 	@echo "→ press Ctrl-C once to stop both"
-	@pkill -f 'bin/railbase-embed serve' 2>/dev/null || true
+	@pkill -f '$(BIN_EMBED) serve' 2>/dev/null || true
 	@lsof -ti 5173 2>/dev/null | xargs kill -9 2>/dev/null || true
 	@trap 'kill 0' INT TERM EXIT; \
-	  (RAILBASE_EMBED_POSTGRES=true RAILBASE_HTTP_ADDR="$(DEV_HTTP_ADDR)" RAILBASE_LOG_LEVEL=debug RAILBASE_LOG_FORMAT=text ./bin/railbase-embed serve & \
+	  (RAILBASE_EMBED_POSTGRES=true RAILBASE_HTTP_ADDR="$(DEV_HTTP_ADDR)" RAILBASE_LOG_LEVEL=debug RAILBASE_LOG_FORMAT=text ./$(BIN_EMBED) serve & \
 	   cd admin && npm run dev -- --port 5173 --strictPort); \
 	  wait
 
@@ -144,7 +154,7 @@ docker: ## Build production docker image
 
 reset: ## Wipe install state — kill running binary, drop $(DATA_DIR), drop+recreate $(DEV_DB_NAME). Next start enters the bootstrap wizard from scratch.
 	@echo "→ stopping any running railbase…"
-	-@pkill -f 'bin/railbase' 2>/dev/null; true
+	-@pkill -f 'bin/dist/railbase' 2>/dev/null; true
 	@echo "→ removing $(DATA_DIR)/ (DSN, secret, audit seal key, hooks, storage, logs)…"
 	rm -rf $(DATA_DIR)
 	@echo "→ dropping + recreating database $(DEV_DB_NAME) as $(DEV_DB_USER) via $(DEV_DB_HOST)…"

@@ -66,7 +66,7 @@ func TestLocale2TypesE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	profiles := schemabuilder.NewCollection("profiles").
+	profiles := schemabuilder.NewCollection("profiles").PublicRules().
 		Field("lang", schemabuilder.NewLanguage().Required()).
 		Field("locale", schemabuilder.NewLocale()).
 		Field("home", schemabuilder.NewCoordinates())

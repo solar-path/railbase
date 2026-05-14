@@ -65,7 +65,7 @@ func TestContentTypesE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	themes := schemabuilder.NewCollection("themes").
+	themes := schemabuilder.NewCollection("themes").PublicRules().
 		Field("name", schemabuilder.NewText().Required()).
 		Field("accent", schemabuilder.NewColor().Required()).
 		Field("schedule", schemabuilder.NewCron()).

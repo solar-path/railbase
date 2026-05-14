@@ -62,10 +62,10 @@ func TestExportPDF_E2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	posts := schemabuilder.NewCollection("posts").
+	posts := schemabuilder.NewCollection("posts").PublicRules().
 		Field("title", schemabuilder.NewText().Required()).
 		Field("status", schemabuilder.NewText())
-	users := schemabuilder.NewAuthCollection("users")
+	users := schemabuilder.NewAuthCollection("users").PublicRules()
 	registry.Reset()
 	registry.Register(posts)
 	registry.Register(users)

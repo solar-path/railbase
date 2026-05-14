@@ -65,9 +65,9 @@ func TestIdentifiers2E2E(t *testing.T) {
 
 	// Two collections: one with EU-VAT auto-detect tax_id, one with US-EIN
 	// hinted tax_id + barcode (default auto-detect format).
-	euCompanies := schemabuilder.NewCollection("eu_companies").
+	euCompanies := schemabuilder.NewCollection("eu_companies").PublicRules().
 		Field("vat", schemabuilder.NewTaxID().Required())
-	usProducts := schemabuilder.NewCollection("us_products").
+	usProducts := schemabuilder.NewCollection("us_products").PublicRules().
 		Field("ein", schemabuilder.NewTaxID().Country("US")).
 		Field("ean", schemabuilder.NewBarcode().Required()).
 		Field("sku", schemabuilder.NewBarcode().Format("code128"))

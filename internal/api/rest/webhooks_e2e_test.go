@@ -70,7 +70,7 @@ func TestWebhooksE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	posts := schemabuilder.NewCollection("posts").
+	posts := schemabuilder.NewCollection("posts").PublicRules().
 		Field("title", schemabuilder.NewText().Required())
 	registry.Reset()
 	registry.Register(posts)

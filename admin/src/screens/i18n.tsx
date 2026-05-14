@@ -1,24 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
 import { adminAPI } from "../api/admin";
 import { APIError, isAPIError } from "../api/client";
 import type { I18nCoverage, I18nLocalesResponse } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
-import { Input } from "@/lib/ui/input.ui";
 import { Card } from "@/lib/ui/card.ui";
 import { Badge } from "@/lib/ui/badge.ui";
 import { toast } from "@/lib/ui/sonner.ui";
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormMessage,
-} from "@/lib/ui/form.ui";
 import {
   Select,
   SelectContent,
@@ -26,7 +15,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/lib/ui/select.ui";
-import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
+import {
+  QEditableList,
+  type QEditableColumn,
+  type QEditableListError,
+} from "@/lib/ui/QEditableList.ui";
 
 // Translations editor admin screen (v1.7.20 §3.11). Closes one of the
 // remaining §3.11 admin-UI surfaces — operators can audit per-locale
@@ -38,11 +31,10 @@ import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 //   ┌─────────────────────────────────────────────────────┐
 //   │ Locale: [ en  (42/42) ▾ ]   [Save] [Delete] [+ New] │
 //   │ ───────────────────────────────────────────────────── │
-//   │ ┌─ Key ──────────┬─ Translation ─┐                  │
-//   │ │ auth.signin    │ [Iniciar…]    │                  │
-//   │ │ errors.required│ [empty…]      │                  │
-//   │ │   (hint: «…»)  │               │                  │
-//   │ └────────────────┴───────────────┘                  │
+//   │ ┌─ Key ──────────┬─ Translation ─┬─ Reference (en) ─┐ │
+//   │ │ auth.signin    │ [Iniciar…]    │ Sign in          │ │
+//   │ │ errors.required│ [empty…]      │ Required         │ │
+//   │ └────────────────┴───────────────┴──────────────────┘ │
 //   └─────────────────────────────────────────────────────┘
 //
 // v1.7.40 — switched the sidebar locale list to a kit <Select>
@@ -50,16 +42,25 @@ import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 // dropdown shows the same at-a-glance translated/total numbers the
 // sidebar did, just on a more compact surface.
 //
-// The locale picker is mass-edit by design: the operator changes many
-// rows at once, then clicks Save. Auto-save is deferred — surprise
-// auto-writes to the i18n dir would risk persisting half-completed
-// translations to disk + git.
+// The field grid is a QEditableList spreadsheet: the Key + Reference
+// columns are `computed` (read-only display — keys come from the
+// embedded reference, not the operator), only the Translation column
+// is editable. The locale picker is mass-edit by design: the operator
+// changes many rows at once, then clicks Save. Auto-save is deferred —
+// surprise auto-writes to the i18n dir would risk persisting
+// half-completed translations to disk + git.
 //
 // `New locale` prompts for a BCP-47 tag, validates client-side against
-// the same regex the backend enforces, and seeds the form with the
+// the same regex the backend enforces, and seeds the grid with the
 // embedded reference values so the operator translates inline.
 
 const LOCALE_REGEX = /^[a-z]{2,3}(-[A-Z]{2})?$/;
+
+interface TranslationRow {
+  key: string;
+  value: string;
+  reference: string;
+}
 
 export function I18nScreen() {
   const qc = useQueryClient();
@@ -83,49 +84,43 @@ export function I18nScreen() {
     : undefined;
 
   // Reference key universe + current override keys + coverage's
-  // missing_keys. Sorted for stable rendering. Computed before the
-  // form because the dynamic zod schema's shape depends on it.
-  const rows = useMemo(() => {
+  // missing_keys, sorted for stable rendering. Each row carries the
+  // effective value (override bundle when present, else the embedded
+  // reference so a brand-new locale shows reference values pre-filled)
+  // plus the embedded reference for the read-only Reference column.
+  const seedRows = useMemo<TranslationRow[]>(() => {
     const keys = new Set<string>();
-    if (fileQ.data?.embedded) {
-      for (const k of Object.keys(fileQ.data.embedded)) keys.add(k);
-    }
-    if (fileQ.data?.override) {
-      for (const k of Object.keys(fileQ.data.override)) keys.add(k);
-    }
-    if (coverage?.missing_keys) {
-      for (const k of coverage.missing_keys) keys.add(k);
-    }
-    return Array.from(keys).sort();
+    const embedded = fileQ.data?.embedded ?? {};
+    const override = fileQ.data?.override ?? undefined;
+    for (const k of Object.keys(embedded)) keys.add(k);
+    if (override) for (const k of Object.keys(override)) keys.add(k);
+    if (coverage?.missing_keys) for (const k of coverage.missing_keys) keys.add(k);
+    const source = override ?? embedded;
+    return Array.from(keys)
+      .sort()
+      .map((key) => ({
+        key,
+        value: source[key] ?? "",
+        reference: embedded[key] ?? "",
+      }));
   }, [fileQ.data, coverage]);
 
-  // Dynamic zod schema built from the current key set. Every key is a
-  // free-form string; the backend does the heavy lifting (placeholder
-  // validation against the reference). Schema identity changes only
-  // when the key set does, so the resolver isn't re-built per keystroke.
-  const schema = useMemo(() => {
-    const shape: Record<string, z.ZodTypeAny> = {};
-    for (const key of rows) shape[key] = z.string();
-    return z.object(shape);
-  }, [rows]);
+  const [data, setData] = useState<TranslationRow[]>([]);
+  const [saved, setSaved] = useState<TranslationRow[]>([]);
+  const [cellErrors, setCellErrors] = useState<QEditableListError[]>([]);
+  const dataRef = useRef(data);
+  dataRef.current = data;
 
-  // Default values for the form: effective override bundle when one
-  // exists, else the embedded reference (so a brand-new locale shows
-  // the reference values pre-filled for inline translation).
-  const defaultValues = useMemo<Record<string, string>>(() => {
-    const out: Record<string, string> = {};
-    const source = fileQ.data?.override ?? fileQ.data?.embedded ?? {};
-    for (const key of rows) {
-      out[key] = source[key] ?? "";
-    }
-    return out;
-  }, [rows, fileQ.data]);
-
-  const form = useForm<Record<string, string>>({
-    resolver: zodResolver(schema),
-    defaultValues,
-    mode: "onSubmit",
-  });
+  // Re-seed the grid when the loaded file changes (locale switch /
+  // post-save invalidation). Resets both the live data and the saved
+  // snapshot so the dirty flag clears.
+  useEffect(() => {
+    if (!fileQ.data) return;
+    if (fileQ.data.locale !== selected) return;
+    setData(seedRows);
+    setSaved(seedRows);
+    setCellErrors([]);
+  }, [fileQ.data, selected, seedRows]);
 
   // Auto-select the default locale (typically "en") once the listing
   // resolves. We only do this if the user hasn't picked anything yet —
@@ -136,16 +131,10 @@ export function I18nScreen() {
     setSelected(localesQ.data.default);
   }, [localesQ.data, selected]);
 
-  // Re-seed the form when the loaded file changes (locale switch /
-  // post-save invalidation). reset() resets dirty + errors too, which
-  // matches the v1.7.20 buffer/savedBuffer pair this replaces.
-  useEffect(() => {
-    if (!fileQ.data) return;
-    if (fileQ.data.locale !== selected) return;
-    form.reset(defaultValues);
-    // form is stable; reset only when the loaded data changes.
-     
-  }, [fileQ.data, selected, defaultValues]);
+  const dirty = useMemo(
+    () => JSON.stringify(data) !== JSON.stringify(saved),
+    [data, saved],
+  );
 
   const saveM = useMutation({
     mutationFn: ({
@@ -156,16 +145,16 @@ export function I18nScreen() {
       entries: Record<string, string>;
     }) => adminAPI.i18nFilePut(locale, entries),
     onSuccess: (_data, vars) => {
-      // The reset in the effect above runs after the query refetch
-      // settles. Pre-emptively snapshot what we just saved so the
-      // dirty flag clears immediately rather than after the round-trip.
-      form.reset(vars.entries);
+      // Pre-emptively snapshot what we just saved so the dirty flag
+      // clears immediately rather than after the query round-trip.
+      setSaved(dataRef.current.map((r) => ({ ...r })));
+      setCellErrors([]);
       toast.success("Saved");
       void qc.invalidateQueries({ queryKey: ["i18n-locales"] });
       void qc.invalidateQueries({ queryKey: ["i18n-file", vars.locale] });
     },
     onError: (err) => {
-      // 422 with field-level errors → setError per key. Otherwise toast.
+      // 422 with field-level errors → per-cell errors. Otherwise toast.
       if (
         isAPIError(err) &&
         err.status === 422 &&
@@ -174,19 +163,21 @@ export function I18nScreen() {
       ) {
         const details = err.body.details as { fields?: unknown };
         if (details.fields && typeof details.fields === "object") {
-          let mapped = 0;
+          const next: QEditableListError[] = [];
           for (const [k, v] of Object.entries(
             details.fields as Record<string, unknown>,
           )) {
-            if (rows.includes(k)) {
-              form.setError(k, {
-                type: "server",
+            const rowIndex = dataRef.current.findIndex((r) => r.key === k);
+            if (rowIndex >= 0) {
+              next.push({
+                rowIndex,
+                columnKey: "value",
                 message: typeof v === "string" ? v : String(v),
               });
-              mapped++;
             }
           }
-          if (mapped > 0) {
+          if (next.length > 0) {
+            setCellErrors(next);
             toast.error("Validation errors — see fields.");
             return;
           }
@@ -210,22 +201,18 @@ export function I18nScreen() {
     },
   });
 
-  const handleSave = useCallback(
-    () =>
-      form.handleSubmit((values) => {
-        if (selected === null) return;
-        // Strip empty values: a row left blank is "not translated" and
-        // should not be persisted as `"key": ""`. The backend coverage
-        // computation already treats empty strings as missing, but
-        // pruning here keeps the on-disk file tidy.
-        const entries: Record<string, string> = {};
-        for (const [k, v] of Object.entries(values)) {
-          if (v !== "") entries[k] = v;
-        }
-        saveM.mutate({ locale: selected, entries });
-      })(),
-    [selected, form, saveM],
-  );
+  const handleSave = useCallback(() => {
+    if (selected === null) return;
+    // Strip empty values: a row left blank is "not translated" and
+    // should not be persisted as `"key": ""`. The backend coverage
+    // computation already treats empty strings as missing, but
+    // pruning here keeps the on-disk file tidy.
+    const entries: Record<string, string> = {};
+    for (const r of dataRef.current) {
+      if (r.value !== "") entries[r.key] = r.value;
+    }
+    saveM.mutate({ locale: selected, entries });
+  }, [selected, saveM]);
 
   const handleDelete = useCallback(() => {
     if (selected === null) return;
@@ -260,13 +247,10 @@ export function I18nScreen() {
     ) {
       return;
     }
-    // The fileQ refetch + the rows/defaultValues memo will seed the
-    // form from the embedded reference once the new locale loads.
+    // The fileQ refetch + the seedRows memo will seed the grid from
+    // the embedded reference once the new locale loads.
     setSelected(trimmed);
   }, [localesQ.data]);
-
-  const referenceMap = fileQ.data?.embedded ?? {};
-  const dirty = form.formState.isDirty;
 
   // Unavailable detection runs LAST: every hook above must dispatch
   // on every render so React's hook-order invariant holds even when
@@ -289,11 +273,7 @@ export function I18nScreen() {
           </>
         }
         actions={
-          <Button
-            type="button"
-            size="sm"
-            onClick={handleNewLocale}
-          >
+          <Button type="button" size="sm" onClick={handleNewLocale}>
             + New locale
           </Button>
         }
@@ -310,7 +290,7 @@ export function I18nScreen() {
               coverage={coverage}
               dirty={dirty}
               pending={saveM.isPending}
-              hasOverride={fileQ.data?.override !== null}
+              hasOverride={fileQ.data?.override != null}
               onSelect={(l) => setSelected(l)}
               onSave={handleSave}
               onDelete={handleDelete}
@@ -320,21 +300,16 @@ export function I18nScreen() {
               <Card className="p-6 text-sm text-muted-foreground">
                 Loading…
               </Card>
+            ) : data.length === 0 ? (
+              <Card className="border-dashed p-6 text-sm text-muted-foreground">
+                No translation keys yet. The reference (en) bundle is empty.
+              </Card>
             ) : (
-              <Form {...form}>
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    handleSave();
-                  }}
-                >
-                  <TranslationsTable
-                    rows={rows}
-                    control={form.control}
-                    reference={referenceMap}
-                  />
-                </form>
-              </Form>
+              <TranslationsGrid
+                data={data}
+                onChange={setData}
+                errors={cellErrors}
+              />
             )}
           </>
         )}
@@ -481,84 +456,55 @@ function StatsHeader({
   );
 }
 
-function TranslationsTable({
-  rows,
-  control,
-  reference,
+function TranslationsGrid({
+  data,
+  onChange,
+  errors,
 }: {
-  rows: string[];
-  control: ReturnType<typeof useForm<Record<string, string>>>["control"];
-  reference: Record<string, string>;
+  data: TranslationRow[];
+  onChange: (data: TranslationRow[]) => void;
+  errors: QEditableListError[];
 }) {
-  // QDatatable client mode over the key list. The Translation column has
-  // no `accessor`, so the built-in search box filters by key only — which
-  // is exactly the affordance an operator wants in a long key bundle.
-  // Form state lives in RHF and survives pagination (fields keep their
-  // value when unmounted), so Save still submits every key.
-  const columns = useMemo<ColumnDef<string>[]>(
+  // Key + Reference are `computed` (read-only display) — the operator
+  // never authors keys, they come from the embedded reference. Only
+  // the Translation cell is editable. minRows={Infinity} suppresses
+  // the per-row remove control: rows are the fixed key universe, not
+  // a user-managed list.
+  const columns = useMemo<QEditableColumn<TranslationRow>[]>(
     () => [
       {
-        id: "key",
+        key: "key",
         header: "Key",
-        width: "40%",
-        accessor: (k) => k,
-        class: "align-top font-mono text-[12px] text-foreground break-all",
-        cell: (k) => k,
+        type: "computed",
+        width: 280,
+        compute: (r) => r.key,
       },
       {
-        id: "translation",
+        key: "value",
         header: "Translation",
-        class: "align-top",
-        cell: (k) => {
-          const ref = reference[k];
-          return (
-            <FormField
-              control={control}
-              // Translation keys may contain dots ("auth.signin"), which
-              // RHF treats as nested paths. Cast through `as string` per
-              // the kit's dynamic-keys recipe — the schema's flat
-              // z.object() shape matches the flat accessor RHF uses when
-              // the name string is treated as a single literal key.
-              name={k as string}
-              render={({ field }) => {
-                const v = field.value ?? "";
-                const showHint = (v === "" || v === undefined) && ref;
-                return (
-                  <FormItem>
-                    <FormControl>
-                      <Input
-                        type="text"
-                        placeholder={ref ?? ""}
-                        className="h-8 text-sm"
-                        {...field}
-                      />
-                    </FormControl>
-                    {showHint ? (
-                      <div className="mt-1 text-[11px] text-muted-foreground font-mono break-all">
-                        reference: {ref}
-                      </div>
-                    ) : null}
-                    <FormMessage />
-                  </FormItem>
-                );
-              }}
-            />
-          );
-        },
+        type: "text",
+        width: 360,
+        placeholder: "Not translated",
+      },
+      {
+        key: "reference",
+        header: "Reference (en)",
+        type: "computed",
+        width: 280,
+        compute: (r) => r.reference || "—",
       },
     ],
-    [control, reference],
+    [],
   );
 
   return (
-    <QDatatable
+    <QEditableList
       columns={columns}
-      data={rows}
-      rowKey={(k) => k}
-      pageSize={50}
-      search
-      searchPlaceholder="Filter keys…"
-      emptyMessage="No translation keys yet. The reference (en) bundle is empty."
+      data={data}
+      onChange={onChange}
+      createEmpty={() => ({ key: "", value: "", reference: "" })}
+      minRows={Infinity}
+      errors={errors}
     />
   );
 }

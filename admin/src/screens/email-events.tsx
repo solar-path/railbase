@@ -7,9 +7,13 @@ import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
 import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 
-// Email events browser — paginated, filterable list of `_email_events`
+// Email events panel — paginated, filterable list of `_email_events`
 // rows (one row per recipient per send, populated by every
 // mailer.Send call via internal/mailer.EventStore).
+//
+// Rendered as the "Email events" category of the unified Logs screen
+// (logs.tsx); it returns AdminPage.Toolbar + .Body fragments, not a
+// full AdminPage shell.
 //
 // Backend endpoint: GET /api/_admin/email-events (v1.7.35e+).
 //
@@ -86,7 +90,7 @@ const columns: ColumnDef<EmailEvent>[] = [
   },
 ];
 
-export function EmailEventsScreen() {
+export function EmailEventsPanel() {
   const [total, setTotal] = useState(0);
 
   const [recipientInput, setRecipientInput] = useState("");
@@ -108,16 +112,11 @@ export function EmailEventsScreen() {
   const hasFilter = !!(recipient || event || template || bounceType || since || until);
 
   return (
-    <AdminPage>
-      <AdminPage.Header
-        title="Email events"
-        description={
-          <>
-            {total} event{total === 1 ? "" : "s"} total. Showing newest first.
-            One row per recipient per <code className="font-mono">mailer.Send</code> call.
-          </>
-        }
-      />
+    <>
+      <p className="text-sm text-muted-foreground">
+        {total} event{total === 1 ? "" : "s"} total. Showing newest first. One row
+        per recipient per <code className="font-mono">mailer.Send</code> call.
+      </p>
 
       <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
@@ -229,7 +228,7 @@ export function EmailEventsScreen() {
           }}
         />
       </AdminPage.Body>
-    </AdminPage>
+    </>
   );
 }
 

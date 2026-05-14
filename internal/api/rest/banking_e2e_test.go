@@ -63,7 +63,7 @@ func TestBankingTypesE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	accounts := schemabuilder.NewCollection("accounts").
+	accounts := schemabuilder.NewCollection("accounts").PublicRules().
 		Field("iban", schemabuilder.NewIBAN().Required()).
 		Field("bic", schemabuilder.NewBIC())
 	registry.Reset()

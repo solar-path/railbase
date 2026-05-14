@@ -65,7 +65,7 @@ func TestBanking2E2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	vendors := schemabuilder.NewCollection("vendors").
+	vendors := schemabuilder.NewCollection("vendors").PublicRules().
 		Field("acct", schemabuilder.NewBankAccount().Required()).
 		Field("qr", schemabuilder.NewQRCode().Format("url"))
 	registry.Reset()
@@ -203,7 +203,7 @@ func TestBanking2E2E(t *testing.T) {
 	// Easier: just check long qr_code via existing field with .Format("url")
 	// — we want to confirm a multi-line payload survives, but our field is
 	// declared .Format("url"). Re-register a fresh collection for vcard.
-	contacts := schemabuilder.NewCollection("contacts").
+	contacts := schemabuilder.NewCollection("contacts").PublicRules().
 		Field("vc", schemabuilder.NewQRCode().Format("vcard"))
 	registry.Register(contacts)
 	if _, err := pool.Exec(ctx, gen.CreateCollectionSQL(contacts.Spec())); err != nil {

@@ -61,7 +61,7 @@ func TestBatchOpsE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	items := schemabuilder.NewCollection("items").
+	items := schemabuilder.NewCollection("items").PublicRules().
 		Field("name", schemabuilder.NewText().Required()).
 		Field("qty", schemabuilder.NewNumber().Int())
 	registry.Reset()

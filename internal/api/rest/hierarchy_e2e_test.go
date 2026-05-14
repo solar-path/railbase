@@ -64,13 +64,13 @@ func TestHierarchyE2E(t *testing.T) {
 	}
 
 	// comments: AdjacencyList + Ordered combined (comment thread)
-	comments := schemabuilder.NewCollection("comments").
+	comments := schemabuilder.NewCollection("comments").PublicRules().
 		Field("body", schemabuilder.NewText().Required()).
 		AdjacencyList().
 		Ordered().
 		MaxDepth(4)
 	// nav_items: standalone Ordered (no AdjacencyList) — flat ordered list
-	nav := schemabuilder.NewCollection("nav_items").
+	nav := schemabuilder.NewCollection("nav_items").PublicRules().
 		Field("title", schemabuilder.NewText().Required()).
 		Ordered()
 	registry.Reset()

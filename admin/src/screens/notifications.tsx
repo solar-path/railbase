@@ -9,7 +9,11 @@ import { Badge } from "@/lib/ui/badge.ui";
 import { Checkbox } from "@/lib/ui/checkbox.ui";
 import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 
-// Notifications browser — cross-user log of every persisted notification.
+// Notifications panel — cross-user log of every persisted notification.
+// Rendered as the "Notifications" category of the unified Logs screen
+// (logs.tsx); it returns a stats banner + AdminPage.Toolbar + .Body
+// fragments, not a full AdminPage shell.
+//
 // Backend endpoint: GET /api/_admin/notifications (v1.7.10+).
 //
 // Distinct from the user-facing /api/notifications surface — admins
@@ -82,7 +86,7 @@ const columns: ColumnDef<NotificationRecord>[] = [
   },
 ];
 
-export function NotificationsScreen() {
+export function NotificationsPanel() {
   const [kindInput, setKindInput] = useState("");
   const [kind, setKind] = useState(""); // debounced
   const [channel, setChannel] = useState<ChannelFilter>("");
@@ -127,18 +131,11 @@ export function NotificationsScreen() {
     : [];
 
   return (
-    <AdminPage>
-      <AdminPage.Header
-        title="Notifications"
-        description={
-          <>
-            {stats
-              ? `${stats.total} delivered (${stats.unread} unread). `
-              : ""}
-            Cross-user log of persisted notifications. Showing newest first.
-          </>
-        }
-      />
+    <>
+      <p className="text-sm text-muted-foreground">
+        {stats ? `${stats.total} delivered (${stats.unread} unread). ` : ""}
+        Cross-user log of persisted notifications. Showing newest first.
+      </p>
 
       {stats ? (
         <div className="flex gap-2 items-baseline flex-wrap">
@@ -247,7 +244,7 @@ export function NotificationsScreen() {
           }}
         />
       </AdminPage.Body>
-    </AdminPage>
+    </>
   );
 }
 

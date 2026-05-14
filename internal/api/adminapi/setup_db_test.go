@@ -367,7 +367,7 @@ func TestSetupDB_setupProbeHint_MapsCommonErrors(t *testing.T) {
 		err  string
 		want string // substring of expected hint
 	}{
-		{"db missing", `pq: database "railbase" does not exist`, "Create database"},
+		{"db missing", `pq: database "railbase" does not exist`, "Create the database if it doesn't exist"},
 		{"auth failed", "password authentication failed for user ali", "Authentication failed"},
 		{"refused", "dial tcp 127.0.0.1:5432: connect: connection refused", "No server is listening"},
 		{"no host", "dial tcp: lookup foo.invalid: no such host", "Host or socket"},

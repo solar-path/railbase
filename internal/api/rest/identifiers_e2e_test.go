@@ -65,7 +65,7 @@ func TestIdentifiersE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	articles := schemabuilder.NewCollection("articles").
+	articles := schemabuilder.NewCollection("articles").PublicRules().
 		Field("title", schemabuilder.NewText().Required()).
 		Field("slug", schemabuilder.NewSlug().From("title").Unique()).
 		Field("code", schemabuilder.NewSequentialCode().Prefix("ART-").Pad(4))

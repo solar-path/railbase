@@ -67,7 +67,7 @@ func TestWorkflowTypesE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tickets := schemabuilder.NewCollection("tickets").
+	tickets := schemabuilder.NewCollection("tickets").PublicRules().
 		Field("title", schemabuilder.NewText().Required()).
 		Field("state", schemabuilder.NewStatus("draft", "review", "published")).
 		Field("urgency", schemabuilder.NewPriority()).

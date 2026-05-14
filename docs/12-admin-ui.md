@@ -426,11 +426,48 @@ with an `_admin_collections` row are editable — code-defined ones are
 refused by `live.Update` / `live.Delete`. The admin schema endpoint
 returns an `editable` name list so the UI knows which is which.
 
+### ADR — unified Logs screen
+
+The v0.9 reorg first put seven screens under the Logs tab — Audit, App
+logs, Realtime, Health, Cache, Email events, Notifications — as a flat
+sidebar list. Four of them (Audit, App logs, Email events,
+Notifications) are the *same kind of screen*: append-only, timestamped
+event streams over a server-paginated `QDatatable` with debounced
+filter strips. The other three are not logs at all — Realtime and
+Cache are live-state inspectors (5 s polling, in-memory tables,
+mutations like cache-clear / subscription-kick) and Health is a
+metrics dashboard (stat cards + sparkline charts, no table).
+
+So the four event streams collapse into **one** screen
+(`screens/logs.tsx`, route `/logs/:category`) with an in-page category
+tab strip; Realtime, Cache and Health keep their own routes and
+sidebar entries. The Logs sidebar goes from 7 flat items to 4 — a
+single **Logs** entry plus Realtime / Cache / Health.
+
+Mechanics:
+
+1. **`LogsScreen`** owns the `AdminPage` shell, the page title and the
+   category tab strip; it reads the active category from the URL
+   (`/logs/:category`, default `app`).
+2. Each category renders a *panel* — `AuditPanel` (`screens/audit.tsx`),
+   `AppLogPanel` (`screens/log_app.tsx`), `EmailEventsPanel`
+   (`screens/email-events.tsx`), `NotificationsPanel`
+   (`screens/notifications.tsx`). Panels emit only `AdminPage.Toolbar`
+   + `.Body` fragments; all filter / pagination / live-tail / stats
+   logic is unchanged from the old standalone screens.
+3. Category is URL-driven, so deep links, the command palette,
+   breadcrumbs and the pre-v0.9 redirects (`/audit` → `/logs/audit`, …)
+   all keep resolving. Switching category swaps the panel via SPA
+   navigation — no full reload.
+4. `/logs/realtime`, `/logs/health`, `/logs/cache` are matched
+   **before** the `/logs/:category` catch-all in `app.tsx`'s `<Switch>`,
+   so they keep dispatching to their own dashboard / inspector screens.
+
 ### Visual layout (v0.9+)
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
-│ [Railbase admin]   Data · Logs · Settings              ⌘K  ▾ │
+│ [Railbase admin]   Data · Logs · Settings    🌐 English   ⌘K  │
 ├──────────────┬────────────────────────────────────────────────┤
 │  (sidebar)   │                                                │
 │              │             Main content area                  │
@@ -442,6 +479,11 @@ returns an `editable` name list so the UI knows which is which.
 │ [Sign out]   │                                                │
 └──────────────┴────────────────────────────────────────────────┘
 ```
+
+The header's right side carries the three top tabs, the **language
+switcher** (globe + current locale endonym — see
+[22-i18n.md](22-i18n.md#admin-spa-localization)) and the ⌘K
+command-palette button.
 
 **Tab: Data** (path `/data/*`, `/`, `/schema`, `/collections/*`)
 
@@ -470,14 +512,17 @@ none exist.
 **Tab: Logs** (path `/logs/*`)
 
 ```
-Audit
-App logs
+Logs            ← unified screen; in-page category tabs:
+                  Audit · App logs · Email events · Notifications
 Realtime
-Health
 Cache
-Email events
-Notifications
+Health
 ```
+
+The four event-stream categories share one screen (`/logs/:category`);
+Realtime / Cache / Health stay separate routes — see the "unified Logs
+screen" ADR above. The single **Logs** sidebar entry is highlighted as
+active for any of the four category URLs.
 
 **Tab: Settings** (path `/settings/*`)
 
@@ -494,6 +539,13 @@ Trash
 ```
 
 ## Screens — полный список (22)
+
+> Feature catalog, not a 1:1 route map. Since the v0.9 "unified Logs
+> screen" ADR, four entries below — **Audit log viewer** (§11),
+> **Logs viewer** (§16), **Email events** and **Notifications** — are
+> in-page categories of a single `/logs/:category` screen rather than
+> standalone routes. Their feature descriptions still apply per
+> category.
 
 ### 1. Dashboard
 

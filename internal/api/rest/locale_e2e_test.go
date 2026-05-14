@@ -63,7 +63,7 @@ func TestLocaleTypesE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	profiles := schemabuilder.NewCollection("profiles").
+	profiles := schemabuilder.NewCollection("profiles").PublicRules().
 		Field("country", schemabuilder.NewCountry().Required()).
 		Field("tz", schemabuilder.NewTimezone().Required().Default("UTC"))
 	registry.Reset()

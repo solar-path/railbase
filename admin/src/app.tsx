@@ -8,14 +8,11 @@ import { ResetPasswordScreen } from "./screens/reset_password";
 import { DashboardScreen } from "./screens/dashboard";
 import { SchemaScreen } from "./screens/schema";
 import { SettingsScreen } from "./screens/settings";
-import { AuditScreen } from "./screens/audit";
 import { LogsScreen } from "./screens/logs";
 import { BackupsScreen } from "./screens/backups";
-import { NotificationsScreen } from "./screens/notifications";
 import { NotificationsPrefsScreen } from "./screens/notifications-prefs";
 import { TrashScreen } from "./screens/trash";
 import { MailerTemplatesScreen } from "./screens/mailer_templates";
-import { EmailEventsScreen } from "./screens/email-events";
 import { MailerConfigScreen } from "./screens/mailer_config";
 import { AuthMethodsScreen } from "./screens/auth_methods";
 import { RealtimeScreen } from "./screens/realtime";
@@ -138,14 +135,16 @@ function Routes() {
         <Route path="/data/:name" component={RecordsScreen} />
         <Route path="/data" component={DataHomeScreen} />
 
-        {/* Logs */}
-        <Route path="/logs/audit" component={AuditScreen} />
-        <Route path="/logs/app" component={LogsScreen} />
+        {/* Logs — Realtime / Health / Cache are live-state inspectors
+            and keep their own routes; they MUST be matched before the
+            `/logs/:category` catch-all below. The four event streams
+            (audit / app / email-events / notifications) all resolve to
+            the unified LogsScreen, which reads the category from the
+            URL and renders the matching in-page panel. */}
         <Route path="/logs/realtime" component={RealtimeScreen} />
         <Route path="/logs/health" component={HealthScreen} />
         <Route path="/logs/cache" component={CacheScreen} />
-        <Route path="/logs/email-events" component={EmailEventsScreen} />
-        <Route path="/logs/notifications" component={NotificationsScreen} />
+        <Route path="/logs/:category" component={LogsScreen} />
 
         {/* Settings */}
         <Route path="/settings" component={SettingsScreen} />

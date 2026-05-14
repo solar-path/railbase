@@ -65,7 +65,7 @@ func TestHierarchiesTypesE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	categories := schemabuilder.NewCollection("categories").
+	categories := schemabuilder.NewCollection("categories").PublicRules().
 		Field("name", schemabuilder.NewText().Required()).
 		Field("labels", schemabuilder.NewTags().MaxCount(5).TagMaxLen(20)).
 		Field("path", schemabuilder.NewTreePath())

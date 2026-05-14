@@ -83,9 +83,20 @@ func compileFilter(src string, spec builder.CollectionSpec, ctx filter.Context, 
 //
 // startParam threads through the same way as compileFilter so a rule
 // + user filter can share placeholders within one query.
+//
+// SECURITY — empty rule = LOCKED. An empty rule string does NOT mean
+// "no constraint"; it means the operation is not exposed on the public
+// API at all (the RuleSet contract: "empty string = no rule, server-
+// only"). It compiles to a constant-false fragment so List returns
+// nothing and View/Update/Delete/Create match no row. There is no
+// bypass path — a collection is reachable through the public CRUD API
+// only via an explicit rule (e.g. "true" for unconditional access, or
+// `@request.auth.id != ''` for any authenticated caller). This is the
+// secure-by-default posture: forgetting to set a rule fails closed,
+// not open.
 func compileRule(rule string, spec builder.CollectionSpec, ctx filter.Context, startParam int) (compiledFragment, int, error) {
 	if rule == "" {
-		return compiledFragment{}, startParam, nil
+		return compiledFragment{Where: "false"}, startParam, nil
 	}
 	ast, err := filter.Parse(rule)
 	if err != nil {

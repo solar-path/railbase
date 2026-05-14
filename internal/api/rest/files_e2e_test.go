@@ -75,7 +75,7 @@ func TestFilesFlowE2E(t *testing.T) {
 	}
 
 	// `posts` with single-file + multi-file columns.
-	posts := schemabuilder.NewCollection("posts").
+	posts := schemabuilder.NewCollection("posts").PublicRules().
 		Field("title", schemabuilder.NewText().Required()).
 		Field("cover", schemabuilder.NewFile()).
 		Field("attachments", schemabuilder.NewFiles())

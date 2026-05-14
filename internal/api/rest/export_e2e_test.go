@@ -64,11 +64,11 @@ func TestExportXLSX_E2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	posts := schemabuilder.NewCollection("posts").
+	posts := schemabuilder.NewCollection("posts").PublicRules().
 		Field("title", schemabuilder.NewText().Required()).
 		Field("status", schemabuilder.NewText())
 	// Plus one auth collection to test the 403 path.
-	users := schemabuilder.NewAuthCollection("users")
+	users := schemabuilder.NewAuthCollection("users").PublicRules()
 	registry.Reset()
 	registry.Register(posts)
 	registry.Register(users)
@@ -282,9 +282,9 @@ func TestExportXLSX_Audit_E2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	posts := schemabuilder.NewCollection("posts").
+	posts := schemabuilder.NewCollection("posts").PublicRules().
 		Field("title", schemabuilder.NewText().Required())
-	users := schemabuilder.NewAuthCollection("users")
+	users := schemabuilder.NewAuthCollection("users").PublicRules()
 	registry.Reset()
 	registry.Register(posts)
 	registry.Register(users)

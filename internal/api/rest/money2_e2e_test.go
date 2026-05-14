@@ -64,7 +64,7 @@ func TestMoney2E2E(t *testing.T) {
 
 	// Two fields exercising both types; .Max("10000") on the range
 	// caps the upper bound across rows.
-	jobs := schemabuilder.NewCollection("listings").
+	jobs := schemabuilder.NewCollection("listings").PublicRules().
 		Field("currency", schemabuilder.NewCurrency().Required()).
 		Field("salary", schemabuilder.NewMoneyRange().Required().Max("10000"))
 	registry.Reset()

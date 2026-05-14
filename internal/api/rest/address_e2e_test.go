@@ -63,7 +63,7 @@ func TestAddressTypeE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	companies := schemabuilder.NewCollection("companies").
+	companies := schemabuilder.NewCollection("companies").PublicRules().
 		Field("name", schemabuilder.NewText().Required()).
 		Field("hq", schemabuilder.NewAddress().Required())
 	registry.Reset()

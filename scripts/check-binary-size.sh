@@ -22,13 +22,15 @@ if [[ ! -d "$DIR" ]]; then
 fi
 
 # Collect candidate binaries. Include extensionless + .exe; exclude
-# *.tar.gz / *.zip / *.txt that goreleaser may also drop here. Using
+# *.tar.gz / *.zip / *.txt that goreleaser may also drop here, and the
+# `railbase-embed_*` dev binary (embedded postgres tooling — not a
+# release artifact, so it's outside the docs/17 #1 size budget). Using
 # `find ... -print0` + while-read for portability with macOS bash 3.2
 # (no mapfile / readarray on stock macOS).
 binaries=()
 while IFS= read -r -d '' f; do
     binaries+=("$f")
-done < <(find "$DIR" -type f \( -name 'railbase*' -o -name '*.exe' \) ! -name '*.tar.gz' ! -name '*.zip' ! -name '*.txt' ! -name '*.sha256' -print0)
+done < <(find "$DIR" -type f \( -name 'railbase_*' -o -name '*.exe' \) ! -name 'railbase-embed*' ! -name '*.tar.gz' ! -name '*.zip' ! -name '*.txt' ! -name '*.sha256' -print0)
 
 if [[ ${#binaries[@]} -eq 0 ]]; then
     echo "✗ no binaries found under $DIR"

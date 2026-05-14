@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -434,10 +435,27 @@ func (d *handlerDeps) createHandler(w http.ResponseWriter, r *http.Request) {
 		fields = evt.Record()
 	}
 
+	// CreateRule enforcement is transactional: INSERT the row, evaluate
+	// the compiled Create rule against it, and COMMIT only if it passes.
+	// A failing rule ROLLBACKs — the row never becomes visible. This is
+	// race-free (single tx) and has no bypass path: an empty Create rule
+	// compiles to constant-false (see compileRule), so a collection with
+	// no Create rule rejects every public insert.
+	tx, err := q.Begin(r.Context())
+	if err != nil {
+		d.log.Error("rest: begin tx failed", "collection", spec.Name, "err", err)
+		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "insert failed"))
+		return
+	}
+	// Rollback is a no-op once the tx is committed, so it's safe to
+	// always defer — it covers every early return below.
+	defer func() { _ = tx.Rollback(r.Context()) }()
+
 	// v1.5.12 AdjacencyList/Ordered preprocessing: cycle/depth check on
-	// `parent` (if set), auto-assign `sort_index` (if omitted).
+	// `parent` (if set), auto-assign `sort_index` (if omitted). Runs on
+	// the tx so it reads a consistent snapshot.
 	if spec.AdjacencyList || spec.Ordered {
-		if err := hierarchyPreInsert(r.Context(), q, spec, fields); err != nil {
+		if err := hierarchyPreInsert(r.Context(), tx, spec, fields); err != nil {
 			rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeValidation, "%s", err.Error()))
 			return
 		}
@@ -449,7 +467,7 @@ func (d *handlerDeps) createHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := q.Query(r.Context(), sql, args...)
+	rows, err := tx.Query(r.Context(), sql, args...)
 	if err != nil {
 		if pgErr := pgErrorFor(err); pgErr != nil {
 			rerr.WriteJSON(w, pgErr)
@@ -459,13 +477,14 @@ func (d *handlerDeps) createHandler(w http.ResponseWriter, r *http.Request) {
 		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "insert failed"))
 		return
 	}
-	defer rows.Close()
 
 	if !rows.Next() {
 		// Server-side INSERT failures (CHECK violations, enum mismatches)
 		// surface as rows.Err() after Next() returns false — pgx defers
 		// the protocol error until iteration. Drain Err and classify.
-		if iterErr := rows.Err(); iterErr != nil {
+		iterErr := rows.Err()
+		rows.Close()
+		if iterErr != nil {
 			if pgErr := pgErrorFor(iterErr); pgErr != nil {
 				rerr.WriteJSON(w, pgErr)
 				return
@@ -478,10 +497,50 @@ func (d *handlerDeps) createHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row, err := scanRow(rows, spec)
+	// pgx requires the result set be closed before the next query on the
+	// same tx — close explicitly rather than deferring.
+	rows.Close()
 	if err != nil {
 		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "scan failed"))
 		return
 	}
+
+	// Evaluate the Create rule against the row we just inserted, inside
+	// the same tx. $1 is the new row id; rule placeholders start at $2.
+	// An empty rule compiled to "false" → EXISTS is false → 403, and the
+	// deferred Rollback reverts the insert.
+	fctx := filterCtx(authmw.PrincipalFrom(r.Context()))
+	ruleFrag, _, err := compileRule(spec.Rules.Create, spec, fctx, 2)
+	if err != nil {
+		d.log.Error("rest: create rule compile failed", "collection", spec.Name, "err", err)
+		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "rule compile failed"))
+		return
+	}
+	checkSQL := fmt.Sprintf(
+		"SELECT EXISTS(SELECT 1 FROM %s WHERE id = $1 AND (%s))",
+		spec.Name, ruleFrag.Where,
+	)
+	checkArgs := append([]any{row["id"]}, ruleFrag.Args...)
+	var allowed bool
+	if err := tx.QueryRow(r.Context(), checkSQL, checkArgs...).Scan(&allowed); err != nil {
+		d.log.Error("rest: create rule check failed", "collection", spec.Name, "err", err)
+		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "insert failed"))
+		return
+	}
+	if !allowed {
+		// Deferred Rollback reverts the insert — the row never commits.
+		rerr.WriteJSON(w, rerr.New(rerr.CodeForbidden,
+			"create not permitted by the collection's create rule"))
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		d.log.Error("rest: commit failed", "collection", spec.Name, "err", err)
+		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "insert failed"))
+		return
+	}
+
+	// Post-commit only: hooks + realtime must observe a durable row.
 	// v1.2.0 hook dispatch: AfterCreate. Throws are logged but DO NOT
 	// undo the DB write — Dispatch() handles that.
 	if d.hooks != nil {

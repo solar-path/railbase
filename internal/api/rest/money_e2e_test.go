@@ -65,7 +65,7 @@ func TestMoneyTypesE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	invoices := schemabuilder.NewCollection("invoices").
+	invoices := schemabuilder.NewCollection("invoices").PublicRules().
 		Field("amount", schemabuilder.NewFinance().Required().Min("-10000").Max("1000000")).
 		Field("vat_rate", schemabuilder.NewPercentage().Required().Default("20"))
 	registry.Reset()

@@ -79,7 +79,7 @@ func TestHooksFlowE2E(t *testing.T) {
 	}
 
 	// `posts` collection: title required (so BeforeCreate-throw test can fire).
-	posts := schemabuilder.NewCollection("posts").
+	posts := schemabuilder.NewCollection("posts").PublicRules().
 		Field("title", schemabuilder.NewText().Required())
 	registry.Reset()
 	registry.Register(posts)

@@ -63,7 +63,7 @@ func TestDomainTypesE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	contacts := schemabuilder.NewCollection("contacts").
+	contacts := schemabuilder.NewCollection("contacts").PublicRules().
 		Field("phone", schemabuilder.NewTel().Required()).
 		Field("name", schemabuilder.NewPersonName())
 	registry.Reset()

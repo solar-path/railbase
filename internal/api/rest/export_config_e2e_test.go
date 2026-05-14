@@ -66,7 +66,7 @@ func TestExport_SchemaDeclarativeE2E(t *testing.T) {
 	}
 
 	// Posts: both XLSX + PDF configured.
-	posts := schemabuilder.NewCollection("posts").
+	posts := schemabuilder.NewCollection("posts").PublicRules().
 		Field("title", schemabuilder.NewText().Required()).
 		Field("status", schemabuilder.NewText()).
 		Export(
@@ -85,7 +85,7 @@ func TestExport_SchemaDeclarativeE2E(t *testing.T) {
 
 	// Bogus: .Export() references a column that doesn't exist —
 	// catches the schema typo at first request.
-	bogus := schemabuilder.NewCollection("bogus").
+	bogus := schemabuilder.NewCollection("bogus").PublicRules().
 		Field("title", schemabuilder.NewText().Required()).
 		Export(
 			schemabuilder.ExportXLSX(schemabuilder.XLSXExportConfig{
@@ -94,7 +94,7 @@ func TestExport_SchemaDeclarativeE2E(t *testing.T) {
 		)
 
 	// Users: auth collection with config — must still 403.
-	users := schemabuilder.NewAuthCollection("users").
+	users := schemabuilder.NewAuthCollection("users").PublicRules().
 		Export(schemabuilder.ExportXLSX(schemabuilder.XLSXExportConfig{Sheet: "Users"}))
 
 	registry.Reset()

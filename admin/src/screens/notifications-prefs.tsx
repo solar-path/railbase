@@ -1,61 +1,57 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
 import { adminAPI } from "../api/admin";
 import { isAPIError } from "../api/client";
 import { useAuth } from "../auth/context";
-import { Pager } from "../layout/pager";
 import { AdminPage } from "../layout/admin_page";
 import type {
   DigestPreviewResponse,
   NotificationPrefRow,
   NotificationPrefsEnvelope,
+  NotificationPrefsUser,
   NotificationUserSettings,
 } from "../api/types";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
-import { Switch } from "@/lib/ui/switch.ui";
-import { Card } from "@/lib/ui/card.ui";
+import { Badge } from "@/lib/ui/badge.ui";
 import {
-  Form,
-  FormControl,
-  FormDescription,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/lib/ui/form.ui";
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/lib/ui/drawer.ui";
 import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
-
-// One row of the per-kind preferences grid: a kind plus its per-channel
-// pref records, keyed by channel name.
-type KindRow = { kind: string; byChannel: Map<string, NotificationPrefRow> };
+import {
+  QEditableForm,
+  type QEditableField,
+} from "@/lib/ui/QEditableForm.ui";
+import {
+  QEditableList,
+  type QEditableColumn,
+} from "@/lib/ui/QEditableList.ui";
 
 // Admin notification preferences editor (v1.7.35 §3.9.1). Closes the
 // v1.5.3 "admin-side preferences editor deferred" note. Backend
 // endpoint family: /api/_admin/notifications/users + /users/{id}/prefs.
 //
-// Layout choice: master-detail. Left pane is a searchable user list;
-// right pane shows two cards (prefs grid + settings form) for the
-// selected user. The alternative shapes considered were:
+// Layout: a QDatatable of every user who has a notification pref or
+// settings row; clicking a row opens a right-side Drawer hosting the
+// editor (the Schemas/Collections pattern). Inside the drawer:
 //
-//   - tabs (per-user-id) → forces the operator to remember UUIDs;
-//     poor fit for a sparse table with hundreds of users.
-//   - accordion-per-user → vertical scrolling explodes once any user
-//     has more than a few kinds.
+//   • `digest_mode` is a parent-owned scalar <select> — the
+//     discriminator that gates whether the digest-day-of-week field
+//     renders (weekly only).
+//   • a single QEditableForm (create mode, "Save") carries everything
+//     else: the per-kind/per-channel grid is one field rendered as a
+//     QEditableList; quiet-hours + digest settings are scalar fields.
+//   • "Send digest preview" lives below the form — it shares the
+//     parent's digest_mode so it disables itself when mode === "off".
 //
-// Master-detail keeps both halves visible, supports type-to-search on
-// the email column, and matches how PocketBase's analogous screen
-// works — which is the closest UX target since this is the surface
-// operators most often arrive at FROM that ecosystem.
-//
-// Save semantics: the Save button below the right pane PUTs the full
-// envelope back. Server-side UPSERTs both tables atomically per row;
-// the response carries the canonical post-update state and we
-// invalidate the cached envelope to reflect any normalisation
-// (digest_mode defaulting from "" → "off" being the common one).
+// Save semantics: the Save button PUTs the full envelope back. The
+// server UPSERTs both tables atomically per row and returns the
+// canonical post-update state; we invalidate the cached envelope +
+// user list to reflect any normalisation.
 
 // CHANNELS pins the channel-column order so the prefs grid renders
 // stable across renders even when the source array's order varies.
@@ -81,40 +77,13 @@ const TZ_QUICKPICKS = [
   "Australia/Sydney",
 ];
 
-// Per-user settings form schema. The per-kind channel toggles are
-// dynamic master-detail state and stay outside zod (see comment near
-// UserPrefsEditor). Only the quiet-hours + digest settings form is
-// modelled here.
-//
 // HH:MM[:SS] accepted — the backend re-parses either form via
 // parseClockTime. Empty string disables quiet hours.
 const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 
-const settingsFormSchema = z.object({
-  quiet_hours_start: z
-    .string()
-    .refine((v) => v === "" || TIME_REGEX.test(v), {
-      message: "Use HH:MM (e.g. 22:00)",
-    }),
-  quiet_hours_end: z
-    .string()
-    .refine((v) => v === "" || TIME_REGEX.test(v), {
-      message: "Use HH:MM (e.g. 07:00)",
-    }),
-  quiet_hours_tz: z.string(),
-  digest_mode: z.enum(["off", "daily", "weekly"]),
-  digest_hour: z
-    .number()
-    .int("must be an integer")
-    .min(0, "0-23")
-    .max(23, "0-23"),
-  digest_dow: z.number().int().min(0).max(6),
-  digest_tz: z.string(),
-});
+type DigestMode = "off" | "daily" | "weekly";
 
-type SettingsFormValues = z.infer<typeof settingsFormSchema>;
-
-const SETTINGS_DEFAULTS: SettingsFormValues = {
+const SETTINGS_DEFAULTS: NotificationUserSettings = {
   quiet_hours_start: "",
   quiet_hours_end: "",
   quiet_hours_tz: "",
@@ -124,36 +93,97 @@ const SETTINGS_DEFAULTS: SettingsFormValues = {
   digest_tz: "",
 };
 
+// One row of the per-kind QEditableList: a kind plus its three
+// per-channel enabled flags. The on-wire shape is one NotificationPrefRow
+// per (kind, channel); these helpers fold/unfold between the two.
+interface PrefsGridRow {
+  kind: string;
+  inapp: boolean;
+  email: boolean;
+  push: boolean;
+}
+
+function envelopeToGrid(prefs: NotificationPrefRow[]): PrefsGridRow[] {
+  const byKind = new Map<string, PrefsGridRow>();
+  for (const p of prefs) {
+    let row = byKind.get(p.kind);
+    if (!row) {
+      row = { kind: p.kind, inapp: false, email: false, push: false };
+      byKind.set(p.kind, row);
+    }
+    row[p.channel] = p.enabled;
+  }
+  return Array.from(byKind.values()).sort((a, b) => a.kind.localeCompare(b.kind));
+}
+
+function gridToPrefs(grid: PrefsGridRow[]): NotificationPrefRow[] {
+  const out: NotificationPrefRow[] = [];
+  for (const row of grid) {
+    const kind = row.kind.trim();
+    if (!kind) continue;
+    for (const channel of CHANNELS) {
+      // `frequency` is a forward-compat placeholder the server ignores.
+      out.push({ kind, channel, enabled: !!row[channel], frequency: "" });
+    }
+  }
+  return out;
+}
+
 export function NotificationsPrefsScreen() {
-  // --- Left pane state ---
-  const [page, setPage] = useState(1);
-  const perPage = 25;
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState(""); // debounced
   const [selectedUserID, setSelectedUserID] = useState<string | null>(null);
 
-  // Debounce the search box. 300ms matches the notifications screen.
-  useEffect(() => {
-    const t = setTimeout(() => setSearch(searchInput), 300);
-    return () => clearTimeout(t);
-  }, [searchInput]);
-  useEffect(() => {
-    setPage(1);
-  }, [search]);
-
-  const usersQ = useQuery({
-    queryKey: ["notifications-prefs-users", { page, perPage, search }],
-    queryFn: () =>
-      adminAPI.notificationsPrefsUsersList({
-        page,
-        perPage,
-        q: search || undefined,
-      }),
-  });
-
-  const total = usersQ.data?.totalItems ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / perPage));
-  const users = usersQ.data?.items ?? [];
+  const columns: ColumnDef<NotificationPrefsUser>[] = [
+    {
+      id: "email",
+      header: "Email",
+      accessor: (u) => u.email,
+      cell: (u) =>
+        u.email ? (
+          <span className="font-medium">{u.email}</span>
+        ) : (
+          <span className="font-mono text-xs text-muted-foreground">
+            {u.user_id.slice(0, 8)}…
+          </span>
+        ),
+    },
+    {
+      id: "user_id",
+      header: "User ID",
+      cell: (u) => (
+        <span className="font-mono text-xs text-muted-foreground">
+          {u.user_id}
+        </span>
+      ),
+    },
+    {
+      id: "collection",
+      header: "Collection",
+      cell: (u) =>
+        u.collection ? (
+          <span className="font-mono text-xs">{u.collection}</span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
+    {
+      id: "state",
+      header: "State",
+      cell: (u) => (
+        <span className="flex gap-1">
+          {u.has_prefs ? (
+            <Badge variant="secondary" className="text-[10px]">
+              prefs
+            </Badge>
+          ) : null}
+          {u.has_settings ? (
+            <Badge variant="secondary" className="text-[10px]">
+              settings
+            </Badge>
+          ) : null}
+        </span>
+      ),
+    },
+  ];
 
   return (
     <AdminPage>
@@ -168,303 +198,86 @@ export function NotificationsPrefsScreen() {
         }
       />
 
-      <AdminPage.Body className="grid grid-cols-[320px_1fr] gap-4 min-h-[480px]">
-        {/* Left pane: user list */}
-        <Card className="flex flex-col p-0">
-          <div className="px-3 py-2 border-b">
-            <Input
-              type="text"
-              value={searchInput}
-              onInput={(e) => setSearchInput(e.currentTarget.value)}
-              placeholder="Filter by email…"
-              className="h-8 text-sm"
-              spellcheck={false}
-              autoComplete="off"
-            />
-          </div>
-
-          <div className="flex-1 min-h-0 overflow-y-auto">
-            {usersQ.isLoading ? (
-              <div className="p-4 text-sm text-muted-foreground">Loading…</div>
-            ) : users.length === 0 ? (
-              <div className="p-4 text-sm text-muted-foreground">
-                {search
-                  ? "No users match that filter."
-                  : "No users have notification preferences yet."}
-              </div>
-            ) : (
-              <ul className="divide-y">
-                {users.map((u) => (
-                  <li
-                    key={u.user_id}
-                    onClick={() => setSelectedUserID(u.user_id)}
-                    className={
-                      "px-3 py-2 cursor-pointer text-sm " +
-                      (selectedUserID === u.user_id
-                        ? "bg-foreground text-background"
-                        : "hover:bg-muted")
-                    }
-                  >
-                    <div className="truncate font-medium">
-                      {u.email || (
-                        <span className="font-mono text-xs opacity-70">
-                          {u.user_id.slice(0, 8)}…
-                        </span>
-                      )}
-                    </div>
-                    <div
-                      className={
-                        "text-xs " +
-                        (selectedUserID === u.user_id
-                          ? "text-muted-foreground"
-                          : "text-muted-foreground")
-                      }
-                    >
-                      <span className="font-mono">{u.user_id.slice(0, 8)}…</span>
-                      {u.collection ? (
-                        <span className="ml-2">
-                          ·{" "}
-                          <span className="font-mono">{u.collection}</span>
-                        </span>
-                      ) : null}
-                      {u.has_prefs ? " · prefs" : ""}
-                      {u.has_settings ? " · settings" : ""}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          <div className="border-t px-3 py-2 flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">{total} users</span>
-            <Pager page={page} totalPages={totalPages} onChange={setPage} />
-          </div>
-        </Card>
-
-        {/* Right pane: editor */}
-        <div className="min-w-0">
-          {selectedUserID ? (
-            <UserPrefsEditor userID={selectedUserID} />
-          ) : (
-            <EmptyDetailState />
-          )}
-        </div>
+      <AdminPage.Body>
+        <QDatatable
+          columns={columns}
+          rowKey={(u) => u.user_id}
+          search
+          searchPlaceholder="Filter by email…"
+          onRowClick={(u) => setSelectedUserID(u.user_id)}
+          emptyMessage="No users have notification preferences yet."
+          fetch={async (params) => {
+            const res = await adminAPI.notificationsPrefsUsersList({
+              page: params.page,
+              perPage: params.pageSize,
+              q: params.search || undefined,
+            });
+            return { rows: res.items, total: res.totalItems };
+          }}
+        />
       </AdminPage.Body>
+
+      <PrefsEditorDrawer
+        userID={selectedUserID}
+        onClose={() => setSelectedUserID(null)}
+      />
     </AdminPage>
   );
 }
 
-function EmptyDetailState() {
+// PrefsEditorDrawer — right-side Drawer shell. The body remounts each
+// time the selected user changes (keyed on userID) so it re-seeds from
+// the freshest envelope.
+function PrefsEditorDrawer({
+  userID,
+  onClose,
+}: {
+  userID: string | null;
+  onClose: () => void;
+}) {
   return (
-    <div className="rounded-lg border-2 border-dashed border-input bg-muted p-8 text-center h-full flex items-center justify-center">
-      <div>
-        <div className="text-sm font-medium text-foreground">
-          Select a user to edit their preferences.
+    <Drawer
+      direction="right"
+      open={userID !== null}
+      onOpenChange={(o) => {
+        if (!o) onClose();
+      }}
+    >
+      <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-xl">
+        <DrawerHeader>
+          <DrawerTitle>Notification preferences</DrawerTitle>
+          <DrawerDescription>
+            Per-kind channel toggles plus quiet hours and digest mode. Save
+            PUTs the full envelope back.
+          </DrawerDescription>
+        </DrawerHeader>
+        <div className="flex-1 overflow-y-auto px-4 pb-4">
+          {userID !== null ? (
+            <PrefsEditorBody key={userID} userID={userID} onClose={onClose} />
+          ) : null}
         </div>
-        <div className="text-xs text-muted-foreground mt-1">
-          The left pane lists every user who has at least one
-          notification preference or settings row.
-        </div>
-      </div>
-    </div>
+      </DrawerContent>
+    </Drawer>
   );
 }
 
-// UserPrefsEditor renders the two-card right pane for the selected
-// user. We keep the form state local to the editor (rather than
-// hoisted to the parent) so navigating between users discards the
-// staged edits — matches the audit story ("a save IS the action").
-function UserPrefsEditor({ userID }: { userID: string }) {
-  const qc = useQueryClient();
+// PrefsEditorBody loads the envelope, then hands a fully-resolved
+// snapshot to PrefsEditorForm so the form seeds its draft exactly once.
+function PrefsEditorBody({
+  userID,
+  onClose,
+}: {
+  userID: string;
+  onClose: () => void;
+}) {
   const envQ = useQuery({
     queryKey: ["notifications-prefs", userID],
     queryFn: () => adminAPI.notificationsPrefsGet(userID),
     retry: false,
   });
 
-  // Local editable copy. We rebuild it whenever the server payload
-  // changes (loaded fresh / after save invalidation).
-  //
-  // Note: the per-kind / per-channel prefs grid stays on useState
-  // intentionally — the column set is dynamic per kind, the rows are
-  // master-detail UI state, and the "Save" button batches whatever
-  // toggles the operator made. The settings block (below) is the part
-  // we hoisted onto react-hook-form + zod.
-  const [prefs, setPrefs] = useState<NotificationPrefRow[]>([]);
-  // Track an in-progress "add row" so the operator can introduce a
-  // new (kind, channel) tuple without immediately writing to the DB.
-  const [newKind, setNewKind] = useState("");
-
-  // Settings form — quiet-hours + digest fields. Trim seconds on the
-  // way in so the <input type="time"> renders the short form; the
-  // backend re-parses either shape via parseClockTime on save.
-  const settingsForm = useForm<SettingsFormValues>({
-    resolver: zodResolver(settingsFormSchema),
-    defaultValues: SETTINGS_DEFAULTS,
-    mode: "onSubmit",
-  });
-
-  useEffect(() => {
-    if (!envQ.data) return;
-    setPrefs(envQ.data.prefs ?? []);
-    const s = envQ.data.settings;
-    settingsForm.reset(
-      s
-        ? {
-            quiet_hours_start: trimSeconds(s.quiet_hours_start),
-            quiet_hours_end: trimSeconds(s.quiet_hours_end),
-            quiet_hours_tz: s.quiet_hours_tz,
-            // Server type widens to string for forward-compat; zod
-            // narrows back to the enum, with "off" as the safe
-            // fallback for any unrecognised mode.
-            digest_mode:
-              s.digest_mode === "daily" || s.digest_mode === "weekly"
-                ? s.digest_mode
-                : "off",
-            digest_hour: s.digest_hour,
-            digest_dow: s.digest_dow,
-            digest_tz: s.digest_tz,
-          }
-        : SETTINGS_DEFAULTS,
-    );
-    // settingsForm is stable per render. Avoid re-running on form
-    // identity churn by depending only on the server payload.
-     
-  }, [envQ.data]);
-
-  const saveM = useMutation({
-    mutationFn: (body: NotificationPrefsEnvelope) =>
-      adminAPI.notificationsPrefsPut(userID, body),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["notifications-prefs", userID] });
-      void qc.invalidateQueries({ queryKey: ["notifications-prefs-users"] });
-    },
-    onError: (err) => {
-      // 422 with field-level errors → setError per field. Otherwise
-      // fall back to the inline banner the header strip already
-      // renders from saveM.error.
-      if (isAPIError(err) && err.status === 422) {
-        const details = err.body.details;
-        const fields =
-          details &&
-          typeof details === "object" &&
-          "fields" in details &&
-          (details as { fields?: unknown }).fields &&
-          typeof (details as { fields?: unknown }).fields === "object"
-            ? ((details as { fields: Record<string, unknown> }).fields)
-            : null;
-        if (fields) {
-          for (const [k, v] of Object.entries(fields)) {
-            const msg = typeof v === "string" ? v : String(v);
-            // Only map keys that are actually in our settings schema.
-            if (k in SETTINGS_DEFAULTS) {
-              settingsForm.setError(k as keyof SettingsFormValues, {
-                type: "server",
-                message: msg,
-              });
-            }
-          }
-        }
-      }
-    },
-  });
-
-  // Group prefs by kind for the grid renderer. Each row owns three
-  // cells (one per channel) — missing entries default to "no row yet"
-  // and render as a faint check. Toggling fills the row.
-  const prefsByKind = useMemo(() => {
-    const byKind = new Map<string, Map<string, NotificationPrefRow>>();
-    for (const p of prefs) {
-      if (!byKind.has(p.kind)) byKind.set(p.kind, new Map());
-      byKind.get(p.kind)!.set(p.channel, p);
-    }
-    return Array.from(byKind.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([kind, m]) => ({ kind, byChannel: m }));
-  }, [prefs]);
-
-  const togglePref = (kind: string, channel: NotificationPrefRow["channel"]) => {
-    setPrefs((current) => {
-      const idx = current.findIndex(
-        (p) => p.kind === kind && p.channel === channel,
-      );
-      if (idx === -1) {
-        return [
-          ...current,
-          { kind, channel, enabled: true, frequency: "" },
-        ];
-      }
-      const out = current.slice();
-      out[idx] = { ...out[idx], enabled: !out[idx].enabled };
-      return out;
-    });
-  };
-
-  const addKindRow = (kind: string) => {
-    const trimmed = kind.trim();
-    if (!trimmed) return;
-    setPrefs((current) => {
-      // Idempotent: if the kind already exists, no-op. The toggles
-      // for missing (kind, channel) tuples create on demand.
-      if (current.some((p) => p.kind === trimmed)) return current;
-      return [
-        ...current,
-        { kind: trimmed, channel: "inapp", enabled: true, frequency: "" },
-      ];
-    });
-    setNewKind("");
-  };
-
-  const removeKindRow = (kind: string) => {
-    setPrefs((current) => current.filter((p) => p.kind !== kind));
-  };
-
-  // Prefs grid columns: a `kind` label plus one centred Switch column
-  // per channel. The `remove` affordance moves into QDatatable's row-
-  // action menu. Rebuilt each render — cheap (≤4 columns) and the cell
-  // closures need the current `togglePref`.
-  const gridColumns: ColumnDef<KindRow>[] = [
-    {
-      id: "kind",
-      header: "kind",
-      accessor: (r) => r.kind,
-      cell: (r) => <span className="font-mono text-sm">{r.kind}</span>,
-    },
-    ...CHANNELS.map(
-      (c): ColumnDef<KindRow> => ({
-        id: c,
-        header: c,
-        align: "center",
-        cell: (r) => (
-          <div className="inline-flex">
-            <Switch
-              checked={r.byChannel.get(c)?.enabled ?? false}
-              onCheckedChange={() => togglePref(r.kind, c)}
-              aria-label={`${r.kind} on ${c}`}
-            />
-          </div>
-        ),
-      }),
-    ),
-  ];
-
-  // The header Save button submits the settings form, which runs
-  // zod validation first and only then PUTs the combined envelope
-  // (prefs grid + validated settings). Field-level errors stay on the
-  // form; transport errors surface through saveM.error in the header.
-  const onSave = settingsForm.handleSubmit((values) => {
-    saveM.mutate({
-      user_id: userID,
-      prefs,
-      settings: values satisfies NotificationUserSettings,
-    });
-  });
-
   if (envQ.isLoading) {
-    return (
-      <div className="text-sm text-muted-foreground p-4">Loading prefs…</div>
-    );
+    return <p className="text-sm text-muted-foreground">Loading prefs…</p>;
   }
   if (envQ.error) {
     const err = envQ.error as Error & { code?: string };
@@ -482,262 +295,291 @@ function UserPrefsEditor({ userID }: { userID: string }) {
   }
 
   return (
-    <div className="space-y-4">
-      {/* Header strip for the selected user */}
-      <Card className="px-4 py-2 flex items-center justify-between">
-        <div className="min-w-0">
-          <div className="text-sm font-medium truncate">
-            {envQ.data?.email || (
-              <span className="font-mono text-xs">{userID}</span>
-            )}
-          </div>
-          <div className="font-mono text-[11px] text-muted-foreground truncate">
-            {userID}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {saveM.isSuccess ? (
-            <span className="text-xs text-primary">Saved.</span>
-          ) : null}
-          {saveM.error ? (
-            <span className="text-xs text-destructive">
-              {(saveM.error as Error).message}
-            </span>
-          ) : null}
-          <Button
-            type="button"
-            size="sm"
-            onClick={onSave}
-            disabled={saveM.isPending}
-          >
-            {saveM.isPending ? "Saving…" : "Save"}
-          </Button>
-        </div>
-      </Card>
+    <PrefsEditorForm
+      userID={userID}
+      envelope={envQ.data!}
+      onClose={onClose}
+    />
+  );
+}
 
-      {/* Card 1: prefs grid */}
-      <Card className="p-0">
-        <header className="px-4 py-2 border-b flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Per-kind preferences</h2>
-          <div className="flex items-center gap-2">
-            <Input
-              type="text"
-              value={newKind}
-              onInput={(e) => setNewKind(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  addKindRow(newKind);
-                }
-              }}
-              placeholder="Add kind (e.g. invite_received)"
-              className="h-7 w-56 text-xs font-mono"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => addKindRow(newKind)}
-              disabled={!newKind.trim()}
-            >
-              + add
-            </Button>
-          </div>
-        </header>
+// trimSeconds normalises an HH:MM:SS value down to HH:MM for the
+// <input type="time"> UI. The backend re-parses either form.
+function trimSeconds(t: string): string {
+  if (!t) return "";
+  return t.length >= 5 ? t.slice(0, 5) : t;
+}
 
-        <div className="p-3">
-          <QDatatable
-            columns={gridColumns}
-            data={prefsByKind}
-            rowKey={(r) => r.kind}
-            rowActions={[
-              {
-                label: "remove",
-                destructive: true,
-                onSelect: (r) => removeKindRow(r.kind),
-              },
-            ]}
-            emptyMessage="No per-kind preferences yet. Add a kind above to override channel defaults."
+function clamp(n: number, lo: number, hi: number): number {
+  if (Number.isNaN(n)) return lo;
+  if (n < lo) return lo;
+  if (n > hi) return hi;
+  return n;
+}
+
+// PrefsEditorForm — `digest_mode` is a parent-owned scalar above the
+// QEditableForm; the form's `fields` are recomputed from it (the
+// digest-day-of-week field renders for weekly only). The per-kind grid
+// is a single QEditableForm field rendered as a QEditableList.
+function PrefsEditorForm({
+  userID,
+  envelope,
+  onClose,
+}: {
+  userID: string;
+  envelope: NotificationPrefsEnvelope;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const settings = envelope.settings ?? SETTINGS_DEFAULTS;
+
+  const [digestMode, setDigestMode] = useState<DigestMode>(
+    settings.digest_mode === "daily" || settings.digest_mode === "weekly"
+      ? settings.digest_mode
+      : "off",
+  );
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [formError, setFormError] = useState<string | null>(null);
+
+  // Seeded once — QEditableForm copies this into its draft on mount.
+  // `digest_dow` always lives in the seed even when the field isn't
+  // rendered, so toggling digest_mode never drops the value.
+  const [seed] = useState<Record<string, unknown>>(() => ({
+    prefs: envelopeToGrid(envelope.prefs ?? []),
+    quiet_hours_start: trimSeconds(settings.quiet_hours_start),
+    quiet_hours_end: trimSeconds(settings.quiet_hours_end),
+    quiet_hours_tz: settings.quiet_hours_tz,
+    digest_hour: settings.digest_hour,
+    digest_dow: settings.digest_dow,
+    digest_tz: settings.digest_tz,
+  }));
+
+  const prefsColumns: QEditableColumn<PrefsGridRow>[] = [
+    {
+      key: "kind",
+      header: "kind",
+      type: "text",
+      width: 220,
+      required: true,
+      placeholder: "invite_received",
+    },
+    { key: "inapp", header: "inapp", type: "checkbox", width: 80 },
+    { key: "email", header: "email", type: "checkbox", width: 80 },
+    { key: "push", header: "push", type: "checkbox", width: 80 },
+  ];
+
+  const fields: QEditableField[] = [
+    { key: "prefs", label: "Per-kind preferences" },
+    {
+      key: "quiet_hours_start",
+      label: "Quiet hours start",
+      helpText: "HH:MM, e.g. 22:00. Blank disables quiet hours.",
+    },
+    { key: "quiet_hours_end", label: "Quiet hours end", helpText: "HH:MM, e.g. 07:00." },
+    { key: "quiet_hours_tz", label: "Quiet hours timezone (IANA)" },
+    { key: "digest_hour", label: "Digest hour (0-23, local to digest tz)" },
+    ...(digestMode === "weekly"
+      ? [{ key: "digest_dow", label: "Digest day of week" } as QEditableField]
+      : []),
+    {
+      key: "digest_tz",
+      label: "Digest timezone (IANA)",
+      helpText: "Leave blank to inherit the quiet-hours timezone.",
+    },
+  ];
+
+  const renderInput = (
+    f: QEditableField,
+    value: unknown,
+    onChange: (v: unknown) => void,
+  ) => {
+    switch (f.key) {
+      case "prefs":
+        return (
+          <QEditableList
+            columns={prefsColumns}
+            data={(value as PrefsGridRow[]) ?? []}
+            onChange={(rows) => onChange(rows)}
+            createEmpty={() => ({
+              kind: "",
+              inapp: false,
+              email: false,
+              push: false,
+            })}
+            minRows={0}
+            showAddButton
+            addLabel="Add kind"
           />
-        </div>
-      </Card>
+        );
+      case "quiet_hours_start":
+      case "quiet_hours_end":
+        return (
+          <Input
+            type="time"
+            className="font-mono"
+            value={(value as string) ?? ""}
+            onInput={(e) => onChange(e.currentTarget.value)}
+          />
+        );
+      case "quiet_hours_tz":
+      case "digest_tz":
+        return (
+          <TZInput
+            value={(value as string) ?? ""}
+            onChange={(v) => onChange(v)}
+          />
+        );
+      case "digest_hour":
+        return (
+          <Input
+            type="number"
+            min={0}
+            max={23}
+            className="w-24 font-mono"
+            value={value == null ? "" : String(value)}
+            onInput={(e) => {
+              const raw = parseInt(e.currentTarget.value || "0", 10);
+              onChange(clamp(raw, 0, 23));
+            }}
+          />
+        );
+      case "digest_dow":
+        return (
+          <select
+            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+            value={String(value ?? 1)}
+            onChange={(e) => onChange(parseInt(e.currentTarget.value, 10))}
+          >
+            {DOW_LABELS.map((label, idx) => (
+              <option key={label} value={idx}>
+                {label}
+              </option>
+            ))}
+          </select>
+        );
+      default:
+        return null;
+    }
+  };
 
-      {/* Card 2: settings form (RHF + zod) */}
-      <Card className="p-0">
-        <header className="px-4 py-2 border-b">
-          <h2 className="text-sm font-semibold">Quiet hours and digest</h2>
-        </header>
-        <Form {...settingsForm}>
-          <form onSubmit={onSave} className="p-4 grid grid-cols-2 gap-4 text-sm">
-            <FormField
-              control={settingsForm.control}
-              name="quiet_hours_start"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Quiet hours start</FormLabel>
-                  <FormControl>
-                    <Input type="time" className="h-8 font-mono w-auto" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={settingsForm.control}
-              name="quiet_hours_end"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Quiet hours end</FormLabel>
-                  <FormControl>
-                    <Input type="time" className="h-8 font-mono w-auto" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={settingsForm.control}
-              name="quiet_hours_tz"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Quiet hours timezone (IANA)</FormLabel>
-                  <FormControl>
-                    <TZInput
-                      value={field.value}
-                      onChange={(v) => field.onChange(v)}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={settingsForm.control}
-              name="digest_mode"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Digest mode</FormLabel>
-                  <FormControl>
-                    <select
-                      className="h-8 rounded border border-input bg-transparent px-2 text-sm"
-                      {...field}
-                    >
-                      <option value="off">off</option>
-                      <option value="daily">daily</option>
-                      <option value="weekly">weekly</option>
-                    </select>
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={settingsForm.control}
-              name="digest_hour"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Digest hour (0-23, local to digest tz)</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={23}
-                      className="h-8 w-24 font-mono"
-                      value={field.value}
-                      onInput={(e) => {
-                        const raw = parseInt(
-                          (e.currentTarget as HTMLInputElement).value || "0",
-                          10,
-                        );
-                        field.onChange(clamp(raw, 0, 23));
-                      }}
-                      onBlur={field.onBlur}
-                      name={field.name}
-                      ref={field.ref}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={settingsForm.control}
-              name="digest_dow"
-              render={({ field }) => {
-                const mode = settingsForm.watch("digest_mode");
-                return (
-                  <FormItem>
-                    <FormLabel>Digest day of week (weekly only)</FormLabel>
-                    <FormControl>
-                      <select
-                        disabled={mode !== "weekly"}
-                        className="h-8 rounded border border-input bg-transparent px-2 text-sm disabled:opacity-50"
-                        value={field.value}
-                        onChange={(e) =>
-                          field.onChange(
-                            parseInt(
-                              (e.currentTarget as HTMLSelectElement).value,
-                              10,
-                            ),
-                          )
-                        }
-                        onBlur={field.onBlur}
-                        name={field.name}
-                        ref={field.ref}
-                      >
-                        {DOW_LABELS.map((label, idx) => (
-                          <option key={label} value={idx}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                );
-              }}
-            />
-            <FormField
-              control={settingsForm.control}
-              name="digest_tz"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Digest timezone (IANA, blank = quiet-hours tz)</FormLabel>
-                  <FormControl>
-                    <TZInput
-                      value={field.value}
-                      onChange={(v) => field.onChange(v)}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    Leave blank to inherit the quiet-hours timezone.
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </form>
-        </Form>
-        {/* v1.7.36 — Send a digest-preview email so the operator can
-            eyeball the layout without waiting for the cron to fire.
-            Disabled when digest_mode === "off" (a preview of "no
-            digest configured" is meaningless). Pre-fills the recipient
-            with the admin's own email so the default click doesn't
-            spam the user. */}
-        <DigestPreviewControls
-          userID={userID}
-          digestMode={settingsForm.watch("digest_mode")}
-        />
-      </Card>
+  const validate = (d: Record<string, unknown>): Record<string, string> => {
+    const fe: Record<string, string> = {};
+    const qs = String(d.quiet_hours_start ?? "");
+    const qe = String(d.quiet_hours_end ?? "");
+    if (qs !== "" && !TIME_REGEX.test(qs)) {
+      fe.quiet_hours_start = "Use HH:MM (e.g. 22:00)";
+    }
+    if (qe !== "" && !TIME_REGEX.test(qe)) {
+      fe.quiet_hours_end = "Use HH:MM (e.g. 07:00)";
+    }
+    const h = Number(d.digest_hour);
+    if (!Number.isInteger(h) || h < 0 || h > 23) {
+      fe.digest_hour = "Must be an integer 0-23";
+    }
+    return fe;
+  };
+
+  const handleSave = async (d: Record<string, unknown>) => {
+    setFieldErrors({});
+    setFormError(null);
+    const fe = validate(d);
+    if (Object.keys(fe).length > 0) {
+      setFieldErrors(fe);
+      return;
+    }
+    const body: NotificationPrefsEnvelope = {
+      user_id: userID,
+      prefs: gridToPrefs((d.prefs as PrefsGridRow[]) ?? []),
+      settings: {
+        quiet_hours_start: String(d.quiet_hours_start ?? ""),
+        quiet_hours_end: String(d.quiet_hours_end ?? ""),
+        quiet_hours_tz: String(d.quiet_hours_tz ?? ""),
+        digest_mode: digestMode,
+        digest_hour: Number(d.digest_hour) || 0,
+        digest_dow: Number(d.digest_dow) || 0,
+        digest_tz: String(d.digest_tz ?? ""),
+      },
+    };
+    try {
+      await adminAPI.notificationsPrefsPut(userID, body);
+      void qc.invalidateQueries({ queryKey: ["notifications-prefs", userID] });
+      void qc.invalidateQueries({ queryKey: ["notifications-prefs-users"] });
+      onClose();
+    } catch (err) {
+      // 422 with field-level errors → per-field errors. Otherwise banner.
+      if (isAPIError(err) && err.status === 422) {
+        const details = err.body.details;
+        const raw =
+          details &&
+          typeof details === "object" &&
+          "fields" in details &&
+          typeof (details as { fields?: unknown }).fields === "object"
+            ? (details as { fields: Record<string, unknown> }).fields
+            : null;
+        if (raw) {
+          const next: Record<string, string> = {};
+          for (const [k, v] of Object.entries(raw)) {
+            next[k] = typeof v === "string" ? v : String(v);
+          }
+          if (Object.keys(next).length > 0) {
+            setFieldErrors(next);
+            return;
+          }
+        }
+      }
+      setFormError(err instanceof Error ? err.message : "Save failed.");
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded border bg-muted/40 px-3 py-2">
+        <div className="text-sm font-medium truncate">
+          {envelope.email || (
+            <span className="font-mono text-xs">{userID}</span>
+          )}
+        </div>
+        <div className="font-mono text-[11px] text-muted-foreground truncate">
+          {userID}
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <span className="font-mono text-xs font-medium text-muted-foreground">
+          Digest mode
+        </span>
+        <select
+          className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+          value={digestMode}
+          onChange={(e) => setDigestMode(e.currentTarget.value as DigestMode)}
+        >
+          <option value="off">off</option>
+          <option value="daily">daily</option>
+          <option value="weekly">weekly</option>
+        </select>
+      </div>
+
+      <QEditableForm
+        mode="create"
+        fields={fields}
+        values={seed}
+        renderInput={renderInput}
+        onCreate={handleSave}
+        submitLabel="Save"
+        onCancel={onClose}
+        fieldErrors={fieldErrors}
+        formError={formError}
+      />
+
+      <DigestPreviewControls userID={userID} digestMode={digestMode} />
     </div>
   );
 }
 
 // DigestPreviewControls renders the "Send digest preview" button + a
-// recipient input under the digest card. State is local — no point
-// hoisting since the rest of the editor doesn't care whether a
-// preview has been sent. Status surfaces as a transient pill next to
-// the button so the operator gets a confirm without losing context.
+// recipient input. State is local. Disabled when digestMode === "off"
+// (a preview of "no digest configured" is meaningless). Pre-fills the
+// recipient with the admin's own email.
 function DigestPreviewControls({
   userID,
   digestMode,
@@ -746,8 +588,7 @@ function DigestPreviewControls({
   digestMode: string;
 }) {
   const { state } = useAuth();
-  const adminEmail =
-    state.kind === "signed-in" ? state.me.email : "";
+  const adminEmail = state.kind === "signed-in" ? state.me.email : "";
   const [recipient, setRecipient] = useState(adminEmail);
   // Keep the input in sync if the admin's email loads after first
   // mount (initial render can fire before the /me probe completes).
@@ -765,33 +606,35 @@ function DigestPreviewControls({
   const disabled = digestMode === "off" || previewM.isPending;
 
   return (
-    <div className="border-t px-4 py-3 flex items-center gap-2 text-sm">
+    <div className="rounded border bg-muted/40 px-3 py-3 space-y-2 text-sm">
       <span className="text-xs font-medium text-foreground">
         Send a sample digest to:
       </span>
-      <Input
-        type="email"
-        value={recipient}
-        onInput={(e) => setRecipient(e.currentTarget.value)}
-        placeholder={adminEmail || "operator@example.com"}
-        className="h-7 w-64 text-xs font-mono"
-        spellcheck={false}
-        autoComplete="off"
-      />
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={() => previewM.mutate()}
-        disabled={disabled}
-        title={
-          digestMode === "off"
-            ? "Set a digest mode (daily or weekly) to enable preview"
-            : "Render and email a sample digest for this user"
-        }
-      >
-        {previewM.isPending ? "Sending…" : "Send preview"}
-      </Button>
+      <div className="flex items-center gap-2">
+        <Input
+          type="email"
+          value={recipient}
+          onInput={(e) => setRecipient(e.currentTarget.value)}
+          placeholder={adminEmail || "operator@example.com"}
+          className="h-8 flex-1 text-xs font-mono"
+          spellcheck={false}
+          autoComplete="off"
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => previewM.mutate()}
+          disabled={disabled}
+          title={
+            digestMode === "off"
+              ? "Set a digest mode (daily or weekly) to enable preview"
+              : "Render and email a sample digest for this user"
+          }
+        >
+          {previewM.isPending ? "Sending…" : "Send preview"}
+        </Button>
+      </div>
       {previewM.isSuccess && previewM.data ? (
         <span className="text-xs text-primary">
           Sent to{" "}
@@ -821,37 +664,20 @@ function TZInput({
   onChange: (v: string) => void;
 }) {
   return (
-    <div className="flex items-center gap-1">
+    <>
       <Input
         type="text"
         value={value}
         onInput={(e) => onChange(e.currentTarget.value)}
         placeholder="UTC"
         list="iana-tz-quickpicks"
-        className="h-8 w-56 font-mono"
+        className="font-mono"
       />
       <datalist id="iana-tz-quickpicks">
         {TZ_QUICKPICKS.map((tz) => (
           <option key={tz} value={tz} />
         ))}
       </datalist>
-    </div>
+    </>
   );
-}
-
-// trimSeconds normalises an HH:MM:SS value down to HH:MM for the
-// <input type="time"> default UI. The HTML element accepts the
-// longer form but renders the seconds spinner only when one is
-// emitted — operators rarely care, and the backend re-parses either
-// form via parseClockTime.
-function trimSeconds(t: string): string {
-  if (!t) return "";
-  return t.length >= 5 ? t.slice(0, 5) : t;
-}
-
-function clamp(n: number, lo: number, hi: number): number {
-  if (Number.isNaN(n)) return lo;
-  if (n < lo) return lo;
-  if (n > hi) return hi;
-  return n;
 }

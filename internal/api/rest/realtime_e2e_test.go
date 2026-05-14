@@ -82,8 +82,8 @@ func TestRealtimeFlowE2E(t *testing.T) {
 	}
 
 	// Auth-collection so we can mint a Bearer session.
-	users := schemabuilder.NewAuthCollection("users")
-	posts := schemabuilder.NewCollection("posts").
+	users := schemabuilder.NewAuthCollection("users").PublicRules()
+	posts := schemabuilder.NewCollection("posts").PublicRules().
 		Field("title", schemabuilder.NewText())
 	registry.Reset()
 	registry.Register(users)

@@ -248,6 +248,28 @@ func (b *CollectionBuilder) DeleteRule(rule string) *CollectionBuilder {
 	return b
 }
 
+// PublicRules opens every CRUD operation to unauthenticated callers by
+// setting all five rules to the always-true expression "true".
+//
+// Use this ONLY for collections that are genuinely public (and only on
+// non-sensitive data). It exists because the rule engine is secure-by-
+// default: an unset rule means "locked / server-only", so a truly
+// public collection must say so explicitly. This is an explicit opt-in,
+// not a bypass — the rules still run, they just always pass.
+//
+// For anything non-trivial, set the five rules individually instead
+// (e.g. ListRule("@request.auth.id != ''")).
+func (b *CollectionBuilder) PublicRules() *CollectionBuilder {
+	b.spec.Rules = RuleSet{
+		List:   "true",
+		View:   "true",
+		Create: "true",
+		Update: "true",
+		Delete: "true",
+	}
+	return b
+}
+
 // Spec returns a deep copy of the captured CollectionSpec. The
 // registry calls this when it accepts the collection; mutating the
 // returned value does not affect the builder.

@@ -78,13 +78,13 @@ type setupDetectResponse struct {
 // setupDBBody is the request body for /probe-db AND /save-db. Save adds
 // CreateDatabase; the probe handler ignores it.
 type setupDBBody struct {
-	Driver      string `json:"driver"`         // local-socket | external | embedded
-	SocketDir   string `json:"socket_dir"`     // when driver=local-socket
-	Username    string `json:"username"`       // when driver=local-socket
-	Password    string `json:"password"`       // optional (trust/peer auth)
-	Database    string `json:"database"`       // when driver=local-socket
-	SSLMode     string `json:"sslmode"`        // when driver=local-socket
-	ExternalDSN string `json:"external_dsn"`   // when driver=external
+	Driver      string `json:"driver"`       // local-socket | external | embedded
+	SocketDir   string `json:"socket_dir"`   // when driver=local-socket
+	Username    string `json:"username"`     // when driver=local-socket
+	Password    string `json:"password"`     // optional (trust/peer auth)
+	Database    string `json:"database"`     // when driver=local-socket
+	SSLMode     string `json:"sslmode"`      // when driver=local-socket
+	ExternalDSN string `json:"external_dsn"` // when driver=external
 	// CreateDatabase, when true, triggers /save-db to CREATE DATABASE
 	// against the postgres admin db on the same server if the target
 	// db doesn't already exist. Ignored by /probe-db.
@@ -111,10 +111,16 @@ type setupDBBody struct {
 // "yellow: foreign non-empty DB, click to proceed anyway" / "neutral:
 // empty DB, continue normally".
 type setupProbeResponse struct {
-	OK                 bool   `json:"ok"`
-	DSN                string `json:"dsn,omitempty"`
-	Version            string `json:"version,omitempty"`
-	DBExists           bool   `json:"db_exists,omitempty"`
+	OK       bool   `json:"ok"`
+	DSN      string `json:"dsn,omitempty"`
+	Version  string `json:"version,omitempty"`
+	DBExists bool   `json:"db_exists,omitempty"`
+	// WillCreateDB marks the one OK path where the target database
+	// doesn't exist yet but the operator ticked "Create database" and
+	// the probe verified the server + credentials + CREATEDB privilege
+	// via the `postgres` maintenance DB. The wizard renders this as a
+	// neutral "will be created on save" banner, not a red failure.
+	WillCreateDB       bool   `json:"will_create_db,omitempty"`
 	CanCreateDB        bool   `json:"can_create_db,omitempty"`
 	PublicTableCount   int    `json:"public_table_count"`
 	IsExistingRailbase bool   `json:"is_existing_railbase"`
@@ -300,7 +306,11 @@ func (d *Deps) setupProbeDBHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), setupProbeTimeout)
 	defer cancel()
 
-	resp := probeDSN(ctx, dsn)
+	// Pass create_database through: when the target DB is missing and
+	// the operator opted into creating it, probeDSN verifies the server
+	// + credentials via the `postgres` maintenance DB instead of
+	// failing hard.
+	resp := probeDSN(ctx, dsn, body.CreateDatabase)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -353,7 +363,11 @@ func (d *Deps) setupSaveDBHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), setupProbeTimeout)
 	defer cancel()
 
-	probe := probeDSN(ctx, dsn)
+	// Save uses the STRICT probe (createDatabase=false): it wants the
+	// plain "does not exist" failure so the CREATE-DATABASE branch
+	// below can do the actual creation. The lenient maintenance-DB
+	// fallback is a probe-tab affordance only.
+	probe := probeDSN(ctx, dsn, false)
 	if !probe.OK {
 		// Probe failed. If the failure was "database does not exist"
 		// AND create_database=true, fall through to the CREATE-DATABASE
@@ -380,7 +394,7 @@ func (d *Deps) setupSaveDBHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		// Re-probe — the target db now exists; this also confirms our
 		// credentials can connect to it (not just to `postgres`).
-		probe = probeDSN(ctx, dsn)
+		probe = probeDSN(ctx, dsn, false)
 		if !probe.OK {
 			writeJSON(w, http.StatusOK, setupSaveResponse{
 				OK:   false,
@@ -511,7 +525,7 @@ func buildSetupDSN(body setupDBBody) (string, error) {
 // PG < 14 with a typed error. Here we want a permissive probe — the
 // operator should be told their PG12 is too old via a clear hint, not
 // just "can't connect".
-func probeDSN(ctx context.Context, dsn string) setupProbeResponse {
+func probeDSN(ctx context.Context, dsn string, createDatabase bool) setupProbeResponse {
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		return setupProbeResponse{
@@ -523,6 +537,17 @@ func probeDSN(ctx context.Context, dsn string) setupProbeResponse {
 	}
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
+		// A missing target database is only a real failure when the
+		// operator hasn't opted into creating it. When create_database
+		// is set, fall back to the `postgres` maintenance DB to verify
+		// the server + credentials (and the CREATEDB privilege) are
+		// sound — so the wizard can report "all good, the database will
+		// be created on save" instead of a red error.
+		low := strings.ToLower(err.Error())
+		missingDB := strings.Contains(low, "does not exist") && strings.Contains(low, "database")
+		if createDatabase && missingDB {
+			return probeViaMaintenanceDB(ctx, dsn)
+		}
 		return setupProbeResponse{
 			OK:    false,
 			DSN:   dsn,
@@ -579,6 +604,92 @@ func probeDSN(ctx context.Context, dsn string) setupProbeResponse {
 	}
 }
 
+// probeViaMaintenanceDB is the "target database doesn't exist yet, but
+// the operator ticked Create database" path. It connects to the
+// `postgres` maintenance DB on the same server with the same
+// credentials — proving the server is reachable AND the credentials
+// are valid — and checks the role's CREATEDB privilege so a permission
+// problem surfaces at probe time instead of failing later on save.
+//
+// Returns OK=true with WillCreateDB=true on success: the wizard renders
+// that as a neutral "will be created on save" banner, not a red error.
+// A genuine failure (server down, bad credentials, no CREATEDB priv)
+// still comes back OK=false with an actionable hint.
+func probeViaMaintenanceDB(ctx context.Context, dsn string) setupProbeResponse {
+	adminDSN, err := dsnWithDatabase(dsn, "postgres")
+	if err != nil {
+		return setupProbeResponse{
+			OK:    false,
+			DSN:   dsn,
+			Error: err.Error(),
+			Hint:  "Could not compose a maintenance-DB connection to verify the server.",
+		}
+	}
+	cfg, err := pgx.ParseConfig(adminDSN)
+	if err != nil {
+		return setupProbeResponse{
+			OK:    false,
+			DSN:   dsn,
+			Error: err.Error(),
+			Hint:  "DSN looks malformed. Expected postgres://user[:password]@host[:port]/dbname?sslmode=...",
+		}
+	}
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		// The server itself is unreachable or the credentials are bad —
+		// a genuine failure. Report it with the usual actionable hint.
+		return setupProbeResponse{
+			OK:    false,
+			DSN:   dsn,
+			Error: err.Error(),
+			Hint:  setupProbeHint(err.Error()),
+		}
+	}
+	defer conn.Close(ctx)
+
+	var version string
+	if err := conn.QueryRow(ctx, "select version()").Scan(&version); err != nil {
+		return setupProbeResponse{
+			OK:    false,
+			DSN:   dsn,
+			Error: err.Error(),
+			Hint:  "Connected to the server but SELECT version() failed. The account may lack basic SELECT privileges.",
+		}
+	}
+
+	// CREATEDB privilege: a superuser can create databases even without
+	// the explicit rolcreatedb flag, so check both.
+	canCreate := false
+	_ = conn.QueryRow(ctx,
+		`select rolcreatedb or rolsuper from pg_roles where rolname = current_user`,
+	).Scan(&canCreate)
+
+	if !canCreate {
+		// Server + credentials are fine, but this role can't CREATE
+		// DATABASE — saving with "Create database" ticked would fail.
+		// Surface it now, at probe time, with a concrete fix.
+		return setupProbeResponse{
+			OK:      false,
+			DSN:     dsn,
+			Version: version,
+			Error:   "the database does not exist and the connecting role lacks the CREATEDB privilege",
+			Hint:    "Server reachable and credentials valid, but this role can't CREATE DATABASE. Grant it (`ALTER ROLE <user> CREATEDB`) or create the database manually with `createdb <name>`.",
+		}
+	}
+
+	return setupProbeResponse{
+		OK:           true,
+		DSN:          dsn,
+		Version:      version,
+		DBExists:     false,
+		WillCreateDB: true,
+		CanCreateDB:  true,
+		// PublicTableCount / IsExistingRailbase stay zero — the target
+		// DB doesn't exist yet, so it's pristine by definition.
+		Hint: "Server reachable and credentials valid. The database doesn't exist yet — it will be created when you save.",
+	}
+}
+
 // setupProbeHint maps connection-error text to an actionable hint.
 // We pattern-match on substrings rather than typed errors because
 // pgx wraps both libpq and OS-level errors and the typed surface
@@ -587,7 +698,7 @@ func setupProbeHint(errMsg string) string {
 	low := strings.ToLower(errMsg)
 	switch {
 	case strings.Contains(low, "does not exist") && strings.Contains(low, "database"):
-		return "The database does not exist. Tick \"Create database\" on the save step, or run `createdb <name>` manually."
+		return "The database does not exist. Tick \"Create the database if it doesn't exist\" below, or run `createdb <name>` manually."
 	case strings.Contains(low, "authentication failed"), strings.Contains(low, "password"):
 		return "Authentication failed. Verify the password, or for local sockets check pg_hba.conf for peer/trust auth on this user."
 	case strings.Contains(low, "connection refused"):

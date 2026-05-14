@@ -6,9 +6,14 @@ import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
 import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
-import { Shield, Download } from "@/lib/ui/icons";
+import { Download } from "@/lib/ui/icons";
 
-// Audit log viewer — paginated, filterable list of `_audit_log` rows.
+// Audit panel — paginated, filterable list of `_audit_log` rows.
+// Rendered as the "Audit" category of the unified Logs screen
+// (logs.tsx); it returns AdminPage.Toolbar + .Body fragments, not a
+// full AdminPage shell — the shell + category tabs live in LogsScreen.
+//
+// Original screen docs follow:
 // Backend endpoint: GET /api/_admin/audit (v0.8 list, v1.7.11 filters).
 //
 // Filter parity with the docs/17 §Admin UI tests checklist: event,
@@ -80,7 +85,7 @@ const columns: ColumnDef<AuditEvent>[] = [
   },
 ];
 
-export function AuditScreen() {
+export function AuditPanel() {
   const [total, setTotal] = useState(0);
 
   const [eventInput, setEventInput] = useState("");
@@ -111,25 +116,12 @@ export function AuditScreen() {
     event || outcome || userId || since || until || errorCode;
 
   return (
-    <AdminPage>
-      <AdminPage.Header
-        title={
-          <span className="inline-flex items-center gap-2">
-            <Shield className="h-5 w-5 text-primary" />
-            Audit log
-            <Badge variant="outline" className="font-mono text-[10px] uppercase tracking-wide">
-              compliance
-            </Badge>
-          </span>
-        }
-        description={
-          <>
-            {total} event{total === 1 ? "" : "s"} total. Append-only hash chain —
-            verify integrity with <code className="font-mono">railbase audit verify</code>.
-            Every system_admin action is recorded here for forensic review.
-          </>
-        }
-      />
+    <>
+      <p className="text-sm text-muted-foreground">
+        {total} event{total === 1 ? "" : "s"} total. Append-only hash chain — verify
+        integrity with <code className="font-mono">railbase audit verify</code>. Every
+        system_admin action is recorded here for forensic review.
+      </p>
 
       <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
@@ -266,7 +258,7 @@ export function AuditScreen() {
           }}
         />
       </AdminPage.Body>
-    </AdminPage>
+    </>
   );
 }
 

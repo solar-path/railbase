@@ -95,7 +95,7 @@ func TestPaginationStability_E2E(t *testing.T) {
 	}
 
 	// Sample collection: just `name` for human readability.
-	items := schemabuilder.NewCollection("pgitems").
+	items := schemabuilder.NewCollection("pgitems").PublicRules().
 		Field("name", schemabuilder.NewText().Required())
 	registry.Reset()
 	registry.Register(items)

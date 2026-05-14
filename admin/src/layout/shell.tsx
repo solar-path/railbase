@@ -399,14 +399,32 @@ function DataSidebar({
 function LogsSidebar({ loc }: { loc: string }) {
   const { t } = useT();
   const isActive = makeIsActive(loc);
-  const items: Array<{ href: string; label: string }> = [
-    { href: "/logs/audit", label: t("nav.logs.audit") },
-    { href: "/logs/app", label: t("nav.logs.app") },
-    { href: "/logs/realtime", label: t("nav.logs.realtime") },
-    { href: "/logs/health", label: t("nav.logs.health") },
-    { href: "/logs/cache", label: t("nav.logs.cache") },
-    { href: "/logs/email-events", label: t("nav.logs.emailEvents") },
-    { href: "/logs/notifications", label: t("nav.logs.notifications") },
+  // The four event-stream categories (audit / app / email-events /
+  // notifications) all live on the unified Logs page, so the single
+  // "Logs" entry is active for any of them. Realtime / Cache / Health
+  // stay as their own entries.
+  const logsActive =
+    isActive("/logs/audit") ||
+    isActive("/logs/app") ||
+    isActive("/logs/email-events") ||
+    isActive("/logs/notifications");
+  const items: Array<{ href: string; label: string; active: boolean }> = [
+    { href: "/logs/app", label: t("tab.logs"), active: logsActive },
+    {
+      href: "/logs/realtime",
+      label: t("nav.logs.realtime"),
+      active: isActive("/logs/realtime"),
+    },
+    {
+      href: "/logs/cache",
+      label: t("nav.logs.cache"),
+      active: isActive("/logs/cache"),
+    },
+    {
+      href: "/logs/health",
+      label: t("nav.logs.health"),
+      active: isActive("/logs/health"),
+    },
   ];
   return (
     <SidebarGroup>
@@ -414,7 +432,7 @@ function LogsSidebar({ loc }: { loc: string }) {
         <SidebarMenu>
           {items.map((it) => (
             <SidebarMenuItem key={it.href}>
-              <SidebarMenuButton asChild isActive={isActive(it.href)}>
+              <SidebarMenuButton asChild isActive={it.active}>
                 <Link href={it.href}>{it.label}</Link>
               </SidebarMenuButton>
             </SidebarMenuItem>

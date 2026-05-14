@@ -19,13 +19,23 @@ import railschema "github.com/railbase/railbase/pkg/railbase/schema"
 
 // Posts is a starter collection that demonstrates the DSL. Replace
 // it with your real model — `migrate diff` will sort out the SQL.
+//
+// Access rules are secure-by-default: a CRUD operation with NO rule is
+// LOCKED (server-only), not public. So every operation you want to
+// expose over the HTTP API must have an explicit rule. Here every
+// operation is allowed for any signed-in caller — tighten as needed
+// (e.g. `DeleteRule("@request.auth.id = author")` for owner-only
+// deletes), or call `.PublicRules()` for a fully-public collection.
 var Posts = railschema.Collection("posts").
 	Field("title", railschema.Text().Required().MinLen(3).MaxLen(120)).
 	Field("body", railschema.Text().FTS()).
 	Field("status", railschema.Select("draft", "published").Default("draft").Required()).
 	Index("idx_posts_status", "status").
 	ListRule("@request.auth.id != ''").
-	CreateRule("@request.auth.id != ''")
+	ViewRule("@request.auth.id != ''").
+	CreateRule("@request.auth.id != ''").
+	UpdateRule("@request.auth.id != ''").
+	DeleteRule("@request.auth.id != ''")
 
 func init() {
 	railschema.Register(Posts)

@@ -19,7 +19,9 @@ test.beforeEach(async ({ page }) => {
 
 const screens: Array<{ path: string; name: string; landmark: RegExp }> = [
   { path: "/_/schema",              name: "schema.png",      landmark: /Schema/i },
-  { path: "/_/logs/audit",          name: "audit.png",       landmark: /Audit log/i },
+  // Audit + App logs now share the unified Logs screen; the active
+  // category surfaces as a tab, the page title is "Logs".
+  { path: "/_/logs/audit",          name: "audit.png",       landmark: /Audit/i },
   { path: "/_/logs/app",            name: "logs.png",        landmark: /Logs/i },
   { path: "/_/data/_jobs",          name: "jobs.png",        landmark: /Jobs/i },
   { path: "/_/logs/health",         name: "health.png",      landmark: /Health/i },

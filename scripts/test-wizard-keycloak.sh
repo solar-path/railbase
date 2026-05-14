@@ -43,6 +43,10 @@ RB_DATA="${TMPDIR:-/tmp}/railbase-wizard-test-$$"
 # with their dev environment.
 RB_DSN="postgres://$(whoami)@/railbase?host=/tmp&sslmode=disable"
 
+# `make build` writes only to bin/dist/ — this is the canonical
+# host-binary path the script invokes.
+RB_BIN="/Users/work/apps/Railbase/bin/dist/railbase_$(go env GOOS)_$(go env GOARCH)"
+
 # Counters.
 PASS=0
 FAIL=0
@@ -92,14 +96,14 @@ pass "OpenLDAP backend responding (alice.anderson visible)"
 
 # Build the production binary if missing (no embed_pg — we use external
 # PG via DSN to avoid the flaky embed-PG runtime extraction in scripts).
-if [ ! -x "/Users/work/apps/Railbase/bin/railbase" ]; then
-  info "Building bin/railbase (one-time)…"
+if [ ! -x "${RB_BIN}" ]; then
+  info "Building ${RB_BIN} (one-time)…"
   (cd /Users/work/apps/Railbase && make build >/dev/null 2>&1) || {
     fail "Build failed"
     exit 1
   }
 fi
-pass "bin/railbase present"
+pass "${RB_BIN} present"
 
 # Ensure migrations are applied + a minimal `users` auth-collection
 # exists. The wizard step that registers domain auth-collections runs
@@ -108,7 +112,7 @@ pass "bin/railbase present"
 section "Bootstrap schema state in target DB"
 
 (cd /Users/work/apps/Railbase && \
-  RAILBASE_DSN="${RB_DSN}" ./bin/railbase migrate up >/dev/null 2>&1)
+  RAILBASE_DSN="${RB_DSN}" "${RB_BIN}" migrate up >/dev/null 2>&1)
 pass "Sys migrations applied"
 
 # Idempotent CREATE — `IF NOT EXISTS` so re-runs are no-ops.
@@ -148,7 +152,7 @@ RAILBASE_DSN="${RB_DSN}" \
 RAILBASE_HTTP_ADDR=":${RB_PORT}" \
 RAILBASE_DATA_DIR="${RB_DATA}" \
 RAILBASE_LOG_LEVEL=warn \
-/Users/work/apps/Railbase/bin/railbase serve >"${RB_DATA}/server.log" 2>&1 &
+"${RB_BIN}" serve >"${RB_DATA}/server.log" 2>&1 &
 RB_PID=$!
 
 # Poll readiness AND verify it's actually our backend (port hijack
@@ -342,7 +346,7 @@ section "SCIM — mint a bearer credential via CLI"
 # Run scim token create against the same DSN. CLI loads master.key
 # from RAILBASE_DATA_DIR — must be the same one the server uses.
 SCIM_TOKEN_OUTPUT=$(RAILBASE_DSN="${RB_DSN}" RAILBASE_DATA_DIR="${RB_DATA}" \
-  /Users/work/apps/Railbase/bin/railbase scim token create \
+  "${RB_BIN}" scim token create \
   --name "keycloak-test" --collection users 2>&1)
 RAW_TOKEN=$(echo "${SCIM_TOKEN_OUTPUT}" | grep '^rbsm_' | head -1)
 

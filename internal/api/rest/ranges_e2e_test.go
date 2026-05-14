@@ -62,7 +62,7 @@ func TestRanges2E2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events := schemabuilder.NewCollection("events").
+	events := schemabuilder.NewCollection("events").PublicRules().
 		Field("dates", schemabuilder.NewDateRange().Required()).
 		Field("hours", schemabuilder.NewTimeRange().Required())
 	registry.Reset()

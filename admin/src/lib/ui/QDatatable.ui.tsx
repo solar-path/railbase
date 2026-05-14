@@ -294,7 +294,10 @@ export function QDatatable<T>({
     )
       .then((r) => {
         if (ac.signal.aborted) return
-        setServerState({ rows: r.rows, total: r.total, loading: false, error: null })
+        // `rows` may arrive null from a host fetcher whose backend
+        // marshals an empty Go slice as JSON `null` — coalesce so the
+        // render path (rows.map) never sees a non-array.
+        setServerState({ rows: r.rows ?? [], total: r.total ?? 0, loading: false, error: null })
       })
       .catch((e) => {
         if (ac.signal.aborted) return
