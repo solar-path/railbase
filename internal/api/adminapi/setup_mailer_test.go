@@ -47,9 +47,6 @@ func TestSetupMailer_Status_NilSettings(t *testing.T) {
 	if resp.ConfiguredAt != "" {
 		t.Errorf("configured_at: want empty in fresh state, got %q", resp.ConfiguredAt)
 	}
-	if resp.SkippedAt != "" {
-		t.Errorf("skipped_at: want empty, got %q", resp.SkippedAt)
-	}
 }
 
 // TestSetupMailer_Probe_BadDriver — body validation catches unknown
@@ -188,29 +185,6 @@ func TestSetupMailer_Probe_SMTPUnreachable(t *testing.T) {
 	}
 	if resp.Error == "" {
 		t.Errorf("error: want populated, got empty")
-	}
-}
-
-// TestSetupMailer_Skip_RequiresReason — POST /mailer-skip with an
-// empty reason is rejected. Operator-actions that weaken safety
-// invariants must leave an audit trail.
-func TestSetupMailer_Skip_RequiresReason(t *testing.T) {
-	d := &Deps{}
-	r := newSetupMailerRouter(d)
-	body, _ := json.Marshal(setupMailerSkipBody{Reason: ""})
-	req := httptest.NewRequest(http.MethodPost, "/_setup/mailer-skip",
-		bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	// d.Settings is nil → handler returns 500 BEFORE validating
-	// reason. That's acceptable behaviour for setup-mode boot, but
-	// we want to catch reason-required separately. Build a Deps with
-	// settings explicitly nil and assert the 500 path; the embed_pg
-	// counterpart covers the populated-settings happy path.
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status: want 500 (Settings nil), got %d body=%s",
-			rec.Code, rec.Body.String())
 	}
 }
 

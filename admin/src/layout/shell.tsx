@@ -4,7 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../auth/context";
 import { adminAPI } from "../api/admin";
 import type { CollectionSpec } from "../api/types";
+import { useT } from "../i18n";
 import CommandPalette from "./command_palette";
+import { LanguageSwitcher } from "./language_switcher";
 import { Toaster } from "@/lib/ui/sonner.ui";
 import { Separator } from "@/lib/ui/separator.ui";
 import { cn } from "@/lib/ui/cn";
@@ -79,7 +81,13 @@ import {
 type TopTab = "data" | "logs" | "settings" | null;
 
 function activeTopTab(loc: string): TopTab {
-  if (loc.startsWith("/data") || loc === "/schema") return "data";
+  if (
+    loc.startsWith("/data") ||
+    loc === "/schema" ||
+    loc.startsWith("/collections")
+  ) {
+    return "data";
+  }
   if (loc.startsWith("/logs")) return "logs";
   if (loc.startsWith("/settings")) return "settings";
   return null;
@@ -96,6 +104,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const { state, signout } = useAuth();
   const me = state.kind === "signed-in" ? state.me : null;
   const [loc] = useLocation();
+  const { t } = useT();
 
   const schemaQ = useQuery({
     queryKey: ["schema"],
@@ -105,6 +114,9 @@ export function Shell({ children }: { children: ReactNode }) {
 
   const activeTab = activeTopTab(loc);
   const collections = schemaQ.data?.collections ?? [];
+  // Names of admin-created collections — the only ones the UI lets you
+  // edit/drop. Code-defined collections are absent and stay read-only.
+  const editable = schemaQ.data?.editable ?? [];
 
   return (
     <SidebarProvider>
@@ -115,12 +127,19 @@ export function Shell({ children }: { children: ReactNode }) {
             className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-sidebar-accent"
           >
             <span className="font-semibold tracking-tight">Railbase</span>
-            <span className="text-xs text-muted-foreground">admin</span>
+            <span className="text-xs text-muted-foreground">
+              {t("shell.admin")}
+            </span>
           </Link>
         </SidebarHeader>
 
         <SidebarContent>
-          <TabSidebar tab={activeTab} loc={loc} collections={collections} />
+          <TabSidebar
+            tab={activeTab}
+            loc={loc}
+            collections={collections}
+            editable={editable}
+          />
         </SidebarContent>
 
         <SidebarFooter>
@@ -143,10 +162,11 @@ export function Shell({ children }: { children: ReactNode }) {
           <Crumbs loc={loc} />
           <div className="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
             <TopTabs active={activeTab} />
+            <LanguageSwitcher />
             <button
               type="button"
               onClick={openCommandPalette}
-              title="Open command palette"
+              title={t("shell.openPalette")}
               className="font-mono text-[11px] rounded border bg-muted px-1.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
             >
               ⌘K
@@ -167,11 +187,20 @@ export function Shell({ children }: { children: ReactNode }) {
 // primitive: the URL is the single source of truth and we don't want
 // to wire controlled Tabs state on top of router state.
 function TopTabs({ active }: { active: TopTab }) {
+  const { t } = useT();
   return (
     <nav className="flex items-center gap-1 text-sm">
-      <TabLink href="/data" label="Data" isActive={active === "data"} />
-      <TabLink href="/logs/app" label="Logs" isActive={active === "logs"} />
-      <TabLink href="/settings" label="Settings" isActive={active === "settings"} />
+      <TabLink href="/data" label={t("tab.data")} isActive={active === "data"} />
+      <TabLink
+        href="/logs/app"
+        label={t("tab.logs")}
+        isActive={active === "logs"}
+      />
+      <TabLink
+        href="/settings"
+        label={t("tab.settings")}
+        isActive={active === "settings"}
+      />
     </nav>
   );
 }
@@ -209,14 +238,18 @@ function TabSidebar({
   tab,
   loc,
   collections,
+  editable,
 }: {
   tab: TopTab;
   loc: string;
   collections: CollectionSpec[];
+  editable: string[];
 }) {
   const effectiveTab = tab ?? "data";
   if (effectiveTab === "data")
-    return <DataSidebar loc={loc} collections={collections} />;
+    return (
+      <DataSidebar loc={loc} collections={collections} editable={editable} />
+    );
   if (effectiveTab === "logs") return <LogsSidebar loc={loc} />;
   if (effectiveTab === "settings") return <SettingsSidebar loc={loc} />;
   return null;
@@ -237,13 +270,17 @@ const SYSTEM_TABLES: Array<{ name: string; path: string }> = [
 function DataSidebar({
   loc,
   collections,
+  editable,
 }: {
   loc: string;
   collections: CollectionSpec[];
+  editable: string[];
 }) {
+  const { t } = useT();
   const isActive = makeIsActive(loc);
   const [query, setQuery] = useState("");
   const [systemOpen, setSystemOpen] = useState(false);
+  const editableSet = new Set(editable);
 
   const q = query.trim().toLowerCase();
   const filteredCollections = q
@@ -264,7 +301,7 @@ function DataSidebar({
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton asChild isActive={isActive("/schema", true)}>
-                <Link href="/schema">View schema</Link>
+                <Link href="/schema">{t("nav.schemas")}</Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
@@ -280,7 +317,7 @@ function DataSidebar({
             {...({
               value: query,
               onInput: (e: any) => setQuery(e.currentTarget.value),
-              placeholder: "Search collections…",
+              placeholder: t("nav.searchCollections"),
               autoComplete: "off",
               spellcheck: false,
             } as any)}
@@ -289,12 +326,12 @@ function DataSidebar({
       </SidebarGroup>
 
       <SidebarGroup>
-        <SidebarGroupLabel>Collections</SidebarGroupLabel>
+        <SidebarGroupLabel>{t("nav.collections")}</SidebarGroupLabel>
         <SidebarGroupContent>
           <SidebarMenu>
             {filteredCollections.length === 0 ? (
               <li className="px-2 py-1 text-xs text-muted-foreground">
-                {q ? "No matches" : "No collections yet"}
+                {q ? t("nav.noMatches") : t("nav.noCollections")}
               </li>
             ) : (
               filteredCollections.map((c) => (
@@ -304,10 +341,13 @@ function DataSidebar({
                     isActive={isActive(`/data/${c.name}`)}
                   >
                     <Link href={`/data/${c.name}`}>
-                      <span className="font-mono text-[13px]">{c.name}</span>
+                      <span className="font-mono">{c.name}</span>
                     </Link>
                   </SidebarMenuButton>
-                  <CollectionMenuAction name={c.name} />
+                  <CollectionMenuAction
+                    name={c.name}
+                    editable={editableSet.has(c.name)}
+                  />
                 </SidebarMenuItem>
               ))
             )}
@@ -326,7 +366,7 @@ function DataSidebar({
               aria-expanded semantics on the button itself. */}
           <SidebarGroupLabel className="p-0">
             <CollapsibleTrigger className="flex w-full items-center justify-between px-2 rounded-md hover:bg-sidebar-accent">
-              <span>System</span>
+              <span>{t("nav.system")}</span>
               <ChevronRight
                 className={cn(
                   "h-3.5 w-3.5 transition-transform",
@@ -342,7 +382,7 @@ function DataSidebar({
                   <SidebarMenuItem key={s.name}>
                     <SidebarMenuButton asChild isActive={isActive(s.path)}>
                       <Link href={s.path}>
-                        <span className="font-mono text-[13px]">{s.name}</span>
+                        <span className="font-mono">{s.name}</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -357,15 +397,16 @@ function DataSidebar({
 }
 
 function LogsSidebar({ loc }: { loc: string }) {
+  const { t } = useT();
   const isActive = makeIsActive(loc);
   const items: Array<{ href: string; label: string }> = [
-    { href: "/logs/audit", label: "Audit" },
-    { href: "/logs/app", label: "App logs" },
-    { href: "/logs/realtime", label: "Realtime" },
-    { href: "/logs/health", label: "Health" },
-    { href: "/logs/cache", label: "Cache" },
-    { href: "/logs/email-events", label: "Email events" },
-    { href: "/logs/notifications", label: "Notifications" },
+    { href: "/logs/audit", label: t("nav.logs.audit") },
+    { href: "/logs/app", label: t("nav.logs.app") },
+    { href: "/logs/realtime", label: t("nav.logs.realtime") },
+    { href: "/logs/health", label: t("nav.logs.health") },
+    { href: "/logs/cache", label: t("nav.logs.cache") },
+    { href: "/logs/email-events", label: t("nav.logs.emailEvents") },
+    { href: "/logs/notifications", label: t("nav.logs.notifications") },
   ];
   return (
     <SidebarGroup>
@@ -385,6 +426,7 @@ function LogsSidebar({ loc }: { loc: string }) {
 }
 
 function SettingsSidebar({ loc }: { loc: string }) {
+  const { t } = useT();
   const isActive = makeIsActive(loc);
   return (
     <SidebarGroup>
@@ -392,13 +434,13 @@ function SettingsSidebar({ loc }: { loc: string }) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild isActive={isActive("/settings", true)}>
-              <Link href="/settings">General</Link>
+              <Link href="/settings">{t("nav.settings.general")}</Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
 
           <SidebarMenuItem>
             <SidebarMenuButton asChild isActive={isActive("/settings/mailer")}>
-              <Link href="/settings/mailer">Mailer</Link>
+              <Link href="/settings/mailer">{t("nav.settings.mailer")}</Link>
             </SidebarMenuButton>
             <SidebarMenuSub>
               <SidebarMenuSubItem>
@@ -406,19 +448,26 @@ function SettingsSidebar({ loc }: { loc: string }) {
                   asChild
                   isActive={isActive("/settings/mailer/templates", true)}
                 >
-                  <Link href="/settings/mailer/templates">Templates</Link>
+                  <Link href="/settings/mailer/templates">
+                    {t("nav.settings.templates")}
+                  </Link>
                 </SidebarMenuSubButton>
               </SidebarMenuSubItem>
             </SidebarMenuSub>
           </SidebarMenuItem>
 
           {[
-            { href: "/settings/notifications", label: "Notifications" },
-            { href: "/settings/webhooks", label: "Webhooks" },
-            { href: "/settings/backups", label: "Backups" },
-            { href: "/settings/hooks", label: "Hooks" },
-            { href: "/settings/i18n", label: "Translations" },
-            { href: "/settings/trash", label: "Trash" },
+            { href: "/settings/auth", label: t("nav.settings.auth") },
+            {
+              href: "/settings/notifications",
+              label: t("nav.settings.notifications"),
+            },
+            { href: "/settings/webhooks", label: t("nav.settings.webhooks") },
+            { href: "/settings/stripe", label: t("nav.settings.stripe") },
+            { href: "/settings/backups", label: t("nav.settings.backups") },
+            { href: "/settings/hooks", label: t("nav.settings.hooks") },
+            { href: "/settings/i18n", label: t("nav.settings.i18n") },
+            { href: "/settings/trash", label: t("nav.settings.trash") },
           ].map((it) => (
             <SidebarMenuItem key={it.href}>
               <SidebarMenuButton asChild isActive={isActive(it.href)}>
@@ -438,40 +487,49 @@ function SettingsSidebar({ loc }: { loc: string }) {
 // final crumb renders as <BreadcrumbPage> (non-link, aria-current).
 type Crumb = { label: string; href?: string };
 
-const LOGS_LABELS: Record<string, string> = {
-  audit: "Audit",
-  app: "App logs",
-  realtime: "Realtime",
-  health: "Health",
-  cache: "Cache",
-  "email-events": "Email events",
-  notifications: "Notifications",
+type TFn = ReturnType<typeof useT>["t"];
+
+// URL segment → i18n key. Labels are resolved per-render so breadcrumbs
+// stay in the active language.
+const LOGS_LABEL_KEYS: Record<string, string> = {
+  audit: "nav.logs.audit",
+  app: "nav.logs.app",
+  realtime: "nav.logs.realtime",
+  health: "nav.logs.health",
+  cache: "nav.logs.cache",
+  "email-events": "nav.logs.emailEvents",
+  notifications: "nav.logs.notifications",
 };
 
-const SETTINGS_LABELS: Record<string, string> = {
-  mailer: "Mailer",
-  notifications: "Notifications",
-  webhooks: "Webhooks",
-  backups: "Backups",
-  hooks: "Hooks",
-  i18n: "Translations",
-  trash: "Trash",
+const SETTINGS_LABEL_KEYS: Record<string, string> = {
+  mailer: "nav.settings.mailer",
+  auth: "nav.settings.auth",
+  notifications: "nav.settings.notifications",
+  webhooks: "nav.settings.webhooks",
+  stripe: "nav.settings.stripe",
+  backups: "nav.settings.backups",
+  hooks: "nav.settings.hooks",
+  i18n: "nav.settings.i18n",
+  trash: "nav.settings.trash",
 };
 
-function buildBreadcrumbs(loc: string): Crumb[] {
-  if (loc === "/") return [{ label: "Dashboard" }];
+function buildBreadcrumbs(loc: string, t: TFn): Crumb[] {
+  if (loc === "/") return [{ label: t("crumb.dashboard") }];
   if (loc === "/schema")
-    return [{ label: "Data", href: "/data" }, { label: "Schema" }];
+    return [
+      { label: t("crumb.data"), href: "/data" },
+      { label: t("crumb.schema") },
+    ];
 
   const segments = loc.replace(/^\/+|\/+$/g, "").split("/");
   const [tab, ...rest] = segments;
 
   if (tab === "data") {
-    const crumbs: Crumb[] = [{ label: "Data", href: "/data" }];
+    const crumbs: Crumb[] = [{ label: t("crumb.data"), href: "/data" }];
     if (rest.length === 0) return crumbs;
     const name = rest[0];
     const isSystem = name.startsWith("_");
-    if (isSystem) crumbs.push({ label: "System" });
+    if (isSystem) crumbs.push({ label: t("crumb.system") });
     if (rest.length === 1) {
       crumbs.push({ label: name });
     } else {
@@ -485,29 +543,44 @@ function buildBreadcrumbs(loc: string): Crumb[] {
     return crumbs;
   }
 
+  if (tab === "collections") {
+    const crumbs: Crumb[] = [{ label: t("crumb.data"), href: "/data" }];
+    if (rest[0] === "new") {
+      crumbs.push({ label: t("crumb.newCollection") });
+    } else if (rest[0]) {
+      crumbs.push({ label: rest[0], href: `/data/${rest[0]}` });
+      crumbs.push({ label: t("crumb.editSchema") });
+    }
+    return crumbs;
+  }
+
   if (tab === "logs") {
-    const crumbs: Crumb[] = [{ label: "Logs", href: "/logs/app" }];
+    const crumbs: Crumb[] = [{ label: t("crumb.logs"), href: "/logs/app" }];
     const sub = rest[0];
-    if (sub && LOGS_LABELS[sub]) crumbs.push({ label: LOGS_LABELS[sub] });
+    if (sub && LOGS_LABEL_KEYS[sub])
+      crumbs.push({ label: t(LOGS_LABEL_KEYS[sub]) });
     return crumbs;
   }
 
   if (tab === "settings") {
-    const crumbs: Crumb[] = [{ label: "Settings", href: "/settings" }];
+    const crumbs: Crumb[] = [
+      { label: t("crumb.settings"), href: "/settings" },
+    ];
     if (rest.length === 0) {
-      crumbs.push({ label: "General" });
+      crumbs.push({ label: t("crumb.general") });
       return crumbs;
     }
     const sub = rest[0];
     if (sub === "mailer") {
       if (rest.length === 1) {
-        crumbs.push({ label: "Mailer" });
+        crumbs.push({ label: t("crumb.mailer") });
       } else {
-        crumbs.push({ label: "Mailer", href: "/settings/mailer" });
-        if (rest[1] === "templates") crumbs.push({ label: "Templates" });
+        crumbs.push({ label: t("crumb.mailer"), href: "/settings/mailer" });
+        if (rest[1] === "templates")
+          crumbs.push({ label: t("crumb.templates") });
       }
-    } else if (SETTINGS_LABELS[sub]) {
-      crumbs.push({ label: SETTINGS_LABELS[sub] });
+    } else if (SETTINGS_LABEL_KEYS[sub]) {
+      crumbs.push({ label: t(SETTINGS_LABEL_KEYS[sub]) });
     }
     return crumbs;
   }
@@ -516,7 +589,8 @@ function buildBreadcrumbs(loc: string): Crumb[] {
 }
 
 function Crumbs({ loc }: { loc: string }) {
-  const crumbs = buildBreadcrumbs(loc);
+  const { t } = useT();
+  const crumbs = buildBreadcrumbs(loc, t);
   if (crumbs.length === 0) return null;
   return (
     <Breadcrumb>
@@ -560,6 +634,7 @@ function NavUser({
   onSignout: () => void;
 }) {
   const { isMobile } = useSidebar();
+  const { t } = useT();
   const primary = email.split("@")[0] || "admin";
   const initials = initialsOf(email);
 
@@ -607,7 +682,7 @@ function NavUser({
             <DropdownMenuGroup>
               <DropdownMenuItem onSelect={onSignout}>
                 <LogOut />
-                Sign out
+                {t("shell.signOut")}
               </DropdownMenuItem>
             </DropdownMenuGroup>
           </DropdownMenuContent>
@@ -620,18 +695,27 @@ function NavUser({
 // CollectionMenuAction — per-row hover-revealed dropdown adapted from
 // sandbox/nav-projects.tsx. Surfaces collection-scoped actions without
 // taking up vertical sidebar space: the MoreHorizontal trigger only
-// appears on row hover / focus. Action set is intentionally small —
-// schema changes are CLI-only in Railbase (schema-as-code), so no
-// destructive options here.
-function CollectionMenuAction({ name }: { name: string }) {
+// appears on row hover / focus.
+//
+// `editable` gates the "Edit schema" item: only admin-created
+// collections can be edited from the UI (code-defined ones are
+// source-owned — see internal/schema/live).
+function CollectionMenuAction({
+  name,
+  editable,
+}: {
+  name: string;
+  editable: boolean;
+}) {
   const { isMobile } = useSidebar();
+  const { t } = useT();
   const [, navigate] = useLocation();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <SidebarMenuAction showOnHover>
           <MoreHorizontal />
-          <span className="sr-only">More</span>
+          <span className="sr-only">{t("shell.more")}</span>
         </SidebarMenuAction>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -641,16 +725,25 @@ function CollectionMenuAction({ name }: { name: string }) {
       >
         <DropdownMenuItem onSelect={() => navigate(`/data/${name}`)}>
           <Folder className="text-muted-foreground" />
-          <span>View records</span>
+          <span>{t("nav.viewRecords")}</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => navigate("/schema")}>
-          <FileText className="text-muted-foreground" />
-          <span>View schema</span>
-        </DropdownMenuItem>
+        {editable ? (
+          <DropdownMenuItem
+            onSelect={() => navigate(`/collections/${name}/edit`)}
+          >
+            <FileText className="text-muted-foreground" />
+            <span>{t("nav.editSchema")}</span>
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem onSelect={() => navigate("/schema")}>
+            <FileText className="text-muted-foreground" />
+            <span>{t("nav.schemas")}</span>
+          </DropdownMenuItem>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => void copyToClipboard(name)}>
           <Copy className="text-muted-foreground" />
-          <span>Copy name</span>
+          <span>{t("nav.copyName")}</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

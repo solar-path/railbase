@@ -117,8 +117,9 @@ type Catalog struct {
 
 // NewCatalog constructs an empty catalog. defaultLocale is what
 // Negotiator falls back to when nothing in Accept-Language matches.
-// supported is the canonical list of locales operators want to
-// announce as available; Negotiator restricts matches to this set.
+// supported seeds the canonical list of negotiable locales; SetBundle
+// extends it as bundles are loaded, so callers can pass just the
+// default (or nil) and let LoadFS / LoadDir announce the rest.
 func NewCatalog(defaultLocale Locale, supported []Locale) *Catalog {
 	c := &Catalog{
 		defaultLocale: Canonical(string(defaultLocale)),
@@ -147,12 +148,22 @@ func (c *Catalog) Supported() []Locale {
 }
 
 // SetBundle installs a bundle for a locale. Overwrites any existing
-// entry for that locale.
+// entry for that locale. Installing a bundle also announces the locale
+// as supported (appended to the negotiable set if not already present)
+// — a locale with a loaded bundle is, by definition, available, so
+// operators who drop a `<lang>.json` file get it negotiable without a
+// separate registration step.
 func (c *Catalog) SetBundle(l Locale, b Bundle) {
 	l = Canonical(string(l))
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.bundles[l] = b
+	for _, s := range c.supported {
+		if s == l {
+			return
+		}
+	}
+	c.supported = append(c.supported, l)
 }
 
 // Bundle returns the bundle for a locale, or nil when absent.

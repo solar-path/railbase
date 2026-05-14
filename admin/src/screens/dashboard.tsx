@@ -15,14 +15,8 @@ import {
   CardTitle,
 } from "@/lib/ui/card.ui";
 import { Badge } from "@/lib/ui/badge.ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
+import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
+import type { AuditEvent } from "../api/types";
 
 // Dashboard — minimal v0.8 cut: collection count, recent audit
 // events, links to deep screens. The "stats cards / health checks /
@@ -140,39 +134,14 @@ export function DashboardScreen() {
 
       <section class="space-y-2">
         <h2 class="text-sm font-medium text-foreground">Recent audit events</h2>
-        <Card>
-          <CardContent class="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>seq</TableHead>
-                  <TableHead>event</TableHead>
-                  <TableHead>outcome</TableHead>
-                  <TableHead>at</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(auditQ.data?.items ?? []).slice(0, 10).map((e) => (
-                  <TableRow key={e.seq}>
-                    <TableCell class="font-mono">{e.seq}</TableCell>
-                    <TableCell class="font-mono">{e.event}</TableCell>
-                    <TableCell>
-                      <Badge variant={outcomeVariant(e.outcome)}>{e.outcome}</Badge>
-                    </TableCell>
-                    <TableCell class="font-mono text-muted-foreground">{e.at}</TableCell>
-                  </TableRow>
-                ))}
-                {auditQ.data?.items.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={4} class="text-muted-foreground text-center py-4">
-                      No events yet.
-                    </TableCell>
-                  </TableRow>
-                ) : null}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <QDatatable
+          columns={recentAuditColumns}
+          data={(auditQ.data?.items ?? []).slice(0, 10)}
+          loading={auditQ.isLoading}
+          rowKey="seq"
+          pageSize={10}
+          emptyMessage="No events yet."
+        />
       </section>
       </AdminPage.Body>
     </AdminPage>
@@ -255,6 +224,33 @@ function StatCard({
   }
   return <Link href={href}>{inner}</Link>;
 }
+
+const recentAuditColumns: ColumnDef<AuditEvent>[] = [
+  {
+    id: "seq",
+    header: "seq",
+    accessor: "seq",
+    cell: (e) => <span class="font-mono">{e.seq}</span>,
+  },
+  {
+    id: "event",
+    header: "event",
+    accessor: "event",
+    cell: (e) => <span class="font-mono">{e.event}</span>,
+  },
+  {
+    id: "outcome",
+    header: "outcome",
+    accessor: "outcome",
+    cell: (e) => <Badge variant={outcomeVariant(e.outcome)}>{e.outcome}</Badge>,
+  },
+  {
+    id: "at",
+    header: "at",
+    accessor: "at",
+    cell: (e) => <span class="font-mono text-muted-foreground">{e.at}</span>,
+  },
+];
 
 function outcomeVariant(o: string): "default" | "secondary" | "destructive" | "outline" {
   switch (o) {

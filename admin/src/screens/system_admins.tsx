@@ -1,18 +1,9 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
-import { Pager } from "../layout/pager";
+import type { SystemAdminRow } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
 import { Badge } from "@/lib/ui/badge.ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
-import { Card, CardContent } from "@/lib/ui/card.ui";
+import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 
 // System admins browser — read-only paginated view of the `_admins`
 // table. CRUD intentionally lives on the CLI (`railbase admin create
@@ -21,23 +12,64 @@ import { Card, CardContent } from "@/lib/ui/card.ui";
 // canonical path with prompt-driven safety nets.
 //
 // Backend endpoint: GET /api/_admin/_system/admins (v1.7.x).
+// Server-paginated via QDatatable's `fetch` mode — the table owns
+// page/pageSize; the fetch closure stashes the row count so the header
+// can still show the total.
 //
 // Columns: id (truncated), email, mfa_enabled, last_active, created.
 // `mfa_enabled` is derived from `_totp_enrollments`; today every value
 // is `false` until admin-side MFA lands.
 
+const columns: ColumnDef<SystemAdminRow>[] = [
+  {
+    id: "id",
+    header: "id",
+    accessor: "id",
+    cell: (a) => (
+      <span class="font-mono text-xs text-muted-foreground" title={a.id}>
+        {a.id.slice(0, 8)}…
+      </span>
+    ),
+  },
+  {
+    id: "email",
+    header: "email",
+    accessor: "email",
+    cell: (a) => <span class="font-mono">{a.email}</span>,
+  },
+  {
+    id: "mfa_enabled",
+    header: "MFA",
+    accessor: "mfa_enabled",
+    cell: (a) =>
+      a.mfa_enabled ? (
+        <Badge variant="default">on</Badge>
+      ) : (
+        <Badge variant="secondary">off</Badge>
+      ),
+  },
+  {
+    id: "last_active",
+    header: "last active",
+    accessor: "last_active",
+    cell: (a) => (
+      <span class="font-mono text-xs text-muted-foreground">
+        {a.last_active ?? "—"}
+      </span>
+    ),
+  },
+  {
+    id: "created",
+    header: "created",
+    accessor: "created",
+    cell: (a) => (
+      <span class="font-mono text-xs text-muted-foreground">{a.created}</span>
+    ),
+  },
+];
+
 export function SystemAdminsScreen() {
-  const [page, setPage] = useState(1);
-  const perPage = 50;
-
-  const q = useQuery({
-    queryKey: ["system-admins", { page, perPage }],
-    queryFn: () => adminAPI.listSystemAdmins({ page, perPage }),
-  });
-
-  const total = q.data?.totalItems ?? 0;
-  const totalPages = Math.max(1, q.data?.totalPages ?? Math.ceil(total / perPage));
-  const items = q.data?.items ?? [];
+  const [total, setTotal] = useState(0);
 
   return (
     <AdminPage>
@@ -50,65 +82,23 @@ export function SystemAdminsScreen() {
             <code className="font-mono">railbase admin create/delete</code>.
           </>
         }
-        actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
       />
 
       <AdminPage.Body>
-        {q.isError ? (
-          <AdminPage.Error
-            message={q.error instanceof Error ? q.error.message : String(q.error)}
-            retry={() => void q.refetch()}
-          />
-        ) : items.length === 0 && !q.isLoading ? (
-          <AdminPage.Empty
-            title="No admins"
-            description={
-              <>
-                Create the first admin via{" "}
-                <code className="font-mono">railbase admin create</code>.
-              </>
-            }
-          />
-        ) : (
-          <Card>
-            <CardContent className="p-0 overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>id</TableHead>
-                    <TableHead>email</TableHead>
-                    <TableHead>MFA</TableHead>
-                    <TableHead>last active</TableHead>
-                    <TableHead>created</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {items.map((a) => (
-                    <TableRow key={a.id}>
-                      <TableCell className="font-mono text-xs text-muted-foreground" title={a.id}>
-                        {a.id.slice(0, 8)}…
-                      </TableCell>
-                      <TableCell className="font-mono">{a.email}</TableCell>
-                      <TableCell>
-                        {a.mfa_enabled ? (
-                          <Badge variant="default">on</Badge>
-                        ) : (
-                          <Badge variant="secondary">off</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
-                        {a.last_active ?? "—"}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
-                        {a.created}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        )}
+        <QDatatable
+          columns={columns}
+          rowKey="id"
+          pageSize={50}
+          emptyMessage="No admins — create the first admin via `railbase admin create`."
+          fetch={async (params) => {
+            const r = await adminAPI.listSystemAdmins({
+              page: params.page,
+              perPage: params.pageSize,
+            });
+            setTotal(r.totalItems);
+            return { rows: r.items, total: r.totalItems };
+          }}
+        />
       </AdminPage.Body>
     </AdminPage>
   );

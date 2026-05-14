@@ -15,9 +15,18 @@ interface Props {
   field: FieldSpec;
   value: unknown;
   onChange: (v: unknown) => void;
+  /**
+   * Render only the input control — no label, no hint. Used when an
+   * outer form (e.g. <QEditableForm>) already renders the field label
+   * and owns the row layout.
+   */
+  bare?: boolean;
 }
 
-export function FieldEditor({ field, value, onChange }: Props) {
+export function FieldEditor({ field, value, onChange, bare }: Props) {
+  if (bare) {
+    return <Input field={field} value={value} onChange={onChange} />;
+  }
   return (
     <div>
       <Label field={field} />

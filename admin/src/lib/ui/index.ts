@@ -22,9 +22,14 @@
 //      kit. If a component needs application state, it doesn't
 //      belong here.
 //
-//   3. App-specific composites (the kind air calls `QEditableForm`)
-//      go in `admin/src/screens/` or a `_composites/` subfolder of
-//      the screen that owns them — not in this directory.
+//   3. Composites MAY live here when they stay schema-agnostic — i.e.
+//      they take their domain behaviour via render-props / callbacks
+//      and import nothing from the admin app. `QEditableForm` is the
+//      reference example: the kit owns the edit-state machine, layout
+//      and save orchestration; the host supplies `renderInput` so the
+//      component never has to know about any field schema. A composite
+//      that needs to import application state still does NOT belong
+//      here — push it to `admin/src/screens/`.
 //
 // Layout convention:
 //
@@ -80,6 +85,8 @@ export * from './navigation-menu.ui'
 export * from './pagination.ui'
 export * from './popover.ui'
 export * from './progress.ui'
+export * from './QDatatable.ui'
+export * from './QEditableForm.ui'
 export * from './radio-group.ui'
 export * from './resizable.ui'
 export * from './scroll-area.ui'

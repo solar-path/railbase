@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "wouter-preact";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Link, Redirect, useLocation, useParams } from "wouter-preact";
 import { adminAPI, recordsAPI } from "../api/admin";
 import { AdminPage } from "../layout/admin_page";
 import { APITokensScreen } from "./api_tokens";
@@ -12,7 +12,6 @@ import type {
   BatchResponse,
   CollectionSpec,
   FieldSpec,
-  RecordsListResponse,
 } from "../api/types";
 import {
   hasDomainRenderer,
@@ -24,14 +23,15 @@ import { Input } from "@/lib/ui/input.ui";
 import { Label } from "@/lib/ui/label.ui";
 import { Checkbox } from "@/lib/ui/checkbox.ui";
 import { Card } from "@/lib/ui/card.ui";
+import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/lib/ui/drawer.ui";
+import { RecordFormBody } from "./record_form";
 
 // Records list — generic schema-driven table. Pagination is offset-
 // based (page + perPage); cursor pagination + virtualization land
@@ -98,22 +98,96 @@ export function RecordsScreen() {
   return <UserCollectionRecords name={name} />;
 }
 
-function UserCollectionRecords({ name }: { name: string }) {
-  const qc = useQueryClient();
+// DataHomeScreen — the /data index route (the "Data" top tab target).
+// PocketBase opens the Data tab on a collection; we mirror that by
+// redirecting to the first registered collection. With no collections
+// registered there's nothing to redirect to, so we show an empty state
+// that explains Railbase's schema-as-code model rather than 404ing.
+export function DataHomeScreen() {
+  const schemaQ = useQuery({ queryKey: ["schema"], queryFn: () => adminAPI.schema() });
+
+  if (schemaQ.isLoading) {
+    return <p className="text-sm text-muted-foreground">Loading…</p>;
+  }
+
+  const collections = schemaQ.data?.collections ?? [];
+  if (collections.length > 0) {
+    return <Redirect to={`/data/${collections[0].name}`} replace />;
+  }
+
+  return (
+    <AdminPage>
+      <AdminPage.Header
+        title="Data"
+        description="No collections yet."
+        actions={
+          <Button asChild size="sm">
+            <Link href="/collections/new">+ New collection</Link>
+          </Button>
+        }
+      />
+      <AdminPage.Body>
+        <Card className="max-w-2xl p-6 text-sm text-muted-foreground space-y-3">
+          <p>
+            Create a collection to define a table and its fields — it's
+            provisioned in the database immediately and its record API
+            goes live. Code-defined collections (declared in your app's
+            schema) also show up here once registered.
+          </p>
+          <p>
+            <Link href="/collections/new" className="text-foreground underline">
+              Create your first collection
+            </Link>{" "}
+            or{" "}
+            <Link href="/schema" className="text-foreground underline">
+              view the registered schema
+            </Link>
+            .
+          </p>
+        </Card>
+      </AdminPage.Body>
+    </AdminPage>
+  );
+}
+
+export function UserCollectionRecords({
+  name,
+  initialEditing,
+}: {
+  name: string;
+  /** Deep-link entry: record id or "new" to open the drawer on mount. */
+  initialEditing?: string;
+}) {
+  const [, navigate] = useLocation();
   const schemaQ = useQuery({ queryKey: ["schema"], queryFn: () => adminAPI.schema() });
   const spec = schemaQ.data?.collections.find((c) => c.name === name) ?? null;
+  // Bulk delete + inline edit are gated for auth collections — the
+  // backend would refuse most ops anyway, but disabling the UI keeps
+  // the contract explicit.
+  const readOnly = !!spec?.auth;
 
-  const [page, setPage] = useState(1);
-  const [perPage] = useState(30);
+  // Drawer-hosted record form (v0.9): `editing` is a record id, the
+  // literal "new", or null when the drawer is closed. Grid buttons set
+  // it locally — no navigation — so the grid stays mounted behind the
+  // drawer. The /data/:name/:id deep-link route seeds it via
+  // initialEditing (see the effects below).
+  const [editing, setEditing] = useState<string | null>(
+    initialEditing ?? null,
+  );
+
+  // PocketBase-DSL sort + filter strings, owned by the screen. QDatatable
+  // owns page/pageSize; the DSL sort string is richer than per-column
+  // sort so it stays a free-text input here, fed into QDatatable's
+  // `deps` to drive refetches.
   const [sort, setSort] = useState<string>("-created");
   const [filter, setFilter] = useState<string>("");
+  // Bumped after an inline-cell save or a bulk delete so QDatatable
+  // refetches the current page.
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [total, setTotal] = useState(0);
 
-  // Bulk selection — persists across pagination, cleared on collection
-  // change. Set<string> keyed by record id.
-  const [selected, setSelected] = useState<Set<string>>(() => new Set());
   // Banner state for the most recent bulk action — counts + per-id
-  // failure detail (hover-able list). Cleared by the "Clear selection"
-  // link and by mounting a new collection.
+  // failure detail (hover-able list). Cleared on collection change.
   const [bulkBanner, setBulkBanner] = useState<
     | { kind: "success"; count: number }
     | { kind: "partial"; ok: number; failed: { id: string; message: string }[] }
@@ -121,25 +195,60 @@ function UserCollectionRecords({ name }: { name: string }) {
     | null
   >(null);
 
-  // Reset selection + banner whenever the collection name changes.
+  // Reset banner + drawer whenever the collection name changes (sidebar
+  // hop within the same mounted screen).
   useEffect(() => {
-    setSelected(new Set());
     setBulkBanner(null);
-    setPage(1);
+    setEditing(null);
   }, [name]);
 
-  const recordsQueryKey = useMemo(
-    () => ["records", name, { page, perPage, sort, filter }] as const,
-    [name, page, perPage, sort, filter],
-  );
+  // Deep-link entry (/data/:name/:id, /data/:name/new): open the drawer
+  // on that record. Runs after the name-reset effect above, so on mount
+  // initialEditing wins; on subsequent deep-link navigations it tracks
+  // the changing id.
+  useEffect(() => {
+    if (initialEditing != null) setEditing(initialEditing);
+  }, [initialEditing]);
 
-  const recordsQ = useQuery({
-    queryKey: recordsQueryKey,
-    queryFn: () => recordsAPI.list(name, { page, perPage, sort, filter: filter || undefined }),
-    enabled: !!name,
-  });
+  // closeDrawer — shared by save / delete / cancel / dismiss. When the
+  // screen was reached via a deep link, returning to the bare grid URL
+  // keeps the back button + URL honest.
+  const closeDrawer = () => {
+    setEditing(null);
+    if (initialEditing != null) navigate(`/data/${name}`);
+  };
 
   const columns = useMemo(() => listColumns(spec), [spec]);
+
+  // Adapt the schema-driven Column[] into QDatatable ColumnDef[]. Inline-
+  // editable fields render an <InlineCell> that PATCHes the record then
+  // bumps `refreshTick` so the grid refetches; everything else uses the
+  // plain `col.render`.
+  const gridColumns = useMemo<ColumnDef<Record<string, unknown>>[]>(
+    () =>
+      columns.map((col) => ({
+        id: col.key,
+        header: col.key,
+        class: col.cellClass,
+        cell: (row: Record<string, unknown>) => {
+          const rowId = (row.id as string) ?? "";
+          if (col.field && !readOnly && isInlineEditable(col.field.type) && rowId) {
+            return (
+              <InlineCell
+                collection={name}
+                rowId={rowId}
+                field={col.field}
+                value={row[col.key]}
+                onSaved={() => setRefreshTick((t) => t + 1)}
+                render={col.render}
+              />
+            );
+          }
+          return col.render(row[col.key]);
+        },
+      })),
+    [columns, readOnly, name],
+  );
 
   const batchDeleteMut = useMutation({
     mutationFn: (ids: string[]) => recordsAPI.recordsBatchDelete(name, ids),
@@ -163,17 +272,8 @@ function UserCollectionRecords({ name }: { name: string }) {
       } else {
         setBulkBanner({ kind: "partial", ok, failed });
       }
-      // Clear only the ids that actually deleted; failed ones stay
-      // selected so the operator can retry / inspect.
-      setSelected((prev) => {
-        const next = new Set(prev);
-        ids.forEach((id, i) => {
-          const r = resp.results[i];
-          if (r && r.status >= 200 && r.status < 300) next.delete(id);
-        });
-        return next;
-      });
-      qc.invalidateQueries({ queryKey: ["records", name] });
+      // Refetch the current page so deleted rows drop out.
+      setRefreshTick((t) => t + 1);
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -189,55 +289,6 @@ function UserCollectionRecords({ name }: { name: string }) {
       </p>
     );
   }
-  if (spec.auth) {
-    // Auth collections refuse generic POST and have system fields the
-    // generic editor can't write meaningfully (password, token_key).
-    // For v0.8 we display them as read-only and surface a warning.
-    // Full user-management UI lands in v1.
-  }
-
-  const total = recordsQ.data?.totalItems ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / perPage));
-
-  const items = recordsQ.data?.items ?? [];
-  const pageIds = items.map((row) => row.id as string).filter(Boolean);
-  const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
-  const someOnPageSelected = pageIds.some((id) => selected.has(id));
-  const headerCheckboxState: boolean | "indeterminate" = allOnPageSelected
-    ? true
-    : someOnPageSelected
-      ? "indeterminate"
-      : false;
-
-  // Bulk actions are gated for auth collections — the backend would
-  // refuse most ops anyway, but disabling the UI keeps the contract
-  // explicit. Inline edit is similarly gated.
-  const readOnly = !!spec.auth;
-
-  const toggleRow = (id: string, checked: boolean) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  };
-  const toggleAllOnPage = (checked: boolean) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (checked) pageIds.forEach((id) => next.add(id));
-      else pageIds.forEach((id) => next.delete(id));
-      return next;
-    });
-  };
-
-  const doBulkDelete = () => {
-    const ids = Array.from(selected);
-    if (ids.length === 0) return;
-    const ok = window.confirm(`Delete ${ids.length} record${ids.length === 1 ? "" : "s"}?`);
-    if (!ok) return;
-    batchDeleteMut.mutate(ids);
-  };
 
   return (
     <AdminPage>
@@ -251,14 +302,11 @@ function UserCollectionRecords({ name }: { name: string }) {
           </>
         }
         actions={
-          <div className="flex items-center gap-2">
-            {spec.auth ? null : (
-              <Button asChild size="sm">
-                <Link href={`/data/${name}/new`}>+ New</Link>
-              </Button>
-            )}
-            <Pager page={page} totalPages={totalPages} onChange={setPage} />
-          </div>
+          spec.auth ? null : (
+            <Button size="sm" onClick={() => setEditing("new")}>
+              + New
+            </Button>
+          )
         }
       />
 
@@ -290,106 +338,87 @@ function UserCollectionRecords({ name }: { name: string }) {
         </div>
       </Card>
 
-      {selected.size > 0 ? (
-        <div className="sticky top-0 z-10 flex items-center gap-3 rounded border border-primary/40 bg-primary/10 px-3 py-2 text-sm">
-          <span className="font-medium text-primary">{selected.size} selected</span>
+      {bulkBanner ? <BulkBanner banner={bulkBanner} onDismiss={() => setBulkBanner(null)} /> : null}
+
+      <QDatatable
+        columns={gridColumns}
+        rowKey="id"
+        pageSize={30}
+        selectable={!readOnly}
+        emptyMessage="No records."
+        rowActions={[
+          { label: "Edit", onSelect: (row) => setEditing((row.id as string) ?? null) },
+        ]}
+        deps={[name, sort, filter, refreshTick]}
+        fetch={async (params) => {
+          const r = await recordsAPI.list(name, {
+            page: params.page,
+            perPage: params.pageSize,
+            sort: sort || undefined,
+            filter: filter || undefined,
+          });
+          setTotal(r.totalItems);
+          return { rows: r.items, total: r.totalItems };
+        }}
+        bulkBar={({ selectedKeys, clear }) => (
           <Button
             type="button"
             variant="destructive"
             size="sm"
-            disabled={readOnly || batchDeleteMut.isPending}
-            onClick={doBulkDelete}
+            disabled={batchDeleteMut.isPending}
+            onClick={() => {
+              const ids = selectedKeys.map(String);
+              if (ids.length === 0) return;
+              const ok = window.confirm(
+                `Delete ${ids.length} record${ids.length === 1 ? "" : "s"}?`,
+              );
+              if (!ok) return;
+              batchDeleteMut.mutate(ids, { onSettled: () => clear() });
+            }}
           >
             {batchDeleteMut.isPending ? "Deleting…" : "Delete"}
           </Button>
-          <Button
-            type="button"
-            variant="link"
-            size="sm"
-            onClick={() => {
-              setSelected(new Set());
-              setBulkBanner(null);
-            }}
-            className="h-auto px-0 text-xs text-primary"
-          >
-            Clear selection
-          </Button>
-          {readOnly ? (
-            <span className="text-xs text-muted-foreground">(auth collection — bulk delete disabled)</span>
-          ) : null}
-        </div>
-      ) : null}
-
-      {bulkBanner ? <BulkBanner banner={bulkBanner} onDismiss={() => setBulkBanner(null)} /> : null}
-
-      <Card className="overflow-x-auto p-0">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead style={{ width: 28 }}>
-                <Checkbox
-                  aria-label="Select all on page"
-                  checked={headerCheckboxState}
-                  onCheckedChange={(v) => toggleAllOnPage(v === true)}
-                />
-              </TableHead>
-              {columns.map((col) => (
-                <TableHead key={col.key}>{col.key}</TableHead>
-              ))}
-              <TableHead></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {items.map((row, i) => {
-              const rowId = (row.id as string) ?? "";
-              const isSelected = rowId && selected.has(rowId);
-              return (
-                <TableRow key={rowId || i} className={isSelected ? "bg-primary/10" : ""}>
-                  <TableCell>
-                    <Checkbox
-                      aria-label={`Select row ${rowId}`}
-                      checked={!!isSelected}
-                      onCheckedChange={(v) => toggleRow(rowId, v === true)}
-                    />
-                  </TableCell>
-                  {columns.map((col) => (
-                    <TableCell key={col.key} className={col.cellClass ?? ""}>
-                      {col.field && !readOnly && isInlineEditable(col.field.type) && rowId ? (
-                        <InlineCell
-                          collection={name}
-                          rowId={rowId}
-                          field={col.field}
-                          value={row[col.key]}
-                          recordsQueryKey={recordsQueryKey}
-                          render={col.render}
-                        />
-                      ) : (
-                        col.render(row[col.key])
-                      )}
-                    </TableCell>
-                  ))}
-                  <TableCell>
-                    <Link
-                      href={`/data/${name}/${rowId}`}
-                      className="text-xs text-foreground hover:underline"
-                    >
-                      Edit
-                    </Link>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-            {items.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={columns.length + 2} className="text-muted-foreground text-center py-6">
-                  No records.
-                </TableCell>
-              </TableRow>
-            ) : null}
-          </TableBody>
-        </Table>
-      </Card>
+        )}
+      />
       </AdminPage.Body>
+
+      {/* Record create/edit form — hosted in a right-side Drawer over
+          the live grid (v0.9). DrawerContent only mounts its portal
+          while open, so RecordFormBody (which fires the schema/record
+          queries) is inert when the drawer is closed. key={editing}
+          remounts the form when switching records, resetting its
+          edit-state machine cleanly. In edit mode the form saves
+          per-field and keeps the drawer open; onChanged refreshes the
+          grid in the background. */}
+      <Drawer
+        direction="right"
+        open={editing !== null}
+        onOpenChange={(o) => {
+          if (!o) closeDrawer();
+        }}
+      >
+        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-2xl">
+          <DrawerHeader>
+            <DrawerTitle>
+              {editing === "new" ? "New record" : "Edit record"}
+            </DrawerTitle>
+            <DrawerDescription className="font-mono">
+              {editing === "new" ? name : editing}
+            </DrawerDescription>
+          </DrawerHeader>
+          <div className="flex-1 overflow-y-auto px-4 pb-4">
+            {editing !== null ? (
+              <RecordFormBody
+                key={editing}
+                name={name}
+                recordId={editing}
+                onChanged={() => setRefreshTick((t) => t + 1)}
+                onClose={closeDrawer}
+              />
+            ) : null}
+          </div>
+        </DrawerContent>
+      </Drawer>
     </AdminPage>
   );
 }
@@ -482,42 +511,6 @@ function stripTags(s: string): string {
   return s.replace(/<[^>]*>/g, "");
 }
 
-function Pager({
-  page,
-  totalPages,
-  onChange,
-}: {
-  page: number;
-  totalPages: number;
-  onChange: (p: number) => void;
-}) {
-  return (
-    <div className="flex items-center gap-2 text-sm">
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={page <= 1}
-        onClick={() => onChange(page - 1)}
-      >
-        ←
-      </Button>
-      <span className="text-muted-foreground">
-        {page} / {totalPages}
-      </span>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={page >= totalPages}
-        onClick={() => onChange(page + 1)}
-      >
-        →
-      </Button>
-    </div>
-  );
-}
-
 // BulkBanner — surfaces the result of the most recent batch op. The
 // partial-failure branch lists per-row error messages on hover so the
 // operator can scan a long failure list without a modal.
@@ -584,17 +577,17 @@ function InlineCell({
   rowId,
   field,
   value,
-  recordsQueryKey,
+  onSaved,
   render,
 }: {
   collection: string;
   rowId: string;
   field: FieldSpec;
   value: unknown;
-  recordsQueryKey: readonly unknown[];
+  /** Called after a successful PATCH so the grid can refetch. */
+  onSaved: () => void;
   render: (v: unknown) => React.ReactNode;
 }) {
-  const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string>(() => stringifyForInput(value, field));
   const [err, setErr] = useState<string | null>(null);
@@ -614,9 +607,6 @@ function InlineCell({
     }
   }, [editing, value, field]);
 
-  // Optimistic patch — mutate the records query cache in place, fire
-  // the PATCH, rollback on failure. We snapshot the previous list so
-  // a failure restores the original row exactly.
   const save = async (raw: string | boolean) => {
     setErr(null);
     let parsed: unknown;
@@ -631,27 +621,18 @@ function InlineCell({
 
   // commit is the post-parse half of save() — used directly by
   // domain-type editors which already produce a coerced value via
-  // their onChange callback. Same optimistic-update + rollback shape.
+  // their onChange callback. PATCH the single field, then ask the grid
+  // to refetch via onSaved(); the inline error banner surfaces failures.
   const commit = async (parsed: unknown) => {
     if (valuesEqual(parsed, value)) {
       setEditing(false);
       return;
     }
-    const prev = qc.getQueryData<RecordsListResponse>(recordsQueryKey);
-    if (prev) {
-      qc.setQueryData<RecordsListResponse>(recordsQueryKey, {
-        ...prev,
-        items: prev.items.map((it) =>
-          (it.id as string) === rowId ? { ...it, [field.name]: parsed } : it,
-        ),
-      });
-    }
     setEditing(false);
     try {
       await recordsAPI.update(collection, rowId, { [field.name]: parsed });
-      qc.invalidateQueries({ queryKey: ["records", collection] });
+      onSaved();
     } catch (e) {
-      if (prev) qc.setQueryData(recordsQueryKey, prev);
       setErr(e instanceof Error ? e.message : String(e));
     }
   };

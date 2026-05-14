@@ -7,8 +7,8 @@
  * Heuristic (intentionally coarse to keep the rule cheap):
  *   1. File mentions `totalItems` OR `totalPages` OR `perPage`.
  *   2. File contains at least one `.map(...)` call expression.
- *   3. File does NOT mention `QDataTable`, `Pager`, `Table` import, or
- *      `TableBody` (kit table primitive).
+ *   3. File does NOT mention `QDataTable` / `QDatatable`, `Pager`,
+ *      `Table` import, or `TableBody` (kit table primitive).
  *
  * If all three: report a one-shot warning at the top-level Program node
  * with a hint to wire pagination through <Pager> or hoist the list to
@@ -34,6 +34,7 @@ const PAGINATION_MARKERS = [
 
 const WRAPPER_MARKERS = [
   "QDataTable",
+  "QDatatable",
   "Pager",
   "TableBody",
   "@/lib/ui/table.ui",

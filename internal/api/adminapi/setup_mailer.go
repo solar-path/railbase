@@ -1,21 +1,15 @@
 package adminapi
 
-// v1.7.43 §3.1 — first-run "Mailer configuration" wizard step. Sits
-// between the v1.7.39 Database step and the existing Admin-account
-// step. Mailer setup is gated on "mailer is mandatory before any
-// admin can be created", with a documented skip path for legitimate
-// "configure later" workflows.
+// Mailer configuration — Settings → Mailer. As of the v0.9 IA reorg
+// this moved out of the first-run wizard into the authenticated admin
+// Settings surface; all three endpoints are mounted inside the
+// RequireAdmin group (see adminapi.go Mount).
 //
-// THREE public endpoints (no RequireAdmin guard — same justification
-// as setup_db.go: no admin exists yet at this point in the wizard):
-//
-//	GET  /api/_admin/_setup/mailer-status — current configured/skipped
-//	                                        state + masked config snapshot
+//	GET  /api/_admin/_setup/mailer-status — configured state + masked
+//	                                        config snapshot
 //	POST /api/_admin/_setup/mailer-probe  — try config against an SMTP
 //	                                        server (or console driver)
 //	POST /api/_admin/_setup/mailer-save   — persist config to _settings
-//	POST /api/_admin/_setup/mailer-skip   — record "I'll configure later"
-//	                                        with operator reason
 //
 // Persistence strategy: everything lands in `_settings` via the
 // existing Manager surface. That gives us automatic eventbus
@@ -24,16 +18,11 @@ package adminapi
 // settings screen already use.
 //
 // Key naming follows the existing v1.0 mailer convention
-// (`mailer.smtp.host`, `mailer.from`, …). New v1.7.43 keys:
-//   - `mailer.configured_at`     (timestamp string) — successful probe+save marker
-//   - `mailer.setup_skipped_at`  (timestamp string) — operator explicitly skipped
-//   - `mailer.setup_skipped_reason` (string)        — operator-supplied reason
-//
-// The bootstrap-admin handler (bootstrap.go) checks BOTH keys: if neither
-// is set, admin-create is refused with 412 "Configure mailer first". The
-// boot-time invariant in pkg/railbase/app.go does NOT enforce this — the
-// gate is operator-facing at admin-create time, not at every boot. This
-// avoids "operator deleted skip flag, now can't boot" footguns.
+// (`mailer.smtp.host`, `mailer.from`, …) plus:
+//   - `mailer.configured_at`    (timestamp string) — successful probe+save marker
+//   - `mailer.setup_skipped_at` (timestamp string) — legacy wizard "skip"
+//     flag; no longer written, still read by bootstrap.go's
+//     enqueueAdminEmails to suppress welcome emails when present.
 
 import (
 	"context"
@@ -54,13 +43,17 @@ import (
 // validation can legitimately take longer than a Postgres connect.
 const mailerProbeTimeout = 15 * time.Second
 
-// settingsKey* are the canonical names for the v1.7.43 status keys.
+// settingsKey* are the canonical names for the mailer status keys.
 // Existing v1.0 mailer keys (mailer.driver, mailer.smtp.host, etc.)
-// keep their names; these three are NEW.
+// keep their names.
+//
+// settingsKeySkippedAt is still read by bootstrap.go's
+// enqueueAdminEmails (suppress welcome email when set), so the
+// constant remains even though the v0.9 IA reorg removed the wizard
+// "skip" path that used to write it.
 const (
 	settingsKeyConfiguredAt = "mailer.configured_at"
 	settingsKeySkippedAt    = "mailer.setup_skipped_at"
-	settingsKeySkippedReason = "mailer.setup_skipped_reason"
 )
 
 // setupMailerBody is the shape POSTed to probe + save. Mirror of the
@@ -78,25 +71,16 @@ type setupMailerBody struct {
 	ProbeTo     string `json:"probe_to"` // recipient for the test email
 }
 
-// setupMailerSkipBody is the body for /_setup/mailer-skip. Reason is
-// non-empty + bounded so the audit row stays readable.
-type setupMailerSkipBody struct {
-	Reason string `json:"reason"`
-}
-
 // setupMailerStatusResponse is the GET /_setup/mailer-status envelope.
-// All timestamps are RFC3339 strings (empty when not set). The masked
-// config snapshot helps the wizard pre-fill fields on a re-visit
+// ConfiguredAt is an RFC3339 string (empty when not set). The masked
+// config snapshot lets Settings → Mailer pre-fill fields on a re-visit
 // without exposing the SMTP password.
 type setupMailerStatusResponse struct {
-	ConfiguredAt   string `json:"configured_at,omitempty"`
-	SkippedAt      string `json:"skipped_at,omitempty"`
-	SkippedReason  string `json:"skipped_reason,omitempty"`
-	// MailerRequired indicates whether the admin-bootstrap handler will
-	// gate on this. true ALWAYS in v1.7.43; reserved for a future opt-out
-	// setting if operators decide mandatory-email isn't right for their
-	// org. The wizard renders the gate's friendliness based on this.
-	MailerRequired bool          `json:"mailer_required"`
+	ConfiguredAt string `json:"configured_at,omitempty"`
+	// MailerRequired is always true — kept in the envelope for client
+	// compatibility. Reserved for a future opt-out setting if operators
+	// decide mandatory-email isn't right for their org.
+	MailerRequired bool                `json:"mailer_required"`
 	Config         setupMailerSnapshot `json:"config"`
 }
 
@@ -138,14 +122,13 @@ type setupMailerSaveResponse struct {
 	Note string `json:"note"`
 }
 
-// mountSetupMailer wires the four setup-mailer endpoints onto r.
-// Called from mountSetupDB's sibling — both belong in the same
-// public sub-tree because both run pre-admin.
+// mountSetupMailer wires the setup-mailer endpoints onto r. As of the
+// v0.9 IA reorg this is mounted inside the authenticated admin group
+// (Settings → Mailer), not the public pre-admin sub-tree.
 func (d *Deps) mountSetupMailer(r chi.Router) {
 	r.Get("/_setup/mailer-status", d.setupMailerStatusHandler)
 	r.Post("/_setup/mailer-probe", d.setupMailerProbeHandler)
 	r.Post("/_setup/mailer-save", d.setupMailerSaveHandler)
-	r.Post("/_setup/mailer-skip", d.setupMailerSkipHandler)
 }
 
 // setupMailerStatusHandler — GET /_setup/mailer-status.
@@ -172,12 +155,6 @@ func (d *Deps) setupMailerStatusHandler(w http.ResponseWriter, r *http.Request) 
 	resp := setupMailerStatusResponse{MailerRequired: true}
 	if v, ok, _ := d.Settings.GetString(r.Context(), settingsKeyConfiguredAt); ok {
 		resp.ConfiguredAt = v
-	}
-	if v, ok, _ := d.Settings.GetString(r.Context(), settingsKeySkippedAt); ok {
-		resp.SkippedAt = v
-	}
-	if v, ok, _ := d.Settings.GetString(r.Context(), settingsKeySkippedReason); ok {
-		resp.SkippedReason = v
 	}
 
 	// Masked snapshot.
@@ -303,59 +280,6 @@ func (d *Deps) setupMailerSaveHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// setupMailerSkipHandler — POST /_setup/mailer-skip.
-//
-// Records "operator chose to skip mailer setup". Stamps both
-// mailer.setup_skipped_at (timestamp) and mailer.setup_skipped_reason
-// (free-text from body). The bootstrap-admin handler will allow
-// admin-create with neither welcome email NOR broadcast notice when
-// this flag is set.
-//
-// Requires a non-empty reason — operator-action that weakens the
-// safety invariant should leave a forensic trail. The reason ends up
-// in the audit log via settings.changed → audit subscriber chain.
-func (d *Deps) setupMailerSkipHandler(w http.ResponseWriter, r *http.Request) {
-	if d.Settings == nil {
-		rerr.WriteJSON(w, rerr.New(rerr.CodeInternal,
-			"settings manager not wired (setup-mode boot path?)"))
-		return
-	}
-	var body setupMailerSkipBody
-	if err := decodeJSON(r, &body); err != nil {
-		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeValidation, "%s", err.Error()))
-		return
-	}
-	body.Reason = strings.TrimSpace(body.Reason)
-	if body.Reason == "" {
-		rerr.WriteJSON(w, rerr.New(rerr.CodeValidation,
-			"reason is required so operator-skip leaves an audit trail"))
-		return
-	}
-	if len(body.Reason) > 500 {
-		rerr.WriteJSON(w, rerr.New(rerr.CodeValidation,
-			"reason must be 500 characters or less"))
-		return
-	}
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	if err := d.Settings.Set(r.Context(), settingsKeySkippedAt, now); err != nil {
-		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "record skip"))
-		return
-	}
-	if err := d.Settings.Set(r.Context(), settingsKeySkippedReason, body.Reason); err != nil {
-		// Best-effort: skip timestamp already wrote; we don't roll back.
-		// Log and continue — the timestamp alone is enough for the gate.
-		if d.Log != nil {
-			d.Log.Warn("setup mailer skip: reason write failed", "err", err)
-		}
-	}
-
-	writeJSON(w, http.StatusOK, setupMailerSaveResponse{
-		OK:   true,
-		Note: "Mailer setup skipped. Admin creation will not send welcome emails until you configure the mailer.",
-	})
-}
-
 // validateSetupMailerBody enforces per-driver required-field rules.
 // requireProbeTo=true forces ProbeTo non-empty (probe path); false
 // allows omission (save path — operator already probed earlier).
@@ -474,9 +398,9 @@ func saveMailerSettings(ctx context.Context, d *Deps, body setupMailerBody) erro
 	if err := d.Settings.Set(ctx, settingsKeyConfiguredAt, now); err != nil {
 		return err
 	}
-	// Successful configure clears any earlier skip decision.
+	// Clear any legacy skip flag a prior wizard version may have left
+	// — a configured mailer should not also report "skipped".
 	_ = d.Settings.Delete(ctx, settingsKeySkippedAt)
-	_ = d.Settings.Delete(ctx, settingsKeySkippedReason)
 	return nil
 }
 

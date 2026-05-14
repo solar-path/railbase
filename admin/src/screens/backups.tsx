@@ -1,18 +1,10 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
-import type { BackupCreatedResponse } from "../api/types";
+import type { BackupRecord, BackupCreatedResponse } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
-import { Card, CardContent } from "@/lib/ui/card.ui";
+import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 
 // Backups admin screen — read-only listing of .tar.gz archives in
 // <DataDir>/backups/ plus a "create new backup" button. Backend:
@@ -24,7 +16,43 @@ import { Card, CardContent } from "@/lib/ui/card.ui";
 // at 3 a.m. by accident.
 //
 // No pagination — operators typically have < 30 daily archives
-// before retention sweeps; a flat table is fine.
+// before retention sweeps; a flat table is fine. The listing is
+// rendered via QDatatable in client mode (small polled snapshot).
+
+const columns: ColumnDef<BackupRecord>[] = [
+  {
+    id: "name",
+    header: "name",
+    accessor: "name",
+    sortable: true,
+    cell: (b) => <span class="font-mono">{b.name}</span>,
+  },
+  {
+    id: "size",
+    header: "size",
+    accessor: "size_bytes",
+    sortable: true,
+    cell: (b) => (
+      <span class="font-mono text-xs whitespace-nowrap">
+        {humanSize(b.size_bytes)}
+      </span>
+    ),
+  },
+  {
+    id: "created",
+    header: "created",
+    accessor: "created",
+    sortable: true,
+    cell: (b) => (
+      <span
+        class="font-mono text-xs text-muted-foreground whitespace-nowrap"
+        title={b.created}
+      >
+        {relativeTime(b.created)}
+      </span>
+    ),
+  },
+];
 
 export function BackupsScreen() {
   const qc = useQueryClient();
@@ -119,43 +147,13 @@ export function BackupsScreen() {
       ) : null}
 
       <AdminPage.Body className="space-y-4">
-      {q.isLoading ? (
-        <div className="text-sm text-muted-foreground">Loading…</div>
-      ) : items.length === 0 ? (
-        <div className="rounded border border-dashed border-input bg-muted px-4 py-8 text-center text-sm text-muted-foreground">
-          No backups yet — click <span className="font-medium">Create backup</span> to make your first one.
-        </div>
-      ) : (
-        <Card>
-          <CardContent className="p-0 overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>name</TableHead>
-                  <TableHead>size</TableHead>
-                  <TableHead>created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((b) => (
-                  <TableRow key={b.path}>
-                    <TableCell className="font-mono">{b.name}</TableCell>
-                    <TableCell className="font-mono text-xs whitespace-nowrap">
-                      {humanSize(b.size_bytes)}
-                    </TableCell>
-                    <TableCell
-                      className="font-mono text-xs text-muted-foreground whitespace-nowrap"
-                      title={b.created}
-                    >
-                      {relativeTime(b.created)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
+      <QDatatable
+        columns={columns}
+        data={items}
+        loading={q.isLoading}
+        rowKey="path"
+        emptyMessage="No backups yet — click Create backup to make your first one."
+      />
 
       <p className="text-xs text-muted-foreground">
         To restore a backup, use{" "}

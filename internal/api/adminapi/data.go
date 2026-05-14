@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	rerr "github.com/railbase/railbase/internal/errors"
+	"github.com/railbase/railbase/internal/schema/live"
 	"github.com/railbase/railbase/internal/schema/registry"
 )
 
@@ -29,11 +30,31 @@ func sortStrings(s []string) { sort.Strings(s) }
 // leak schema details to anonymous clients.
 func (d *Deps) schemaHandler(w http.ResponseWriter, r *http.Request) {
 	specs := registry.Specs()
+
+	// v0.9 — tell the admin UI which collections it may edit. A
+	// collection is editable iff it has an _admin_collections row
+	// (created via the admin UI); code-defined collections own their
+	// definition in source and are read-only here. On a pool-less test
+	// Deps the list is simply empty — everything reads as code-defined.
+	editable := make([]string, 0)
+	if d.Pool != nil {
+		managed, err := live.ManagedNames(r.Context(), d.Pool)
+		if err != nil {
+			rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "list admin collections"))
+			return
+		}
+		for name := range managed {
+			editable = append(editable, name)
+		}
+		sortStrings(editable)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"collections": specs,
 		"count":       len(specs),
+		"editable":    editable,
 	})
 }
 

@@ -1,34 +1,26 @@
-import { Fragment, useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { adminAPI } from "../api/admin";
 import type { APIToken } from "../api/types";
-import { Pager } from "../layout/pager";
 import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
 import { Checkbox } from "@/lib/ui/checkbox.ui";
 import { Card, CardContent } from "@/lib/ui/card.ui";
+import { QDatatable, type ColumnDef, type RowAction } from "@/lib/ui/QDatatable.ui";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/lib/ui/drawer.ui";
 import {
-  Form,
-  FormControl,
-  FormDescription,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/lib/ui/form.ui";
+  QEditableForm,
+  type QEditableField,
+} from "@/lib/ui/QEditableForm.ui";
 
 // API tokens admin screen — paginated browser over `_api_tokens` with
 // create / revoke / rotate affordances. Backend endpoint family:
@@ -64,17 +56,80 @@ const createTokenSchema = z.object({
   ttl: z.enum(TTL_PRESETS),
 });
 
-type CreateTokenValues = z.infer<typeof createTokenSchema>;
+// Static column set — no per-row closures needed, so it lives at module
+// scope. rotate / revoke are surfaced via QDatatable's row-action menu.
+const columns: ColumnDef<APIToken>[] = [
+  {
+    id: "name",
+    header: "name",
+    accessor: "name",
+    cell: (t) => <span class="font-medium">{t.name}</span>,
+  },
+  {
+    id: "owner",
+    header: "owner",
+    accessor: (t) => `${t.owner_collection}/${t.owner_id}`,
+    cell: (t) => (
+      <span class="font-mono text-xs text-muted-foreground whitespace-nowrap">
+        {t.owner_collection}/{t.owner_id.slice(0, 8)}…
+      </span>
+    ),
+  },
+  {
+    id: "fingerprint",
+    header: "fingerprint",
+    accessor: "fingerprint",
+    cell: (t) => <span class="font-mono text-xs">{t.fingerprint || "—"}</span>,
+  },
+  {
+    id: "scopes",
+    header: "scopes",
+    accessor: (t) => t.scopes.join(","),
+    cell: (t) => (
+      <span class="font-mono text-xs text-muted-foreground">
+        {t.scopes.length === 0 ? (
+          <span class="text-muted-foreground/60">(owner-bounded)</span>
+        ) : (
+          t.scopes.join(",")
+        )}
+      </span>
+    ),
+  },
+  {
+    id: "last_used",
+    header: "last used",
+    accessor: "last_used_at",
+    cell: (t) => (
+      <span class="font-mono text-xs text-muted-foreground whitespace-nowrap">
+        {t.last_used_at ?? "—"}
+      </span>
+    ),
+  },
+  {
+    id: "expires",
+    header: "expires",
+    accessor: "expires_at",
+    cell: (t) => (
+      <span class="font-mono text-xs text-muted-foreground whitespace-nowrap">
+        {t.expires_at ?? "never"}
+      </span>
+    ),
+  },
+  {
+    id: "status",
+    header: "status",
+    accessor: (t) => tokenStatus(t),
+    cell: (t) => <StatusBadge status={tokenStatus(t)} />,
+  },
+];
 
 export function APITokensScreen() {
   const qc = useQueryClient();
 
-  const [page, setPage] = useState(1);
-  const perPage = 50;
+  const [total, setTotal] = useState(0);
   const [ownerInput, setOwnerInput] = useState("");
   const [owner, setOwner] = useState(""); // debounced
   const [includeRevoked, setIncludeRevoked] = useState(false);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Display-once banner state. When a create / rotate succeeds we
   // stash the raw token here; clearing the banner discards it.
@@ -91,24 +146,6 @@ export function APITokensScreen() {
     const t = setTimeout(() => setOwner(ownerInput.trim()), 300);
     return () => clearTimeout(t);
   }, [ownerInput]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [owner, includeRevoked]);
-
-  const q = useQuery({
-    queryKey: ["api-tokens", { page, perPage, owner, includeRevoked }],
-    queryFn: () =>
-      adminAPI.apiTokensList({
-        page,
-        perPage,
-        owner: owner || undefined,
-        include_revoked: includeRevoked,
-      }),
-  });
-
-  const total = q.data?.totalItems ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / perPage));
 
   const revokeM = useMutation({
     mutationFn: (id: string) => adminAPI.apiTokensRevoke(id),
@@ -136,6 +173,33 @@ export function APITokensScreen() {
     },
   });
 
+  // rotate / revoke are only meaningful for an active token — both are
+  // hidden on revoked / expired rows.
+  const rowActions = (t: APIToken): RowAction<APIToken>[] => {
+    const active = tokenStatus(t) === "active";
+    return [
+      {
+        label: "rotate",
+        hidden: () => !active,
+        onSelect: () => setRotateFor(t),
+      },
+      {
+        label: "revoke",
+        destructive: true,
+        hidden: () => !active,
+        onSelect: () => {
+          if (
+            window.confirm(
+              `Revoke "${t.name}"? Existing clients using this token will lose access immediately.`,
+            )
+          ) {
+            revokeM.mutate(t.id);
+          }
+        },
+      },
+    ];
+  };
+
   return (
     <AdminPage>
       <AdminPage.Header
@@ -147,12 +211,7 @@ export function APITokensScreen() {
             exactly once on create / rotate — copy them then.
           </>
         }
-        actions={
-          <div className="flex items-center gap-2">
-            <Pager page={page} totalPages={totalPages} onChange={setPage} />
-            <Button onClick={() => setCreateOpen(true)}>+ Create token</Button>
-          </div>
-        }
+        actions={<Button onClick={() => setCreateOpen(true)}>+ Create token</Button>}
       />
 
       {createdToken ? (
@@ -199,138 +258,49 @@ export function APITokensScreen() {
 
       <AdminPage.Body>
       <Card>
-        <CardContent className="p-0 overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>name</TableHead>
-                <TableHead>owner</TableHead>
-                <TableHead>fingerprint</TableHead>
-                <TableHead>scopes</TableHead>
-                <TableHead>last used</TableHead>
-                <TableHead>expires</TableHead>
-                <TableHead>status</TableHead>
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(q.data?.items ?? []).map((t) => {
-                const status = tokenStatus(t);
-                const isOpen = expandedId === t.id;
-                return (
-                  <Fragment key={t.id}>
-                    <TableRow
-                      onClick={() => setExpandedId(isOpen ? null : t.id)}
-                      className="cursor-pointer"
-                    >
-                      <TableCell className="font-medium">{t.name}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
-                        {t.owner_collection}/{t.owner_id.slice(0, 8)}…
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">{t.fingerprint || "—"}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
-                        {t.scopes.length === 0
-                          ? <span className="text-muted-foreground/60">(owner-bounded)</span>
-                          : t.scopes.join(",")}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
-                        {t.last_used_at ?? "—"}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
-                        {t.expires_at ?? "never"}
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={status} />
-                      </TableCell>
-                      <TableCell className="text-right whitespace-nowrap">
-                        <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                          {status === "active" ? (
-                            <>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setRotateFor(t)}
-                              >
-                                rotate
-                              </Button>
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                onClick={() => {
-                                  if (window.confirm(`Revoke "${t.name}"? Existing clients using this token will lose access immediately.`)) {
-                                    revokeM.mutate(t.id);
-                                  }
-                                }}
-                              >
-                                revoke
-                              </Button>
-                            </>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                    {isOpen ? (
-                      <TableRow>
-                        <TableCell colSpan={8} className="bg-muted">
-                          <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 p-3 text-xs">
-                            <dt className="text-muted-foreground">id</dt>
-                            <dd className="font-mono">{t.id}</dd>
-                            <dt className="text-muted-foreground">owner_id</dt>
-                            <dd className="font-mono">{t.owner_id}</dd>
-                            <dt className="text-muted-foreground">created_at</dt>
-                            <dd className="font-mono">{t.created_at}</dd>
-                            <dt className="text-muted-foreground">last_used_at</dt>
-                            <dd className="font-mono">{t.last_used_at ?? "—"}</dd>
-                            <dt className="text-muted-foreground">expires_at</dt>
-                            <dd className="font-mono">{t.expires_at ?? "never"}</dd>
-                            <dt className="text-muted-foreground">revoked_at</dt>
-                            <dd className="font-mono">{t.revoked_at ?? "—"}</dd>
-                            <dt className="text-muted-foreground">rotated_from</dt>
-                            <dd className="font-mono">{t.rotated_from ?? "—"}</dd>
-                            <dt className="text-muted-foreground">scopes</dt>
-                            <dd className="font-mono">
-                              {t.scopes.length === 0 ? "(owner-bounded)" : t.scopes.join(", ")}
-                            </dd>
-                          </dl>
-                        </TableCell>
-                      </TableRow>
-                    ) : null}
-                  </Fragment>
-                );
-              })}
-              {q.data?.items.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-muted-foreground text-center py-4">
-                    No tokens.
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
+        <CardContent className="p-3 overflow-x-auto">
+          <QDatatable
+            columns={columns}
+            rowKey="id"
+            pageSize={50}
+            emptyMessage="No tokens."
+            rowActions={rowActions}
+            deps={[owner, includeRevoked]}
+            fetch={async (params) => {
+              const r = await adminAPI.apiTokensList({
+                page: params.page,
+                perPage: params.pageSize,
+                owner: owner || undefined,
+                include_revoked: includeRevoked,
+              });
+              setTotal(r.totalItems);
+              return { rows: r.items, total: r.totalItems };
+            }}
+          />
         </CardContent>
       </Card>
       </AdminPage.Body>
 
-      {createOpen ? (
-        <CreateModal
-          pending={createM.isPending}
-          error={createM.error instanceof Error ? createM.error.message : null}
-          onClose={() => setCreateOpen(false)}
-          onSubmit={(input) => createM.mutate(input)}
-        />
-      ) : null}
+      {/* Create + Rotate drawers — Drawer + QEditableForm, mirrors the
+          Schemas/Collections pattern. Always mounted; the `open` prop
+          drives them so the Drawer's exit animation runs. */}
+      <TokenCreateDrawer
+        open={createOpen}
+        pending={createM.isPending}
+        onClose={() => setCreateOpen(false)}
+        onSubmit={(input) => createM.mutateAsync(input)}
+      />
 
-      {rotateFor ? (
-        <RotateModal
-          record={rotateFor}
-          pending={rotateM.isPending}
-          error={rotateM.error instanceof Error ? rotateM.error.message : null}
-          onClose={() => setRotateFor(null)}
-          onSubmit={(ttl_seconds) =>
-            rotateM.mutate({ id: rotateFor.id, ttl_seconds })
-          }
-        />
-      ) : null}
+      <TokenRotateDrawer
+        record={rotateFor}
+        pending={rotateM.isPending}
+        onClose={() => setRotateFor(null)}
+        onSubmit={(ttl_seconds) =>
+          rotateFor
+            ? rotateM.mutateAsync({ id: rotateFor.id, ttl_seconds })
+            : Promise.resolve()
+        }
+      />
     </AdminPage>
   );
 }
@@ -414,14 +384,50 @@ function CreatedBanner({
   );
 }
 
-function CreateModal({
+// TTLButtons — the shared preset selector used as a QEditableForm
+// renderInput. `extra` prepends an option (rotate uses "inherit").
+function TTLButtons({
+  value,
+  onChange,
+  disabled,
+  extra,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  extra?: string;
+}) {
+  const opts = extra ? [extra, ...TTL_PRESETS] : [...TTL_PRESETS];
+  return (
+    <div className="flex flex-wrap gap-1">
+      {opts.map((p) => (
+        <Button
+          key={p}
+          type="button"
+          variant={value === p ? "default" : "outline"}
+          size="sm"
+          disabled={disabled}
+          onClick={() => onChange(p)}
+        >
+          {p}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+// TokenCreateDrawer — right-side Drawer hosting QEditableForm in create
+// mode (mirrors the Schemas/Collections pattern). Scopes are a string[]
+// in form state shown as a comma-joined input; ttl is a preset key
+// mapped to seconds at submit-time. Validation reuses the zod schema.
+function TokenCreateDrawer({
+  open,
   pending,
-  error,
   onClose,
   onSubmit,
 }: {
+  open: boolean;
   pending: boolean;
-  error: string | null;
   onClose: () => void;
   onSubmit: (input: {
     name: string;
@@ -429,295 +435,251 @@ function CreateModal({
     owner_collection: string;
     scopes?: string[];
     ttl_seconds?: number;
-  }) => void;
+  }) => Promise<unknown>;
 }) {
-  // Kit's <Form> + react-hook-form + zod (mirrors login.tsx). Scopes
-  // are held as string[] in form state; the visible <Input> reflects a
-  // comma-joined view and onInput re-splits + filters empties. ttl is
-  // a preset key mapped to seconds at submit-time via TTL_SECONDS.
-  const form = useForm<CreateTokenValues>({
-    resolver: zodResolver(createTokenSchema),
-    defaultValues: {
-      name: "",
-      owner_id: "",
-      owner_collection: "users",
-      scopes: [],
-      ttl: "30d",
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const close = () => {
+    setFieldErrors({});
+    setFormError(null);
+    onClose();
+  };
+
+  const fields: QEditableField[] = [
+    { key: "name", label: "Name", required: true },
+    { key: "owner_id", label: "Owner ID", required: true, helpText: "UUID" },
+    { key: "owner_collection", label: "Owner collection", required: true },
+    {
+      key: "scopes",
+      label: "Scopes",
+      helpText:
+        "Comma-separated. Advisory in v1 — the token authenticates as the owner with full owner permissions.",
     },
-    mode: "onSubmit",
-  });
+    { key: "ttl", label: "TTL" },
+  ];
 
-  function handleSubmit(values: CreateTokenValues) {
-    onSubmit({
-      name: values.name.trim(),
-      owner_id: values.owner_id.trim(),
-      owner_collection: values.owner_collection.trim() || "users",
-      scopes: values.scopes.length > 0 ? values.scopes : undefined,
-      ttl_seconds: TTL_SECONDS[values.ttl],
-    });
-  }
-
-  return (
-    <ModalShell onClose={onClose} title="Create API token">
-      <Form {...form}>
-        <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-3">
-          <FormField
-            control={form.control}
-            name="name"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Name (required)</FormLabel>
-                <FormControl>
-                  <Input
-                    autoFocus
-                    type="text"
-                    placeholder="CI deploy bot"
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
+  const renderInput = (
+    f: QEditableField,
+    value: unknown,
+    onChange: (v: unknown) => void,
+  ) => {
+    switch (f.key) {
+      case "name":
+        return (
+          <Input
+            value={(value as string) ?? ""}
+            onInput={(e) => onChange(e.currentTarget.value)}
+            placeholder="CI deploy bot"
+            autoComplete="off"
           />
-          <FormField
-            control={form.control}
-            name="owner_id"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Owner ID (UUID, required)</FormLabel>
-                <FormControl>
-                  <Input
-                    type="text"
-                    placeholder="019e8a72-…"
-                    className="font-mono"
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
+        );
+      case "owner_id":
+        return (
+          <Input
+            value={(value as string) ?? ""}
+            onInput={(e) => onChange(e.currentTarget.value)}
+            placeholder="019e8a72-…"
+            autoComplete="off"
+            className="font-mono"
           />
-          <FormField
-            control={form.control}
-            name="owner_collection"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Owner collection</FormLabel>
-                <FormControl>
-                  <Input
-                    type="text"
-                    placeholder="users"
-                    className="font-mono"
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
+        );
+      case "owner_collection":
+        return (
+          <Input
+            value={(value as string) ?? ""}
+            onInput={(e) => onChange(e.currentTarget.value)}
+            placeholder="users"
+            autoComplete="off"
+            className="font-mono"
           />
-          <FormField
-            control={form.control}
-            name="scopes"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Scopes (comma-separated, optional)</FormLabel>
-                <FormControl>
-                  <Input
-                    type="text"
-                    placeholder="post.create, post.read"
-                    className="font-mono"
-                    value={field.value.join(", ")}
-                    onInput={(e) => {
-                      const raw = e.currentTarget.value;
-                      const parsed = raw
-                        .split(",")
-                        .map((s) => s.trim())
-                        .filter((s) => s.length > 0);
-                      field.onChange(parsed);
-                    }}
-                    onBlur={field.onBlur}
-                    name={field.name}
-                    ref={field.ref}
-                  />
-                </FormControl>
-                <FormDescription className="text-[11px]">
-                  Advisory in v1 — token authenticates as the owner with full owner permissions.
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
+        );
+      case "scopes":
+        return (
+          <Input
+            value={((value as string[]) ?? []).join(", ")}
+            onInput={(e) =>
+              onChange(
+                e.currentTarget.value
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter((s) => s.length > 0),
+              )
+            }
+            placeholder="post.create, post.read"
+            autoComplete="off"
+            className="font-mono"
           />
-          <FormField
-            control={form.control}
-            name="ttl"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>TTL</FormLabel>
-                <FormControl>
-                  <div className="flex flex-wrap gap-1">
-                    {TTL_PRESETS.map((p) => (
-                      <Button
-                        key={p}
-                        type="button"
-                        variant={field.value === p ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => field.onChange(p)}
-                      >
-                        {p}
-                      </Button>
-                    ))}
-                  </div>
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
+        );
+      case "ttl":
+        return (
+          <TTLButtons
+            value={(value as string) ?? "30d"}
+            onChange={onChange}
+            disabled={pending}
           />
+        );
+      default:
+        return null;
+    }
+  };
 
-          {error ? (
-            <Card className="border-destructive/30 bg-destructive/10">
-              <CardContent className="p-2 text-xs text-destructive">
-                {error}
-              </CardContent>
-            </Card>
-          ) : null}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              disabled={pending || form.formState.isSubmitting}
-            >
-              {pending ? "Creating…" : "Create"}
-            </Button>
-          </div>
-        </form>
-      </Form>
-    </ModalShell>
-  );
-}
-
-function RotateModal({
-  record,
-  pending,
-  error,
-  onClose,
-  onSubmit,
-}: {
-  record: APIToken;
-  pending: boolean;
-  error: string | null;
-  onClose: () => void;
-  onSubmit: (ttl_seconds: number | undefined) => void;
-}) {
-  // For rotate the empty TTL means "inherit from predecessor", which
-  // is the safe default per the Store contract.
-  const [ttl, setTTL] = useState<TTLPreset | "inherit">("inherit");
-
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSubmit(ttl === "inherit" ? undefined : TTL_SECONDS[ttl]);
+  const handleCreate = async (vals: Record<string, unknown>) => {
+    setFieldErrors({});
+    setFormError(null);
+    const parsed = createTokenSchema.safeParse(vals);
+    if (!parsed.success) {
+      const fe: Record<string, string> = {};
+      for (const issue of parsed.error.issues) {
+        const k = issue.path[0];
+        if (typeof k === "string" && !fe[k]) fe[k] = issue.message;
+      }
+      setFieldErrors(fe);
+      return;
+    }
+    const v = parsed.data;
+    try {
+      await onSubmit({
+        name: v.name.trim(),
+        owner_id: v.owner_id.trim(),
+        owner_collection: v.owner_collection.trim() || "users",
+        scopes: v.scopes.length > 0 ? v.scopes : undefined,
+        ttl_seconds: TTL_SECONDS[v.ttl],
+      });
+      // Parent's mutation onSuccess closes the drawer + flips the banner.
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Create failed.");
+    }
   };
 
   return (
-    <ModalShell onClose={onClose} title={`Rotate "${record.name}"`}>
-      <form onSubmit={submit} className="space-y-3">
-        <div className="text-sm text-muted-foreground">
-          The predecessor will stay active until you revoke it explicitly.
-          Distribute the successor first, then revoke this row.
-        </div>
-        <ModalField label="TTL for the new token">
-          <div className="flex flex-wrap gap-1">
-            <Button
-              variant={ttl === "inherit" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setTTL("inherit")}
-            >
-              inherit
-            </Button>
-            {(["1h", "24h", "30d", "90d", "never"] as const).map((p) => (
-              <Button
-                key={p}
-                variant={ttl === p ? "default" : "outline"}
-                size="sm"
-                onClick={() => setTTL(p)}
-              >
-                {p}
-              </Button>
-            ))}
-          </div>
-        </ModalField>
-        {error ? (
-          <Card className="border-destructive/30 bg-destructive/10">
-            <CardContent className="p-2 text-xs text-destructive">
-              {error}
-            </CardContent>
-          </Card>
-        ) : null}
-        <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" disabled={pending}>
-            {pending ? "Rotating…" : "Rotate"}
-          </Button>
-        </div>
-      </form>
-    </ModalShell>
-  );
-}
-
-function ModalShell({
-  onClose,
-  title,
-  children,
-}: {
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className="fixed inset-0 z-40 bg-foreground/40 flex items-center justify-center p-4"
-      onClick={onClose}
+    <Drawer
+      direction="right"
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) close();
+      }}
     >
-      <Card
-        className="max-w-md w-full shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <CardContent className="p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">{title}</h2>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onClose}
-              aria-label="Close"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              ×
-            </Button>
-          </div>
-          {children}
-        </CardContent>
-      </Card>
-    </div>
+      <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-lg">
+        <DrawerHeader>
+          <DrawerTitle>Create API token</DrawerTitle>
+          <DrawerDescription>
+            A long-lived bearer credential. The raw value is shown exactly
+            once on create — copy it then.
+          </DrawerDescription>
+        </DrawerHeader>
+        <div className="flex-1 overflow-y-auto px-4 pb-4">
+          <QEditableForm
+            mode="create"
+            fields={fields}
+            values={{
+              name: "",
+              owner_id: "",
+              owner_collection: "users",
+              scopes: [],
+              ttl: "30d",
+            }}
+            renderInput={renderInput}
+            onCreate={handleCreate}
+            onCancel={close}
+            fieldErrors={fieldErrors}
+            formError={formError}
+            disabled={pending}
+          />
+        </div>
+      </DrawerContent>
+    </Drawer>
   );
 }
 
-function ModalField({
-  label,
-  children,
+// TokenRotateDrawer — right-side Drawer hosting QEditableForm with a
+// single TTL field. Rotation mints a successor token; "inherit" keeps
+// the predecessor's expiry (the safe Store-contract default).
+function TokenRotateDrawer({
+  record,
+  pending,
+  onClose,
+  onSubmit,
 }: {
-  label: string;
-  children: React.ReactNode;
+  record: APIToken | null;
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (ttl_seconds: number | undefined) => Promise<unknown>;
 }) {
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const close = () => {
+    setFormError(null);
+    onClose();
+  };
+
+  const fields: QEditableField[] = [
+    {
+      key: "ttl",
+      label: "TTL for the new token",
+      helpText: "“inherit” keeps the predecessor's expiry.",
+    },
+  ];
+
+  const renderInput = (
+    _f: QEditableField,
+    value: unknown,
+    onChange: (v: unknown) => void,
+  ) => (
+    <TTLButtons
+      value={(value as string) ?? "inherit"}
+      onChange={onChange}
+      disabled={pending}
+      extra="inherit"
+    />
+  );
+
+  const handleRotate = async (vals: Record<string, unknown>) => {
+    setFormError(null);
+    const ttl = (vals.ttl as string) ?? "inherit";
+    try {
+      await onSubmit(
+        ttl === "inherit" ? undefined : TTL_SECONDS[ttl as TTLPreset],
+      );
+      // Parent's mutation onSuccess closes the drawer + flips the banner.
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Rotate failed.");
+    }
+  };
+
   return (
-    <label className="block">
-      <div className="text-xs font-medium text-foreground mb-1">{label}</div>
-      {children}
-    </label>
+    <Drawer
+      direction="right"
+      open={record != null}
+      onOpenChange={(o) => {
+        if (!o) close();
+      }}
+    >
+      <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-md">
+        <DrawerHeader>
+          <DrawerTitle>
+            Rotate {record ? `“${record.name}”` : "token"}
+          </DrawerTitle>
+          <DrawerDescription>
+            The predecessor stays active until you revoke it explicitly.
+            Distribute the successor first, then revoke the old row.
+          </DrawerDescription>
+        </DrawerHeader>
+        <div className="flex-1 overflow-y-auto px-4 pb-4">
+          <QEditableForm
+            mode="create"
+            fields={fields}
+            values={{ ttl: "inherit" }}
+            renderInput={renderInput}
+            onCreate={handleRotate}
+            submitLabel="Rotate"
+            onCancel={close}
+            formError={formError}
+            disabled={pending}
+          />
+        </div>
+      </DrawerContent>
+    </Drawer>
   );
 }
 

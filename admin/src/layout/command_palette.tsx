@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter-preact";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
+import { useT } from "../i18n";
 import { cn } from "@/lib/ui/cn";
 
 // Command palette overlay (⌘K / Ctrl+K). Lightweight, hand-rolled:
@@ -25,44 +26,49 @@ type Row = {
   path: string;
 };
 
-// PAGES — hand-maintained list of admin destinations. Order is roughly
-// frequency-of-use, grouped by top tab (Data / Logs / Settings). Update
-// in lockstep with route changes in app.tsx — otherwise the palette
-// triggers a redirect → full reload on selection.
-const PAGES: Row[] = [
+// PAGE_DEFS — hand-maintained list of admin destinations. Order is
+// roughly frequency-of-use, grouped by top tab (Data / Logs / Settings).
+// Update in lockstep with route changes in app.tsx — otherwise the
+// palette triggers a redirect → full reload on selection. `key` is the
+// i18n key; the visible label is resolved per-render so the palette is
+// searchable in the active language.
+const PAGE_DEFS: Array<{ key: string; path: string }> = [
   // Top-level
-  { kind: "page", label: "Dashboard",                path: "/" },
-  { kind: "page", label: "Schema",                   path: "/schema" },
+  { key: "palette.page.dashboard",         path: "/" },
+  { key: "palette.page.schema",            path: "/schema" },
 
   // Data → System
-  { kind: "page", label: "API tokens",               path: "/data/_api_tokens" },
-  { kind: "page", label: "System admins",            path: "/data/_admins" },
-  { kind: "page", label: "Admin sessions",           path: "/data/_admin_sessions" },
-  { kind: "page", label: "User sessions",            path: "/data/_sessions" },
-  { kind: "page", label: "Jobs",                     path: "/data/_jobs" },
+  { key: "palette.page.apiTokens",         path: "/data/_api_tokens" },
+  { key: "palette.page.systemAdmins",      path: "/data/_admins" },
+  { key: "palette.page.adminSessions",     path: "/data/_admin_sessions" },
+  { key: "palette.page.userSessions",      path: "/data/_sessions" },
+  { key: "palette.page.jobs",              path: "/data/_jobs" },
 
   // Logs
-  { kind: "page", label: "Audit log",                path: "/logs/audit" },
-  { kind: "page", label: "Application logs",         path: "/logs/app" },
-  { kind: "page", label: "Realtime",                 path: "/logs/realtime" },
-  { kind: "page", label: "Health & metrics",         path: "/logs/health" },
-  { kind: "page", label: "Cache inspector",          path: "/logs/cache" },
-  { kind: "page", label: "Email events",             path: "/logs/email-events" },
-  { kind: "page", label: "Notifications log",        path: "/logs/notifications" },
+  { key: "palette.page.auditLog",          path: "/logs/audit" },
+  { key: "palette.page.appLogs",           path: "/logs/app" },
+  { key: "palette.page.realtime",          path: "/logs/realtime" },
+  { key: "palette.page.health",            path: "/logs/health" },
+  { key: "palette.page.cache",             path: "/logs/cache" },
+  { key: "palette.page.emailEvents",       path: "/logs/email-events" },
+  { key: "palette.page.notificationsLog",  path: "/logs/notifications" },
 
   // Settings
-  { kind: "page", label: "Settings",                 path: "/settings" },
-  { kind: "page", label: "Mailer",                   path: "/settings/mailer" },
-  { kind: "page", label: "Mailer templates",         path: "/settings/mailer/templates" },
-  { kind: "page", label: "Notification preferences", path: "/settings/notifications" },
-  { kind: "page", label: "Webhooks",                 path: "/settings/webhooks" },
-  { kind: "page", label: "Backups",                  path: "/settings/backups" },
-  { kind: "page", label: "Hooks",                    path: "/settings/hooks" },
-  { kind: "page", label: "Translations",             path: "/settings/i18n" },
-  { kind: "page", label: "Trash",                    path: "/settings/trash" },
+  { key: "palette.page.settings",          path: "/settings" },
+  { key: "palette.page.mailer",            path: "/settings/mailer" },
+  { key: "palette.page.mailerTemplates",   path: "/settings/mailer/templates" },
+  { key: "palette.page.authMethods",       path: "/settings/auth" },
+  { key: "palette.page.notificationPrefs", path: "/settings/notifications" },
+  { key: "palette.page.webhooks",          path: "/settings/webhooks" },
+  { key: "palette.page.stripe",            path: "/settings/stripe" },
+  { key: "palette.page.backups",           path: "/settings/backups" },
+  { key: "palette.page.hooks",             path: "/settings/hooks" },
+  { key: "palette.page.translations",      path: "/settings/i18n" },
+  { key: "palette.page.trash",             path: "/settings/trash" },
 ];
 
 export default function CommandPalette() {
+  const { t } = useT();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -81,18 +87,25 @@ export default function CommandPalette() {
   // Build the full row list, then filter by lowercase substring on
   // either label or subtitle (path). Empty query → everything.
   const rows: Row[] = useMemo(() => {
+    // Page labels resolve in the active language so the palette stays
+    // searchable after a language switch.
+    const pageRows: Row[] = PAGE_DEFS.map((p) => ({
+      kind: "page" as const,
+      label: t(p.key),
+      path: p.path,
+    }));
     const colRows: Row[] = collections.map((c) => ({
       kind: "collection" as const,
       label: c.name,
       path: `/data/${c.name}`,
     }));
-    const all = [...PAGES, ...colRows];
+    const all = [...pageRows, ...colRows];
     const q = query.trim().toLowerCase();
     if (!q) return all;
     return all.filter(
       (r) => r.label.toLowerCase().includes(q) || r.path.toLowerCase().includes(q),
     );
-  }, [collections, query]);
+  }, [collections, query, t]);
 
   // Group for rendering, but maintain a flat index for arrow nav so
   // Up/Down step across section boundaries naturally.
@@ -204,7 +217,7 @@ export default function CommandPalette() {
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
-            placeholder="Search pages, collections…"
+            placeholder={t("palette.placeholder")}
             className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             spellcheck={false}
             autoComplete="off"
@@ -213,12 +226,12 @@ export default function CommandPalette() {
         <div ref={listRef} className="max-h-[360px] overflow-y-auto py-1">
           {rows.length === 0 ? (
             <div className="px-4 py-6 text-center text-sm text-muted-foreground">
-              No matches
+              {t("palette.noMatches")}
             </div>
           ) : (
             <>
               {grouped.pages.length > 0 ? (
-                <Section title="Pages">
+                <Section title={t("palette.pages")}>
                   {grouped.pages.map((r) => (
                     <RowItem
                       key={`p:${r.path}`}
@@ -232,7 +245,7 @@ export default function CommandPalette() {
                 </Section>
               ) : null}
               {grouped.cols.length > 0 ? (
-                <Section title="Collections">
+                <Section title={t("palette.collections")}>
                   {grouped.cols.map((r) => (
                     <RowItem
                       key={`c:${r.path}`}
@@ -250,13 +263,13 @@ export default function CommandPalette() {
         </div>
         <div className="border-t px-3 py-1.5 text-[11px] text-muted-foreground flex items-center gap-3">
           <span>
-            <kbd className="font-mono">↑↓</kbd> navigate
+            <kbd className="font-mono">↑↓</kbd> {t("palette.hint.navigate")}
           </span>
           <span>
-            <kbd className="font-mono">↵</kbd> open
+            <kbd className="font-mono">↵</kbd> {t("palette.hint.open")}
           </span>
           <span>
-            <kbd className="font-mono">esc</kbd> close
+            <kbd className="font-mono">esc</kbd> {t("palette.hint.close")}
           </span>
         </div>
       </div>

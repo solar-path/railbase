@@ -68,8 +68,6 @@ import (
 
 const (
 	settingsKeyAuthConfiguredAt     = "auth.configured_at"
-	settingsKeyAuthSkippedAt        = "auth.setup_skipped_at"
-	settingsKeyAuthSkippedReason    = "auth.setup_skipped_reason"
 	settingsKeyAuthPasswordEnabled  = "auth.password.enabled"
 	settingsKeyAuthMagicLinkEnabled = "auth.magic_link.enabled"
 	settingsKeyAuthOTPEnabled       = "auth.otp.enabled"
@@ -139,9 +137,7 @@ var pluginGatedProviders = []struct {
 
 // setupAuthStatusResponse is the GET payload.
 type setupAuthStatusResponse struct {
-	ConfiguredAt  string `json:"configured_at,omitempty"`
-	SkippedAt     string `json:"skipped_at,omitempty"`
-	SkippedReason string `json:"skipped_reason,omitempty"`
+	ConfiguredAt string `json:"configured_at,omitempty"`
 
 	// Methods is the toggle-state map. Always populated, even on a
 	// fresh install (returns defaults: password=true, others=false).
@@ -304,16 +300,12 @@ type setupOAuthProviderSave struct {
 	Issuer       string `json:"issuer,omitempty"`
 }
 
-type setupAuthSkipRequest struct {
-	Reason string `json:"reason,omitempty"`
-}
-
-// mountSetupAuth wires the three setup-auth endpoints. Public, mounted
-// next to /_setup/mailer-* and /_setup/{detect,probe-db,save-db}.
+// mountSetupAuth wires the setup-auth endpoints. As of the v0.9 IA
+// reorg this is mounted inside the authenticated admin group
+// (Settings → Auth methods), not the public pre-admin sub-tree.
 func (d *Deps) mountSetupAuth(r chi.Router) {
 	r.Get("/_setup/auth-status", d.setupAuthStatusHandler)
 	r.Post("/_setup/auth-save", d.setupAuthSaveHandler)
-	r.Post("/_setup/auth-skip", d.setupAuthSkipHandler)
 }
 
 // setupAuthStatusHandler — GET /_setup/auth-status.
@@ -334,12 +326,6 @@ func (d *Deps) setupAuthStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 	if v, ok, _ := d.Settings.GetString(ctx, settingsKeyAuthConfiguredAt); ok {
 		resp.ConfiguredAt = v
-	}
-	if v, ok, _ := d.Settings.GetString(ctx, settingsKeyAuthSkippedAt); ok {
-		resp.SkippedAt = v
-	}
-	if v, ok, _ := d.Settings.GetString(ctx, settingsKeyAuthSkippedReason); ok {
-		resp.SkippedReason = v
 	}
 
 	// Methods toggles — fall back to default when key absent.
@@ -565,43 +551,10 @@ func (d *Deps) setupAuthSaveHandler(w http.ResponseWriter, r *http.Request) {
 		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "stamp auth.configured_at: %s", err.Error()))
 		return
 	}
-	// Clear any prior skip flag — re-configuration cancels skip status.
-	_ = d.Settings.Delete(ctx, settingsKeyAuthSkippedAt)
-	_ = d.Settings.Delete(ctx, settingsKeyAuthSkippedReason)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":            true,
 		"configured_at": now,
-	})
-}
-
-// setupAuthSkipHandler — POST /_setup/auth-skip. Lets the operator
-// proceed with the wizard without touching any toggle. Default-method
-// (password only) is implicitly enabled — the bootstrap-admin gate
-// accepts either configured_at OR skipped_at.
-func (d *Deps) setupAuthSkipHandler(w http.ResponseWriter, r *http.Request) {
-	if d.Settings == nil {
-		rerr.WriteJSON(w, rerr.New(rerr.CodeUnavailable, "settings manager not wired"))
-		return
-	}
-	var body setupAuthSkipRequest
-	_ = json.NewDecoder(r.Body).Decode(&body) // body is optional
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	if err := d.Settings.Set(r.Context(), settingsKeyAuthSkippedAt, now); err != nil {
-		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "stamp auth.setup_skipped_at: %s", err.Error()))
-		return
-	}
-	if strings.TrimSpace(body.Reason) != "" {
-		_ = d.Settings.Set(r.Context(), settingsKeyAuthSkippedReason, body.Reason)
-	}
-	// Make sure password is on as the safe default — skipping shouldn't
-	// brick the install.
-	_ = d.Settings.Set(r.Context(), settingsKeyAuthPasswordEnabled, true)
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":         true,
-		"skipped_at": now,
 	})
 }
 

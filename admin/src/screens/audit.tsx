@@ -1,20 +1,11 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
-import { Pager } from "../layout/pager";
+import type { AuditEvent } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
-import { Card, CardContent } from "@/lib/ui/card.ui";
+import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 import { Shield, Download } from "@/lib/ui/icons";
 
 // Audit log viewer — paginated, filterable list of `_audit_log` rows.
@@ -26,13 +17,71 @@ import { Shield, Download } from "@/lib/ui/icons";
 //
 // Debounce strategy mirrors logs.tsx / jobs.tsx — substring inputs
 // (event, user_id, error_code) wait 300ms; the outcome <select> and
-// since/until date inputs fire on change.
+// since/until date inputs fire on change. Server-paginated via
+// QDatatable's `fetch` mode — the table owns page/pageSize; bespoke
+// filters flow through `deps`.
 
 type OutcomeFilter = "" | "success" | "denied" | "failed" | "error";
 
+const columns: ColumnDef<AuditEvent>[] = [
+  {
+    id: "seq",
+    header: "seq",
+    accessor: "seq",
+    cell: (e) => <span className="font-mono text-muted-foreground">{e.seq}</span>,
+  },
+  {
+    id: "at",
+    header: "at",
+    accessor: "at",
+    cell: (e) => (
+      <span className="font-mono text-xs text-muted-foreground">{e.at}</span>
+    ),
+  },
+  {
+    id: "event",
+    header: "event",
+    accessor: "event",
+    cell: (e) => <span className="font-mono">{e.event}</span>,
+  },
+  {
+    id: "outcome",
+    header: "outcome",
+    accessor: "outcome",
+    cell: (e) => <Badge variant={outcomeVariant(e.outcome)}>{e.outcome}</Badge>,
+  },
+  {
+    id: "user",
+    header: "user",
+    accessor: "user_id",
+    cell: (e) => (
+      <span className="font-mono text-xs">
+        {e.user_id ? (
+          <span title={e.user_collection ?? ""}>{e.user_id.slice(0, 8)}…</span>
+        ) : (
+          "—"
+        )}
+      </span>
+    ),
+  },
+  {
+    id: "ip",
+    header: "ip",
+    accessor: "ip",
+    cell: (e) => <span className="font-mono text-xs">{e.ip ?? "—"}</span>,
+  },
+  {
+    id: "error",
+    header: "error",
+    accessor: "error_code",
+    cell: (e) => (
+      <span className="font-mono text-xs text-foreground">{e.error_code ?? ""}</span>
+    ),
+  },
+];
+
 export function AuditScreen() {
-  const [page, setPage] = useState(1);
-  const perPage = 50;
+  const [total, setTotal] = useState(0);
 
   const [eventInput, setEventInput] = useState("");
   const [event, setEvent] = useState(""); // debounced
@@ -58,34 +107,8 @@ export function AuditScreen() {
     return () => clearTimeout(t);
   }, [errorCodeInput]);
 
-  // Reset to page 1 whenever any filter changes.
-  useEffect(() => {
-    setPage(1);
-  }, [event, outcome, userId, since, until, errorCode]);
-
   const anyFilter =
     event || outcome || userId || since || until || errorCode;
-
-  const q = useQuery({
-    queryKey: [
-      "audit",
-      { page, perPage, event, outcome, user_id: userId, since, until, error_code: errorCode },
-    ],
-    queryFn: () =>
-      adminAPI.audit({
-        page,
-        perPage,
-        event: event || undefined,
-        outcome: outcome || undefined,
-        user_id: userId || undefined,
-        since: toRFC3339OrUndefined(since),
-        until: toRFC3339OrUndefined(until),
-        error_code: errorCode || undefined,
-      }),
-  });
-
-  const total = q.data?.totalItems ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / perPage));
 
   return (
     <AdminPage>
@@ -106,7 +129,6 @@ export function AuditScreen() {
             Every system_admin action is recorded here for forensic review.
           </>
         }
-        actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
       />
 
       <AdminPage.Toolbar>
@@ -222,51 +244,27 @@ export function AuditScreen() {
       </AdminPage.Toolbar>
 
       <AdminPage.Body>
-      <Card>
-        <CardContent className="p-0 overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>seq</TableHead>
-                <TableHead>at</TableHead>
-                <TableHead>event</TableHead>
-                <TableHead>outcome</TableHead>
-                <TableHead>user</TableHead>
-                <TableHead>ip</TableHead>
-                <TableHead>error</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(q.data?.items ?? []).map((e) => (
-                <TableRow key={e.seq}>
-                  <TableCell className="font-mono text-muted-foreground">{e.seq}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">{e.at}</TableCell>
-                  <TableCell className="font-mono">{e.event}</TableCell>
-                  <TableCell>
-                    <Badge variant={outcomeVariant(e.outcome)}>{e.outcome}</Badge>
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {e.user_id ? (
-                      <span title={e.user_collection ?? ""}>{e.user_id.slice(0, 8)}…</span>
-                    ) : (
-                      "—"
-                    )}
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">{e.ip ?? "—"}</TableCell>
-                  <TableCell className="font-mono text-xs text-foreground">{e.error_code ?? ""}</TableCell>
-                </TableRow>
-              ))}
-              {q.data?.items.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-muted-foreground text-center py-4">
-                    No events.
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+        <QDatatable
+          columns={columns}
+          rowKey="seq"
+          pageSize={50}
+          emptyMessage="No events."
+          deps={[event, outcome, userId, since, until, errorCode]}
+          fetch={async (params) => {
+            const r = await adminAPI.audit({
+              page: params.page,
+              perPage: params.pageSize,
+              event: event || undefined,
+              outcome: outcome || undefined,
+              user_id: userId || undefined,
+              since: toRFC3339OrUndefined(since),
+              until: toRFC3339OrUndefined(until),
+              error_code: errorCode || undefined,
+            });
+            setTotal(r.totalItems);
+            return { rows: r.items, total: r.totalItems };
+          }}
+        />
       </AdminPage.Body>
     </AdminPage>
   );

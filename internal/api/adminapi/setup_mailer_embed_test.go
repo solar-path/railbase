@@ -2,15 +2,14 @@
 
 package adminapi
 
-// E2E tests for v1.7.43 — covers the mailer-save persistence path,
-// the bootstrap mailer-gate (412 PreconditionFailed when neither
-// configured nor skipped), and the retry sweeper. Piggybacks on the
-// shared emEventsPool TestMain.
+// E2E tests for the mailer-save persistence path and the bootstrap
+// welcome-email enqueue behaviour. Piggybacks on the shared
+// emEventsPool TestMain.
 //
 // Run:
 //
 //	go test -race -count=1 -tags embed_pg ./internal/api/adminapi/... -run TestSetupMailerEmbed
-//	go test -race -count=1 -tags embed_pg ./internal/api/adminapi/... -run TestBootstrapMailerGate
+//	go test -race -count=1 -tags embed_pg ./internal/api/adminapi/... -run TestBootstrap
 
 import (
 	"bytes"
@@ -62,7 +61,6 @@ func clearMailerSettings(t *testing.T, d *Deps) {
 	keys := []string{
 		"mailer.configured_at",
 		"mailer.setup_skipped_at",
-		"mailer.setup_skipped_reason",
 		"mailer.driver",
 		"mailer.from",
 		"mailer.smtp.host",
@@ -71,48 +69,6 @@ func clearMailerSettings(t *testing.T, d *Deps) {
 	}
 	for _, k := range keys {
 		_ = d.Settings.Delete(ctx, k)
-	}
-}
-
-// TestSetupMailerEmbed_Skip_PersistsFlags — POST /_setup/mailer-skip
-// with a non-empty reason writes mailer.setup_skipped_at AND
-// mailer.setup_skipped_reason to _settings. The status endpoint
-// reflects both fields on the next read.
-func TestSetupMailerEmbed_Skip_PersistsFlags(t *testing.T) {
-	d := newSetupMailerDeps(t)
-	clearMailerSettings(t, d)
-
-	r := chi.NewRouter()
-	d.mountSetupMailer(r)
-
-	// Skip request.
-	body, _ := json.Marshal(setupMailerSkipBody{
-		Reason: "SMTP credentials still pending from infra team",
-	})
-	req := httptest.NewRequest(http.MethodPost, "/_setup/mailer-skip",
-		bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("skip: want 200, got %d body=%s", rec.Code, rec.Body.String())
-	}
-
-	// Read status.
-	statusReq := httptest.NewRequest(http.MethodGet, "/_setup/mailer-status", nil)
-	statusRec := httptest.NewRecorder()
-	r.ServeHTTP(statusRec, statusReq)
-	if statusRec.Code != http.StatusOK {
-		t.Fatalf("status: want 200, got %d", statusRec.Code)
-	}
-	var status setupMailerStatusResponse
-	if err := json.Unmarshal(statusRec.Body.Bytes(), &status); err != nil {
-		t.Fatalf("decode status: %v", err)
-	}
-	if status.SkippedAt == "" {
-		t.Errorf("skipped_at: want populated after skip, got empty")
-	}
-	if status.SkippedReason != "SMTP credentials still pending from infra team" {
-		t.Errorf("skipped_reason: want exact match, got %q", status.SkippedReason)
 	}
 }
 
@@ -164,29 +120,26 @@ func TestSetupMailerEmbed_Save_PersistsSMTP(t *testing.T) {
 	}
 }
 
-// TestSetupMailerEmbed_Save_ClearsSkip — saving a mailer config after
-// a prior skip clears the skipped_at flag (and reason) — operator
-// intent has reversed.
-func TestSetupMailerEmbed_Save_ClearsSkip(t *testing.T) {
+// TestSetupMailerEmbed_Save_ClearsLegacySkip — saving a mailer config
+// clears any legacy mailer.setup_skipped_at flag. The v0.9 wizard no
+// longer writes that flag, but a pre-v0.9 install may carry it; a
+// successful save should not leave the install reporting "skipped".
+func TestSetupMailerEmbed_Save_ClearsLegacySkip(t *testing.T) {
 	d := newSetupMailerDeps(t)
 	clearMailerSettings(t, d)
 
 	r := chi.NewRouter()
 	d.mountSetupMailer(r)
 
-	// Skip first.
-	skipBody, _ := json.Marshal(setupMailerSkipBody{Reason: "initial"})
-	skipReq := httptest.NewRequest(http.MethodPost, "/_setup/mailer-skip",
-		bytes.NewReader(skipBody))
-	r.ServeHTTP(httptest.NewRecorder(), skipReq)
-
-	// Confirm skip is set.
-	skipped, _, _ := d.Settings.GetString(context.Background(), "mailer.setup_skipped_at")
+	// Simulate a pre-v0.9 install that has the legacy skip flag set.
+	ctx := context.Background()
+	_ = d.Settings.Set(ctx, "mailer.setup_skipped_at", "2026-05-13T10:00:00Z")
+	skipped, _, _ := d.Settings.GetString(ctx, "mailer.setup_skipped_at")
 	if skipped == "" {
-		t.Fatalf("skipped_at not set after skip — test fixture broken")
+		t.Fatalf("skipped_at not set — test fixture broken")
 	}
 
-	// Now save.
+	// Now save a config.
 	saveBody, _ := json.Marshal(setupMailerBody{
 		Driver:      "console",
 		FromAddress: "x@y.com",
@@ -199,23 +152,25 @@ func TestSetupMailerEmbed_Save_ClearsSkip(t *testing.T) {
 		t.Fatalf("save: want 200, got %d body=%s", saveRec.Code, saveRec.Body.String())
 	}
 
-	// Skip flag should now be gone.
-	skippedAfter, ok, _ := d.Settings.GetString(context.Background(), "mailer.setup_skipped_at")
+	// Legacy skip flag should now be gone.
+	skippedAfter, ok, _ := d.Settings.GetString(ctx, "mailer.setup_skipped_at")
 	if ok && skippedAfter != "" {
 		t.Errorf("skipped_at: want cleared after successful save, got %q", skippedAfter)
 	}
 }
 
-// TestBootstrapMailerGate_RefusesWhenNeitherSet — POST /_bootstrap
-// when there's no mailer.configured_at AND no mailer.setup_skipped_at
-// returns 412 PreconditionFailed. The gate fires BEFORE the email/
-// password validation.
-func TestBootstrapMailerGate_RefusesWhenNeitherSet(t *testing.T) {
+// TestBootstrap_SucceedsWithoutMailerFlags — v0.9 regression. The
+// mailer gate (mailerGateError) used to return 412 when neither
+// mailer.configured_at nor mailer.setup_skipped_at was set; bootstrap
+// would refuse. After the v0.9 IA simplification (mailer config moved
+// to Settings, wizard reduced to DB + admin), admin creation no longer
+// depends on these flags — POST /_bootstrap succeeds and the welcome
+// email is enqueued because no skip flag is set.
+func TestBootstrap_SucceedsWithoutMailerFlags(t *testing.T) {
 	d := newSetupMailerDeps(t)
 	clearMailerSettings(t, d)
-	// Clear any admins from prior tests so the bootstrap-count check
-	// reports 0 and we get to the mailer gate.
 	emEventsPool.Exec(context.Background(), `DELETE FROM _admins`)
+	emEventsPool.Exec(context.Background(), `DELETE FROM _jobs`)
 
 	d.Admins = admins.NewStore(emEventsPool)
 	d.Sessions = admins.NewSessionStore(emEventsPool, fakeKey())
@@ -232,21 +187,20 @@ func TestBootstrapMailerGate_RefusesWhenNeitherSet(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusPreconditionFailed {
-		t.Fatalf("status: want 412 PreconditionFailed, got %d body=%s",
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200 (gate removed in v0.9), got %d body=%s",
 			rec.Code, rec.Body.String())
 	}
-	// Verify the admin was NOT created (gate fires pre-INSERT).
 	count, _ := d.Admins.Count(context.Background())
-	if count != 0 {
-		t.Errorf("admins count: want 0 (no admin should have been inserted), got %d", count)
+	if count != 1 {
+		t.Errorf("admins count: want 1 after successful bootstrap, got %d", count)
 	}
 }
 
-// TestBootstrapMailerGate_AcceptsWhenConfigured — once
-// mailer.configured_at is set, the gate lets bootstrap-create through
-// (and the admin actually lands).
-func TestBootstrapMailerGate_AcceptsWhenConfigured(t *testing.T) {
+// TestBootstrap_EnqueuesWelcomeWhenMailerConfigured — when the mailer
+// is configured and no skip flag is present, bootstrap-create succeeds
+// and the admin-welcome email job is enqueued.
+func TestBootstrap_EnqueuesWelcomeWhenMailerConfigured(t *testing.T) {
 	d := newSetupMailerDeps(t)
 	clearMailerSettings(t, d)
 	emEventsPool.Exec(context.Background(), `DELETE FROM _admins`)
@@ -259,12 +213,6 @@ func TestBootstrapMailerGate_AcceptsWhenConfigured(t *testing.T) {
 	_ = d.Settings.Set(context.Background(), "mailer.configured_at", "2026-05-13T10:00:00Z")
 	_ = d.Settings.Set(context.Background(), "mailer.driver", "console")
 	_ = d.Settings.Set(context.Background(), "mailer.from", "railbase@example.com")
-
-	// v1.7.47+: bootstrap now also requires the auth-methods step to be
-	// configured OR skipped (parallel gate to mailer). This test is
-	// asserting the MAILER gate path, so stamp auth as configured to
-	// pass the orthogonal auth gate.
-	_ = d.Settings.Set(context.Background(), "auth.configured_at", "2026-05-13T10:00:00Z")
 
 	r := chi.NewRouter()
 	r.Get("/_bootstrap", d.bootstrapProbeHandler)
@@ -299,10 +247,11 @@ func TestBootstrapMailerGate_AcceptsWhenConfigured(t *testing.T) {
 	}
 }
 
-// TestBootstrapMailerGate_AcceptsWhenSkipped — explicit skip is the
-// other gate-passing condition. No welcome email enqueued when
-// skipped — skip means "don't send to anyone".
-func TestBootstrapMailerGate_AcceptsWhenSkipped(t *testing.T) {
+// TestBootstrap_SuppressesWelcomeWhenLegacySkipSet — a pre-v0.9 install
+// may still carry the legacy mailer.setup_skipped_at flag. Bootstrap
+// still succeeds, but enqueueAdminEmails honors the flag and suppresses
+// the welcome email — skip means "don't send to anyone".
+func TestBootstrap_SuppressesWelcomeWhenLegacySkipSet(t *testing.T) {
 	d := newSetupMailerDeps(t)
 	clearMailerSettings(t, d)
 	emEventsPool.Exec(context.Background(), `DELETE FROM _admins`)
@@ -312,10 +261,6 @@ func TestBootstrapMailerGate_AcceptsWhenSkipped(t *testing.T) {
 	d.Sessions = admins.NewSessionStore(emEventsPool, fakeKey())
 
 	_ = d.Settings.Set(context.Background(), "mailer.setup_skipped_at", "2026-05-13T10:00:00Z")
-	_ = d.Settings.Set(context.Background(), "mailer.setup_skipped_reason", "deferred")
-	// v1.7.47+: pass the parallel auth-methods gate by recording a skip.
-	_ = d.Settings.Set(context.Background(), "auth.setup_skipped_at", "2026-05-13T10:00:00Z")
-	_ = d.Settings.Set(context.Background(), "auth.setup_skipped_reason", "deferred")
 
 	r := chi.NewRouter()
 	r.Get("/_bootstrap", d.bootstrapProbeHandler)
@@ -330,7 +275,7 @@ func TestBootstrapMailerGate_AcceptsWhenSkipped(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status: want 200 (mailer skipped), got %d body=%s",
+		t.Fatalf("status: want 200 (bootstrap never gated on mailer), got %d body=%s",
 			rec.Code, rec.Body.String())
 	}
 	count, _ := d.Admins.Count(context.Background())

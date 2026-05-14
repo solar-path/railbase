@@ -86,7 +86,7 @@ func (l *Listener) Listen(channel string, handler func(payload string)) error
 
 Fluent builder в Go-коде. Источник истины — `schema/*.go` файлы.
 
-> **Reserved namespace.** Имена таблиц с префиксом `_` (дандер) **зарезервированы за системой**. Schema-validator (`internal/schema/builder/validate.go`) отказывает создавать user-collection с таким именем — это гарантирует что app-коллекция `_users`/`_admins`/`_jobs` физически невозможна, и системные таблицы (`_admins`, `_admin_sessions`, `_settings`, `_audit_log`, `_sessions`, `_record_tokens`, `_jobs`, `_cron`, `_files`, `_notifications`, `_notification_preferences`, `_notification_user_settings`, `_webhooks`, `_webhook_deliveries`, `_logs`, `_exports`, `_email_events`, `_audit_seals`, `_auth_origins`, `_migrations`, `_schema_snapshots`, `_tenants`, `_roles`, `_role_actions`, `_user_roles`) живут в защищённом пространстве имён по построению. Полный список + назначение каждой — `docs/04-identity.md` (auth-track) и `docs/14-observability.md` (operational-track).
+> **Reserved namespace.** Имена таблиц с префиксом `_` (дандер) **зарезервированы за системой**. Schema-validator (`internal/schema/builder/validate.go`) отказывает создавать user-collection с таким именем — это гарантирует что app-коллекция `_users`/`_admins`/`_jobs` физически невозможна, и системные таблицы (`_admins`, `_admin_sessions`, `_settings`, `_audit_log`, `_sessions`, `_record_tokens`, `_jobs`, `_cron`, `_files`, `_notifications`, `_notification_preferences`, `_notification_user_settings`, `_webhooks`, `_webhook_deliveries`, `_logs`, `_exports`, `_email_events`, `_audit_seals`, `_auth_origins`, `_migrations`, `_schema_snapshots`, `_admin_collections`, `_tenants`, `_roles`, `_role_actions`, `_user_roles`) живут в защищённом пространстве имён по построению. Полный список + назначение каждой — `docs/04-identity.md` (auth-track) и `docs/14-observability.md` (operational-track).
 
 ### Базовый пример
 
@@ -121,6 +121,36 @@ var TenantPosts = schema.Collection("tenant_posts").
 - TypeScript SDK с zod-схемами
 - OpenAPI spec
 - Go-side model struct
+
+### Runtime collections (admin-managed, v0.9)
+
+Code-defined коллекции выше — основной путь и единственный источник
+истины для codegen. Но v0.9 добавил **второй класс коллекций**,
+создаваемых из admin UI без деплоя (см. `docs/12-admin-ui.md` ADR
+«runtime collection management»).
+
+| | Code-defined | Admin-managed (runtime) |
+|---|---|---|
+| Объявление | `schema/*.go` (этот DSL) | admin UI collection editor |
+| Источник истины | Go-исходник | строка в `_admin_collections` |
+| Регистрация в `registry` | `init()` при старте процесса | `live.Hydrate` после системных миграций (+ `live.Create` в рантайме) |
+| Codegen (sqlc / SDK / OpenAPI) | да | нет |
+| Редактируется из UI | нет | да |
+
+Реализация — пакет `internal/schema/live`: `Create` / `Update` /
+`Delete` оборачивают DDL-генераторы из `internal/schema/gen` плюс
+upsert в `_admin_collections`, всё в одной транзакции; in-memory
+`registry` мутируется только после успешного commit'а. `FromSpec` в
+`internal/schema/builder` реконструирует `CollectionBuilder` из
+JSON-спеки (обратное к `Spec()`), что нужно и для API-входа, и для
+boot-гидратации. `Update` диффит старую/новую спеку через `gen.Compute`
+и **отказывает** в несовместимых изменениях (смена типа колонки,
+переключение `Tenant()`) — без молчаливой потери данных.
+
+Запись данных в runtime-коллекцию работает сразу после создания:
+record-CRUD маршруты параметрические (`/api/collections/{name}/…`) и
+резолвят коллекцию из `registry` пер-реквест, ремонтировать роуты не
+нужно.
 
 ### Field types
 

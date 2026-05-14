@@ -22,6 +22,24 @@ func NewCollection(name string) *CollectionBuilder {
 	return &CollectionBuilder{spec: CollectionSpec{Name: name}}
 }
 
+// FromSpec reconstructs a CollectionBuilder around an already-
+// materialised CollectionSpec — the inverse of Spec(). The fluent
+// constructors (NewCollection + .Field + …) are the path for
+// compile-time schema; FromSpec is the path for runtime schema, where
+// a CollectionSpec arrives as JSON (admin UI body, or a persisted
+// _admin_collections row) and needs to become a registry-registrable
+// builder.
+//
+// The slices are deep-copied so the returned builder doesn't alias the
+// caller's spec. Validation is NOT run here — call .Validate() before
+// handing the builder to the registry, exactly as the fluent path does.
+func FromSpec(spec CollectionSpec) *CollectionBuilder {
+	cp := spec
+	cp.Fields = append([]FieldSpec(nil), spec.Fields...)
+	cp.Indexes = append([]IndexSpec(nil), spec.Indexes...)
+	return &CollectionBuilder{spec: cp}
+}
+
 // NewAuthCollection starts an auth-style collection. Compared to
 // NewCollection, the materialised CollectionSpec has Auth=true; the
 // SQL generator then adds the auth-specific system columns

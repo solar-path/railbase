@@ -1,40 +1,100 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
-import { Pager } from "../layout/pager";
+import type { SystemSessionRow } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
 import { Badge } from "@/lib/ui/badge.ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
-import { Card, CardContent } from "@/lib/ui/card.ui";
+import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 
 // User sessions browser — read-only paginated view of the `_sessions`
 // table (one row per active user-side session, discriminated by
 // collection_name). Mirrors the admin-sessions sibling screen.
 //
 // Backend endpoint: GET /api/_admin/_system/sessions (v1.7.x).
-//
-// Columns: id (truncated), user (collection + id-prefix), ip,
-// user_agent (60-char cap), last_used_at, expires_at, created.
+// Server-paginated via QDatatable's `fetch` mode — the table owns
+// page/pageSize; the fetch closure stashes the row count so the header
+// can still show the total.
+
+const columns: ColumnDef<SystemSessionRow>[] = [
+  {
+    id: "id",
+    header: "id",
+    accessor: "id",
+    cell: (s) => (
+      <span class="font-mono text-xs text-muted-foreground" title={s.id}>
+        {s.id.slice(0, 8)}…
+      </span>
+    ),
+  },
+  {
+    id: "collection",
+    header: "collection",
+    accessor: "user_collection",
+    cell: (s) => (
+      <Badge variant="outline" class="font-mono">
+        {s.user_collection}
+      </Badge>
+    ),
+  },
+  {
+    id: "user",
+    header: "user",
+    accessor: "user_id",
+    cell: (s) => (
+      <span class="font-mono text-xs" title={s.user_id}>
+        {s.user_id.slice(0, 8)}…
+      </span>
+    ),
+  },
+  {
+    id: "ip",
+    header: "ip",
+    accessor: "ip",
+    cell: (s) => <span class="font-mono text-xs">{s.ip ?? "—"}</span>,
+  },
+  {
+    id: "user_agent",
+    header: "user agent",
+    accessor: "user_agent",
+    cell: (s) => (
+      <span
+        class="font-mono text-xs text-muted-foreground block max-w-md truncate"
+        title={s.user_agent ?? ""}
+      >
+        {s.user_agent ?? "—"}
+      </span>
+    ),
+  },
+  {
+    id: "last_used_at",
+    header: "last used",
+    accessor: "last_used_at",
+    sortable: true,
+    cell: (s) => (
+      <span class="font-mono text-xs text-muted-foreground">{s.last_used_at}</span>
+    ),
+  },
+  {
+    id: "expires_at",
+    header: "expires",
+    accessor: "expires_at",
+    sortable: true,
+    cell: (s) => (
+      <span class="font-mono text-xs text-muted-foreground">{s.expires_at}</span>
+    ),
+  },
+  {
+    id: "created",
+    header: "created",
+    accessor: "created",
+    sortable: true,
+    cell: (s) => (
+      <span class="font-mono text-xs text-muted-foreground">{s.created}</span>
+    ),
+  },
+];
 
 export function SystemSessionsScreen() {
-  const [page, setPage] = useState(1);
-  const perPage = 50;
-
-  const q = useQuery({
-    queryKey: ["system-sessions", { page, perPage }],
-    queryFn: () => adminAPI.listSystemSessions({ page, perPage }),
-  });
-
-  const total = q.data?.totalItems ?? 0;
-  const totalPages = Math.max(1, q.data?.totalPages ?? Math.ceil(total / perPage));
-  const items = q.data?.items ?? [];
+  const [total, setTotal] = useState(0);
 
   return (
     <AdminPage>
@@ -46,70 +106,23 @@ export function SystemSessionsScreen() {
             revoke a session, use the user record's logout flow.
           </>
         }
-        actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
       />
 
       <AdminPage.Body>
-        {q.isError ? (
-          <AdminPage.Error
-            message={q.error instanceof Error ? q.error.message : String(q.error)}
-            retry={() => void q.refetch()}
-          />
-        ) : items.length === 0 && !q.isLoading ? (
-          <AdminPage.Empty
-            title="No user sessions"
-            description="No users have signed in yet."
-          />
-        ) : (
-          <Card>
-            <CardContent className="p-0 overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>id</TableHead>
-                    <TableHead>collection</TableHead>
-                    <TableHead>user</TableHead>
-                    <TableHead>ip</TableHead>
-                    <TableHead>user agent</TableHead>
-                    <TableHead>last used</TableHead>
-                    <TableHead>expires</TableHead>
-                    <TableHead>created</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {items.map((s) => (
-                    <TableRow key={s.id}>
-                      <TableCell className="font-mono text-xs text-muted-foreground" title={s.id}>
-                        {s.id.slice(0, 8)}…
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="font-mono">
-                          {s.user_collection}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs" title={s.user_id}>
-                        {s.user_id.slice(0, 8)}…
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">{s.ip ?? "—"}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground max-w-md truncate" title={s.user_agent ?? ""}>
-                        {s.user_agent ?? "—"}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
-                        {s.last_used_at}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
-                        {s.expires_at}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
-                        {s.created}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        )}
+        <QDatatable
+          columns={columns}
+          rowKey="id"
+          pageSize={50}
+          emptyMessage="No user sessions — no users have signed in yet."
+          fetch={async (params) => {
+            const r = await adminAPI.listSystemSessions({
+              page: params.page,
+              perPage: params.pageSize,
+            });
+            setTotal(r.totalItems);
+            return { rows: r.items, total: r.totalItems };
+          }}
+        />
       </AdminPage.Body>
     </AdminPage>
   );

@@ -65,6 +65,7 @@ export interface CollectionSpec {
   name: string;
   tenant?: boolean;
   auth?: boolean;
+  soft_delete?: boolean;
   fields: FieldSpec[];
   indexes?: IndexSpec[];
   rules?: RuleSet;
@@ -73,6 +74,12 @@ export interface CollectionSpec {
 export interface SchemaResponse {
   collections: CollectionSpec[];
   count: number;
+  /**
+   * Names of collections created via the admin UI — the only ones the
+   * UI may edit/delete. Code-defined collections are absent here and
+   * render read-only. Older servers omit this field entirely.
+   */
+  editable?: string[];
 }
 
 export interface SettingItem {
@@ -758,4 +765,105 @@ export interface SystemSessionListResponse {
   perPage: number;
   totalItems: number;
   totalPages: number;
+}
+
+/** Masked mailer config snapshot from /api/_admin/_setup/mailer-status. */
+export interface MailerConfigStatus {
+  configured_at?: string;
+  config: {
+    driver?: string;
+    from_address?: string;
+    from_name?: string;
+    smtp_host?: string;
+    smtp_port?: number;
+    smtp_user?: string;
+    tls?: string;
+    smtp_password_set: boolean;
+  };
+}
+
+/** Result of /api/_admin/_setup/mailer-probe (a test send). */
+export interface MailerProbeResult {
+  ok: boolean;
+  error?: string;
+  hint?: string;
+  driver?: string;
+}
+
+/** Result of /api/_admin/_setup/mailer-save. */
+export interface MailerSaveResult {
+  ok?: boolean;
+  note?: string;
+}
+
+// ---- auth methods config (Settings → Auth methods) ----
+
+export interface AuthOAuthSnapshot {
+  enabled: boolean;
+  client_id?: string;
+  /** "set" sentinel on read — never the real value. */
+  client_secret?: string;
+  issuer?: string;
+}
+
+export interface AuthLDAPSnapshot {
+  enabled: boolean;
+  url?: string;
+  tls_mode?: string;
+  insecure_skip_verify?: boolean;
+  bind_dn?: string;
+  bind_password_set: boolean;
+  user_base_dn?: string;
+  user_filter?: string;
+  email_attr?: string;
+  name_attr?: string;
+}
+
+export interface AuthSAMLSnapshot {
+  enabled: boolean;
+  idp_metadata_url?: string;
+  idp_metadata_xml?: string;
+  sp_entity_id?: string;
+  sp_acs_url?: string;
+  sp_slo_url?: string;
+  email_attribute?: string;
+  name_attribute?: string;
+  allow_idp_initiated?: boolean;
+  sign_authn_requests?: boolean;
+  sp_cert_pem?: string;
+  sp_key_pem_set?: boolean;
+  group_attribute?: string;
+  role_mapping?: string;
+}
+
+export interface AuthSCIMSnapshot {
+  enabled: boolean;
+  collection?: string;
+  tokens_active: number;
+  endpoint_url?: string;
+}
+
+export interface AuthPluginGated {
+  name: string;
+  display_name: string;
+  plugin: string;
+  available_in: string;
+}
+
+/** Masked auth-methods snapshot from /api/_admin/_setup/auth-status. */
+export interface AuthMethodsStatus {
+  configured_at?: string;
+  methods: Record<string, boolean>;
+  oauth: Record<string, AuthOAuthSnapshot>;
+  ldap: AuthLDAPSnapshot;
+  saml: AuthSAMLSnapshot;
+  scim: AuthSCIMSnapshot;
+  plugin_gated: AuthPluginGated[];
+  redirect_base: string;
+}
+
+/** Result of /api/_admin/_setup/auth-save. */
+export interface AuthSaveResult {
+  ok?: boolean;
+  note?: string;
 }

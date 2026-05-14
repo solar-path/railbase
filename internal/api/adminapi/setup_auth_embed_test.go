@@ -2,16 +2,14 @@
 
 package adminapi
 
-// E2E tests for v1.7.47 — covers the auth-methods setup wizard step:
+// E2E tests for the auth-methods Settings screen handlers:
 //
 //   - status defaults (fresh install reports password=true / others=false)
 //   - save persists methods + per-provider OAuth toggles
 //   - save refuses a body that disables EVERY interactive method
 //   - save refuses OAuth-enabled-but-no-client-id (per provider)
 //   - save refuses oidc-enabled-but-no-issuer
-//   - skip stamps auth.setup_skipped_at and forces password=true
-//   - bootstrap-create gate: 412 when neither auth.configured_at nor
-//     auth.setup_skipped_at is set; 200 when one of them IS set
+//   - bootstrap-create no longer gates on auth.* flags (v0.9 IA change)
 //
 // Piggybacks on the shared emEventsPool TestMain pool (see
 // email_events_test.go) so we share embedded-PG state with the other
@@ -340,42 +338,13 @@ func TestSetupAuthEmbed_Save_RefusesOIDCWithoutIssuer(t *testing.T) {
 	}
 }
 
-// TestSetupAuthEmbed_Skip_PersistsFlagAndForcesPassword — POST
-// /_setup/auth-skip stamps setup_skipped_at + reason AND forces
-// password=true so the install isn't bricked.
-func TestSetupAuthEmbed_Skip_PersistsFlagAndForcesPassword(t *testing.T) {
-	d := newSetupAuthDeps(t)
-	clearAuthSettings(t, d)
-	r := chi.NewRouter()
-	d.mountSetupAuth(r)
-
-	body, _ := json.Marshal(setupAuthSkipRequest{
-		Reason: "will configure SSO after first login",
-	})
-	req := httptest.NewRequest(http.MethodPost, "/_setup/auth-skip", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("skip: want 200, got %d body=%s", rec.Code, rec.Body.String())
-	}
-
-	ctx := context.Background()
-	if v, _, _ := d.Settings.GetString(ctx, "auth.setup_skipped_at"); v == "" {
-		t.Errorf("auth.setup_skipped_at: want stamped, got empty")
-	}
-	if v, _, _ := d.Settings.GetString(ctx, "auth.setup_skipped_reason"); v != "will configure SSO after first login" {
-		t.Errorf("auth.setup_skipped_reason: want exact match, got %q", v)
-	}
-	if v, ok, _ := d.Settings.GetBool(ctx, "auth.password.enabled"); !ok || !v {
-		t.Errorf("auth.password.enabled: want true (safe default on skip), got ok=%v val=%v", ok, v)
-	}
-}
-
-// TestBootstrapAuthGate_RefusesWhenNeitherSet — POST /_bootstrap with
-// no auth.configured_at AND no auth.setup_skipped_at returns 412
-// PreconditionFailed. Mailer gate is satisfied separately to ensure
-// the auth gate is what fires.
-func TestBootstrapAuthGate_RefusesWhenNeitherSet(t *testing.T) {
+// TestBootstrap_SucceedsWithoutAuthFlags — v0.9 regression. The auth
+// gate (authGateError) used to return 412 when neither
+// auth.configured_at nor auth.setup_skipped_at was set; bootstrap
+// would refuse. After the v0.9 IA simplification (auth-methods config
+// moved to Settings, wizard reduced to DB + admin), admin creation
+// no longer depends on these flags.
+func TestBootstrap_SucceedsWithoutAuthFlags(t *testing.T) {
 	d := newSetupAuthDeps(t)
 	clearAuthSettings(t, d)
 	clearMailerSettings(t, d) // borrow helper from setup_mailer test file
@@ -384,49 +353,6 @@ func TestBootstrapAuthGate_RefusesWhenNeitherSet(t *testing.T) {
 	d.Admins = admins.NewStore(emEventsPool)
 	d.Sessions = admins.NewSessionStore(emEventsPool, fakeKey())
 
-	// Satisfy mailer gate so auth gate is the one that fires.
-	_ = d.Settings.Set(context.Background(), "mailer.setup_skipped_at", "2026-05-13T10:00:00Z")
-
-	r := chi.NewRouter()
-	r.Get("/_bootstrap", d.bootstrapProbeHandler)
-	r.Post("/_bootstrap", d.bootstrapCreateHandler)
-
-	body, _ := json.Marshal(map[string]string{
-		"email":    "first@example.com",
-		"password": "ValidPass123!",
-	})
-	req := httptest.NewRequest(http.MethodPost, "/_bootstrap", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusPreconditionFailed {
-		t.Fatalf("status: want 412 PreconditionFailed, got %d body=%s",
-			rec.Code, rec.Body.String())
-	}
-	count, _ := d.Admins.Count(context.Background())
-	if count != 0 {
-		t.Errorf("admins count: want 0 (gate fires pre-INSERT), got %d", count)
-	}
-}
-
-// TestBootstrapAuthGate_AcceptsWhenSkipped — auth.setup_skipped_at IS
-// the same green light as auth.configured_at (per the gate
-// implementation). Operator who skipped the auth step can still
-// create the first admin.
-func TestBootstrapAuthGate_AcceptsWhenSkipped(t *testing.T) {
-	d := newSetupAuthDeps(t)
-	clearAuthSettings(t, d)
-	clearMailerSettings(t, d)
-	emEventsPool.Exec(context.Background(), `DELETE FROM _admins`)
-	emEventsPool.Exec(context.Background(), `DELETE FROM _jobs`)
-
-	d.Admins = admins.NewStore(emEventsPool)
-	d.Sessions = admins.NewSessionStore(emEventsPool, fakeKey())
-
-	ctx := context.Background()
-	_ = d.Settings.Set(ctx, "auth.setup_skipped_at", "2026-05-13T10:00:00Z")
-	_ = d.Settings.Set(ctx, "mailer.setup_skipped_at", "2026-05-13T10:00:00Z")
-
 	r := chi.NewRouter()
 	r.Get("/_bootstrap", d.bootstrapProbeHandler)
 	r.Post("/_bootstrap", d.bootstrapCreateHandler)
@@ -440,8 +366,12 @@ func TestBootstrapAuthGate_AcceptsWhenSkipped(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status: want 200 (gate satisfied via skip), got %d body=%s",
+		t.Fatalf("status: want 200 (gate removed in v0.9), got %d body=%s",
 			rec.Code, rec.Body.String())
+	}
+	count, _ := d.Admins.Count(context.Background())
+	if count != 1 {
+		t.Errorf("admins count: want 1 after successful bootstrap, got %d", count)
 	}
 }
 

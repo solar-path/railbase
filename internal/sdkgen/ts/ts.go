@@ -7,13 +7,16 @@
 //   - zod.ts          — runtime validator per collection
 //   - errors.ts       — discriminated union mirroring internal/errors
 //   - auth.ts         — signin/signup/refresh/logout/me wrappers
+//   - stripe.ts       — Stripe billing: config + checkout wrappers
+//   - notifications.ts — in-app notifications: list / read / preferences
+//   - realtime.ts     — typed SSE topic subscriptions
+//   - i18n.ts         — translation bundles + client-side Translator
 //   - collections/<name>.ts — list/get/create/update/delete per coll
 //   - index.ts        — createRailbaseClient({ baseURL, token? })
 //   - _meta.json      — drift detection (schemaHash, generatedAt, version)
 //
 // What's deferred:
 //
-//   - realtime.ts (v1.3 — depends on the broker)
 //   - documents.ts / exports.ts (v1.3 / v1.5)
 //   - oauth2 / webauthn / totp / mfa (v1.1 — depends on full mailer + flows)
 //   - file upload helpers (v1.3 — depends on storage drivers)
@@ -76,6 +79,15 @@ func Generate(specs []builder.CollectionSpec, opts Options) ([]string, error) {
 		{"types.ts", []byte(EmitTypes(sorted))},
 		{"zod.ts", []byte(EmitZod(sorted))},
 		{"auth.ts", []byte(EmitAuth(sorted))},
+		// stripe.ts / notifications.ts / realtime.ts are schema-
+		// independent — their endpoints are fixed, not derived from
+		// CollectionSpec — so the Emit* fns take no specs. Always
+		// emitted; downstream apps that don't use a given capability
+		// simply never touch the matching `rb.*` namespace.
+		{"stripe.ts", []byte(EmitStripe())},
+		{"notifications.ts", []byte(EmitNotifications())},
+		{"realtime.ts", []byte(EmitRealtime())},
+		{"i18n.ts", []byte(EmitI18n())},
 		{"index.ts", []byte(EmitIndex(sorted))},
 	}
 	for _, c := range sorted {

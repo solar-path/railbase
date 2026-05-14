@@ -18,6 +18,7 @@ import (
 	authapi "github.com/railbase/railbase/internal/api/auth"
 	notifapi "github.com/railbase/railbase/internal/api/notifications"
 	scimapi "github.com/railbase/railbase/internal/api/scim"
+	stripeapi "github.com/railbase/railbase/internal/api/stripeapi"
 	"github.com/railbase/railbase/internal/api/uiapi"
 	"github.com/railbase/railbase/internal/api/rest"
 	"github.com/railbase/railbase/internal/audit"
@@ -51,9 +52,11 @@ import (
 	"github.com/railbase/railbase/internal/notifications"
 	"github.com/railbase/railbase/internal/rbac"
 	"github.com/railbase/railbase/internal/realtime"
+	"github.com/railbase/railbase/internal/schema/live"
 	"github.com/railbase/railbase/internal/security"
 	"github.com/railbase/railbase/internal/server"
 	"github.com/railbase/railbase/internal/settings"
+	"github.com/railbase/railbase/internal/stripe"
 	"github.com/railbase/railbase/internal/tenant"
 	"github.com/railbase/railbase/internal/webhooks"
 
@@ -347,6 +350,15 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	if err := runner.Apply(ctx, sys); err != nil {
 		return fmt.Errorf("apply system migrations: %w", err)
+	}
+
+	// Rebuild admin-UI-created collections into the in-memory registry.
+	// Code-defined collections have already self-registered via init();
+	// this layers the runtime ones on top so they survive a restart.
+	if err := live.Hydrate(ctx, p.Pool, func(format string, args ...any) {
+		a.log.Warn(fmt.Sprintf(format, args...))
+	}); err != nil {
+		return fmt.Errorf("hydrate admin collections: %w", err)
 	}
 
 	// Migrations done — declare readiness.
@@ -686,6 +698,15 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	defer webhookCancel()
 
+	// v2 — Stripe billing integration. The Service holds the local
+	// catalog + mirror tables and builds a fresh SDK client from the
+	// `stripe.*` settings keys per call, so credentials edited in the
+	// admin UI take effect without a restart. Wired into the admin
+	// surface here; the public checkout + webhook routes mount in the
+	// /api group below via stripeapi.Mount.
+	stripeService := stripe.NewService(stripe.NewStore(p.Pool), settingsMgr, a.log)
+	adminDeps.Stripe = stripeService
+
 	jobsRunner := jobs.NewRunner(jobsStore, jobsReg, a.log, jobs.RunnerOptions{Workers: 4})
 	// v1.4.1: WithRecover wires periodic stuck-job recovery into the
 	// scheduler tick — workers that crash mid-job leave rows in
@@ -931,11 +952,13 @@ func (a *App) Run(ctx context.Context) error {
 	//  - authmw populates ctx with the resolved Principal
 	//  - authapi.Mount installs /auth-signup/-with-password/-refresh/-logout/me
 	//  - rest.Mount installs the generic CRUD routes
-	// v1.5.5 i18n: ship a catalog that exposes en + ru bundles
-	// embedded in the binary. Operators add their own locales by
-	// dropping `pb_data/i18n/<lang>.json` files; LoadDir merges them
-	// over the embedded defaults (override-by-key).
-	i18nCat := i18n.NewCatalog("en", []i18n.Locale{"en", "ru"})
+	// v1.5.5 i18n: ship a catalog seeded with the "en" default; the
+	// embedded bundles (LoadFS) and any operator-supplied
+	// `pb_data/i18n/<lang>.json` files (LoadDir) announce themselves
+	// as supported via SetBundle, so every loaded locale is negotiable
+	// without a hardcoded list. LoadDir merges over the embedded
+	// defaults (override-by-key).
+	i18nCat := i18n.NewCatalog("en", []i18n.Locale{"en"})
 	if _, err := i18nCat.LoadFS(i18nembed.FS, "."); err != nil {
 		a.log.Warn("i18n: load embedded bundles", "err", err)
 	}
@@ -1203,6 +1226,17 @@ func (a *App) Run(ctx context.Context) error {
 		notifapi.Mount(r, &notifapi.Deps{
 			Store: notifications.NewStore(a.pool.Pool),
 			Log:   a.log,
+		})
+
+		// v2 Stripe: /api/stripe/* — webhook (signature-verified, no
+		// auth), config (publishable key), and the two checkout
+		// endpoints. Mounted inside the auth group so the checkout
+		// handlers see the authenticated Principal; the webhook +
+		// config handlers ignore it. Same stripeService the admin
+		// surface uses.
+		stripeapi.Mount(r, &stripeapi.Deps{
+			Service: stripeService,
+			Log:     a.log,
 		})
 
 		// v1.3.0 realtime: SSE endpoint at /api/realtime. Mounted

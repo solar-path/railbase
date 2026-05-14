@@ -18,6 +18,7 @@ import (
 	"github.com/railbase/railbase/internal/notifications"
 	"github.com/railbase/railbase/internal/realtime"
 	"github.com/railbase/railbase/internal/settings"
+	"github.com/railbase/railbase/internal/stripe"
 	"github.com/railbase/railbase/internal/webhooks"
 )
 
@@ -48,6 +49,10 @@ type Deps struct {
 	// is skipped. Production wires the v1.5.0 store; tests can leave it
 	// nil for handler-shape unit tests that don't need a live store.
 	Webhooks *webhooks.Store
+	// Stripe is optional — when nil, the /api/_admin/stripe surface is
+	// skipped. Production wires the v2 Stripe billing service; tests
+	// constructing a bare Deps leave it nil and mountStripe nil-guards.
+	Stripe *stripe.Service
 	// HooksDir is the on-disk directory containing the JS hook files
 	// loaded by the goja runtime (typically `<DataDir>/pb_hooks`). When
 	// empty, the /api/_admin/hooks/files surface returns 503 for every
@@ -132,20 +137,14 @@ func (d *Deps) Mount(r chi.Router) {
 		// during cold-boot setup is "operator-grade access to the
 		// running process" — same model as the v0.8 bootstrap step.
 		d.mountSetupDB(r)
-		// v1.7.43 — mailer setup wizard step. PUBLIC, mounted next to
-		// the DB setup endpoints because both run pre-admin. The
-		// bootstrap-admin handler (POST /_bootstrap) gates on the
-		// mailer.configured_at OR mailer.setup_skipped_at flags these
-		// endpoints write — admin-create returns 412 if neither is set.
-		d.mountSetupMailer(r)
-		// v1.7.47 — auth-methods setup wizard step. PUBLIC, sits between
-		// DB and Mailer in the wizard UI. Toggles password / magic-link /
-		// OTP / TOTP / WebAuthn + per-provider OAuth (google, github,
-		// apple, generic OIDC). Bootstrap-admin gate accepts either
-		// auth.configured_at OR auth.setup_skipped_at — wizard advance
-		// is non-skippable; explicit Skip stamps the latter w/ password
-		// as the safe-default fallback.
-		d.mountSetupAuth(r)
+		// v0.9 — mailer + auth-methods configuration moved out of the
+		// public pre-admin surface into the authenticated admin group
+		// below (see mountSetupMailer / mountSetupAuth calls inside the
+		// RequireAdmin r.Group). Previously these were PUBLIC so the
+		// first-run wizard could reach them before an admin existed;
+		// the wizard no longer has mailer/auth steps, and leaving the
+		// save endpoints unauthenticated would let anyone rewrite SMTP
+		// credentials / auth providers post-bootstrap.
 
 		r.Post("/auth", d.authHandler)
 		r.Post("/auth-refresh", d.refreshHandler)
@@ -165,9 +164,20 @@ func (d *Deps) Mount(r chi.Router) {
 			r.Use(RequireAdmin)
 			r.Get("/me", d.meHandler)
 			r.Get("/schema", d.schemaHandler)
+			// v0.9 — runtime collection management (create / edit / drop
+			// collections from the admin UI). Nil-guarded on Deps.Pool
+			// inside mountCollections.
+			d.mountCollections(r)
 			r.Get("/settings", d.settingsListHandler)
 			r.Patch("/settings/{key}", d.settingsPatchHandler)
 			r.Delete("/settings/{key}", d.settingsDeleteHandler)
+			// v0.9 — mailer + auth-methods config. Formerly public
+			// /_setup/* wizard steps; now admin-only Settings surfaces
+			// (Settings → Mailer, Settings → Auth methods). The handlers
+			// read/write the same mailer.* / auth.* keys in _settings;
+			// the route prefix is kept as /_setup/* for URL continuity.
+			d.mountSetupMailer(r)
+			d.mountSetupAuth(r)
 			r.Get("/audit", d.auditListHandler)
 			// v1.7.x §3.15 Block A — XLSX export of the audit log,
 			// same filter vocabulary as the list endpoint above.
@@ -230,6 +240,10 @@ func (d *Deps) Mount(r chi.Router) {
 			// v1.7.17 §3.11 — Webhooks admin surface; agent-owned file.
 			// Stub on first commit; agent overwrites with real impl.
 			d.mountWebhooks(r)
+			// v2 — Stripe billing admin surface (config, catalog,
+			// customers, subscriptions, payments, webhook events).
+			// Nil-guarded inside on d.Stripe.
+			d.mountStripe(r)
 			// v1.7.20 §3.14 #123 / §3.11 — Hooks editor admin surface.
 			// Always registered: the handlers return 503 when HooksDir
 			// is empty so the UI can detect "not configured" without a

@@ -13,9 +13,12 @@ client/
     posts.ts                   # typed list/get/create/update/delete/subscribe
     users.ts
     ...
-  realtime.ts                  # typed subscribe with collection/topic constraints
+  realtime.ts                  # typed SSE topic subscriptions (fetch-stream, несёт bearer-токен)
+  notifications.ts             # in-app notifications: list / read / preferences (schema-independent)
+  i18n.ts                      # translation bundles + client-side Translator (schema-independent)
   errors.ts                    # ошибки с discriminated unions
   auth.ts                      # signin/signup/oauth/2fa typed flows
+  stripe.ts                    # Stripe billing: config + checkout (schema-independent)
   documents.ts                 # documents API (если используется)
   exports.ts                   # exports API
   _meta.json                   # schema hash для drift detection

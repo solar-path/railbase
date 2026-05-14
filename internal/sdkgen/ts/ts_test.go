@@ -135,7 +135,11 @@ func TestGenerate_WritesFullTree(t *testing.T) {
 		"collections/posts.ts",
 		"collections/users.ts",
 		"errors.ts",
+		"i18n.ts",
 		"index.ts",
+		"notifications.ts",
+		"realtime.ts",
+		"stripe.ts",
 		"types.ts",
 		"zod.ts",
 	}

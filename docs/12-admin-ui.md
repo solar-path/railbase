@@ -65,7 +65,7 @@ admin/src/lib/ui/
 
 1. **Этот каталог = source of truth.** Admin сам импортит компоненты через `@/lib/ui/<name>.ui`; downstream-приложения копируют те же файлы в свой `src/lib/ui/` через CLI/HTTP.
 2. **Никаких ссылок наружу.** Файлы под `admin/src/{auth,api,fields,layout,screens}/` — admin-app-private, **не уезжают** с kit'ом. Любой компонент, который читает application state, **не принадлежит** kit'у.
-3. **App-specific composites** (типа air-овского `QEditableForm`) живут в `admin/src/screens/` или в `_composites/` под экраном-владельцем, **не в `lib/ui/`**.
+3. **Schema-agnostic composites — можно.** Composite принадлежит kit'у, если он берёт всю domain-логику через render-props/callbacks и ничего не импортит из admin-приложения. Эталон — `QEditableForm.ui.tsx`: kit владеет edit-state machine, layout и save-orchestration, а host передаёт `renderInput`, так что компонент не знает ни про одну схему полей. Composite, которому нужен application state, по-прежнему живёт в `admin/src/screens/`.
 
 ### Раздача downstream-приложениям
 
@@ -247,6 +247,7 @@ const schema = useMemo(() => {
 const dbStepSchema = z.discriminatedUnion("driver", [
   z.object({ driver: z.literal("local_socket"), socket_dir: z.string().min(1), ... }),
   z.object({ driver: z.literal("external_dsn"), external_dsn: z.string().regex(/^postgres/) }),
+  z.object({ driver: z.literal("embedded") }),  // fieldless — zero-config
 ]);
 
 const driver = form.watch("driver");
@@ -255,7 +256,7 @@ const driver = form.watch("driver");
 
 Important: switching driver via radio калит `form.reset({ driver: ..., ...defaults })`, **не** просто `setValue("driver", ...)` — иначе другая ветка union'a не пройдёт валидацию.
 
-> **v1.7.41-followup**: третья ветка union'а — `z.literal("embedded")` — была удалена. Embedded postgres теперь чисто build-time decision (`-tags embed_pg` через `make build-embed`); production-бинарник никогда не предлагает embedded оператору. Wizard видит только две ветки: local socket / external DSN.
+> **embedded driver** (третья ветка union'а — `z.literal("embedded")`, без полей). Wizard **предлагает** её только когда `GET /api/_admin/_setup/detect` вернул `current_mode === "embedded"` — т.е. бинарник собран с `-tags embed_pg` (`make build-embed`) и уже работает на bundled Postgres. Production-бинарники `embed_pg` не несут, поэтому radio там скрыт и эта ветка никогда не выбирается. Выбор embedded — no-op на бэкенде: отсутствие `<DataDir>/.dsn` И ЕСТЬ сигнал «use embedded», `/_setup/save-db` для этого driver'а short-circuit'ит и ничего не пишет. `onSubmit` не probe'ит / не save'ит / не рестартит — просто `onContinue()` на step 2 (embedded PG уже запущен, миграции применены). Для embedded кнопка «Probe connection» скрыта (у driver'а нет DSN), submit подписан «Continue with embedded»; когда detect вернул `current_mode === "embedded"`, wizard выбирает эту ветку по умолчанию.
 
 **4) Cross-field validation** (`bootstrap.tsx` AdminStep)
 
@@ -380,6 +381,51 @@ All pre-v0.9 URLs continue to work via redirects registered in
 | `/system/sessions` | `/data/_sessions` |
 | `/jobs` | `/data/_jobs` |
 
+### ADR (v0.9) — runtime collection management
+
+Pre-v0.9 the admin UI was a strict read-only window onto a schema that
+only ever changed via `railbase migrate` and a code deploy. v0.9 adds a
+**second class of collection** that can be created and edited from the
+UI, without a deploy — closing the biggest gap against PocketBase.
+
+Two collection origins now coexist:
+
+| | Code-defined | Admin-managed (runtime) |
+|---|---|---|
+| Declared in | `schema/*.go` (Go DSL) | Admin UI collection editor |
+| Source of truth | the Go source | row in `_admin_collections` |
+| Persistence | `_schema_snapshots` + migrations | `_admin_collections.spec` (JSONB) |
+| Editable from UI | no (read-only) | yes (create / edit fields / drop) |
+| Drives SDK codegen | yes | no |
+
+Mechanics (backend lives in `internal/schema/live`):
+
+1. **Create** — validate the spec, run `gen.CreateCollectionSQL` DDL,
+   insert the spec into `_admin_collections`, then add it to the live
+   `registry`. DDL + persistence run in one transaction; the registry
+   (in-memory) is mutated only after a clean commit.
+2. **Edit** — diff old vs new spec (`gen.Compute`). Incompatible
+   changes (column type changes, tenant toggle) are **refused**, not
+   force-applied — no silent data loss. Compatible changes emit
+   `ALTER TABLE` DDL.
+3. **Delete** — `DROP TABLE` + remove the `_admin_collections` row +
+   unregister, in one transaction.
+4. **Boot hydration** — after system migrations, `live.Hydrate` rebuilds
+   every `_admin_collections` row into the registry, so runtime
+   collections survive a restart. A name collision with a code-defined
+   collection is logged and skipped (code wins).
+
+Because record CRUD routes are parametric (`/api/collections/{name}/…`)
+and resolve the collection from the registry **per request**, a
+runtime-created collection's record API goes live immediately — no
+route re-mounting.
+
+Guardrails: auth collections and `tenant` toggles are refused (they need
+wiring beyond DDL); `_`-prefixed names stay reserved; only collections
+with an `_admin_collections` row are editable — code-defined ones are
+refused by `live.Update` / `live.Delete`. The admin schema endpoint
+returns an `editable` name list so the UI knows which is which.
+
 ### Visual layout (v0.9+)
 
 ```
@@ -397,13 +443,14 @@ All pre-v0.9 URLs continue to work via redirects registered in
 └──────────────┴────────────────────────────────────────────────┘
 ```
 
-**Tab: Data** (path `/data/*`, `/`, `/schema`)
+**Tab: Data** (path `/data/*`, `/`, `/schema`, `/collections/*`)
 
 ```
 [View schema]
+[+ New collection]   ← /collections/new (runtime collection editor)
 [Search collections… ]
 Collections
-  posts
+  posts            ⋯ ← per-row menu: View records / Edit schema* / Copy name
   users
   …
 ▸ System            ← collapsible (collapsed by default)
@@ -413,6 +460,12 @@ Collections
    _sessions
    _jobs
 ```
+
+\* "Edit schema" appears only for admin-managed collections (those in
+the schema endpoint's `editable` list). Code-defined collections show
+"View schema" instead. `/data` (the tab landing) redirects to the first
+collection, or shows an empty state with a "+ New collection" CTA when
+none exist.
 
 **Tab: Logs** (path `/logs/*`)
 
@@ -508,13 +561,21 @@ Special-mode для каждой auth-коллекции с extra tabs:
 - **Tenant scope** (multi-tenant): switcher для tenant context
 - **Visual graph** of permission inheritance (с organizations plugin)
 
-### 7. Schema viewer (read-only)
+### 7. Schema viewer + collection editor
 
+**Viewer** (`/schema`, read-only):
 - **Visual graph**: collections как nodes, relations как edges (d3-force / ELK layout)
 - **Per-collection** detail: fields с types, indexes, rules, hooks attached, computed fields
 - **Migration history**: list applied migrations с timestamp/hash/applied-by; click → diff view
 - **Drift indicator**: warning banner если Go-DSL hash != applied schema hash; migration generation hint
 - **Export**: `--json` (для LLM) и `--sql` (raw migration)
+
+**Collection editor** (`/collections/new`, `/collections/:name/edit` — `collection_editor.tsx`, v0.9):
+- Create / edit / drop **admin-managed** collections (см. ADR «runtime collection management» выше). Code-defined collections остаются read-only — editor для них показывает объясняющий empty-state.
+- Form: collection name (immutable после создания), `soft_delete` флаг, динамический список полей. Per-field: name + type (практичное подмножество — text / number / bool / date / email / url / select / relation / json / richtext) + `required` / `unique` + type-specific модификаторы (min/max length, min/max + integer-only, select options, related collection).
+- Submit → `POST/PATCH /api/_admin/collections` → backend применяет DDL + persists + мутирует registry в одной транзакции. Несовместимые изменения (смена типа колонки) отклоняются с inline-ошибкой.
+- "Drop collection" в режиме edit — `DELETE /api/_admin/collections/{name}`, `DROP TABLE` + удаление persisted-спеки.
+- Out of scope для editor'а v0.9: auth/tenant коллекции (нужна обвязка сверх DDL — declare в коде), типы file/files/password/multiselect/relations.
 
 ### 8. Hooks editor
 
@@ -801,7 +862,7 @@ Trade-off: берём maintenance на себя, но не платим за fea
 
    **Step 1: Database** (v1.7.39 архитектура + v1.7.41 form-strategy + v1.7.42 safety gate):
    - `GET /api/_admin/_setup/detect` detect'ит локальные PG сокеты (Homebrew `/tmp`, Debian/Ubuntu/Fedora/RHEL `/var/run/postgresql`) + suggested username из `$USER`.
-   - Driver picker: **Local socket** (zero-password peer/trust auth) или **External DSN** (Supabase / Neon / RDS / self-hosted host). Embedded postgres НЕ предлагается — это build-time decision через `-tags embed_pg`.
+   - Driver picker: **Embedded PostgreSQL** (bundled Postgres, уже запущен, zero-config — показывается только на dev-сборках `-tags embed_pg`, когда `detect` вернул `current_mode === "embedded"`; на ней же выбран по умолчанию), **Local socket** (zero-password peer/trust auth) или **External DSN** (Supabase / Neon / RDS / self-hosted host). Production-бинарники embedded не предлагают — `embed_pg` в них не вкомпилен. Выбор embedded минует probe/save/restart и сразу ведёт на step 2.
    - `POST /api/_admin/_setup/probe-db` делает безопасный `SELECT version()` round-trip + читает `pg_tables` для **foreign-DB safety scan**:
      - `is_existing_railbase=true` (нашли `_migrations` marker) → зелёный banner «Existing Railbase instance detected», Save разрешён.
      - `public_table_count>0 && !is_existing_railbase` → **жёлтый banner с чекбоксом**: «This database is not empty. Found N tables in `public` schema, but none is a Railbase marker.» Save заблокирован пока оператор не подтвердит «I understand — install Railbase alongside the existing tables.»
@@ -826,7 +887,7 @@ Tablet (768+): полная функциональность с adapted sidebar.
 
 ## Что admin UI явно НЕ делает (фиксированный scope)
 
-- **Schema editor с миграциями из UI** — конфликт с schema-as-code source-of-truth (read-only viewer; миграции генерятся через `railbase migrate diff`)
+- **Редактирование code-defined коллекций из UI** — конфликт с schema-as-code source-of-truth: коллекции, объявленные в `schema/*.go`, остаются read-only в admin UI, их схема меняется через `railbase migrate diff` + деплой. (v0.9 добавил редактор для **admin-managed** коллекций — отдельного класса, живущего в `_admin_collections`; см. ADR «runtime collection management». Code-defined коллекции им не затрагиваются.)
 - **Bulk-actions across millions rows** — CLI или async export
 - **Custom dashboards / report builder** — Retool/Metabase territory
 - **Visual workflow / BPMN editor** — `railbase-workflow` plugin v2+

@@ -48,6 +48,7 @@ Railbase — backend-runtime, который ставится одной ком�
 - [21 — Outbound webhooks: HMAC-signed dispatch с retry / dead-letter](docs/21-webhooks.md)
 - [22 — i18n full-stack: locale resolution, translatable fields, RTL, pluralization](docs/22-i18n.md)
 - [23 — Testing infrastructure: `railbase test`, fixtures, helpers, mocks](docs/23-testing.md)
+- [25 — Stripe billing: подписки + разовые продажи, каталог в БД, webhook-зеркало](docs/25-stripe.md)
 
 ### Поверхности
 

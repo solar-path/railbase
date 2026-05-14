@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useSignal } from "@preact/signals";
 import { Link } from "wouter-preact";
 import { useQuery } from "@tanstack/react-query";
@@ -6,6 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { signin } from "../auth/context";
 import { isAPIError } from "../api/client";
+import { useT } from "../i18n";
 import { Button } from "@/lib/ui/button.ui";
 import {
   Card,
@@ -48,16 +50,24 @@ import {
 // expects raw events and PasswordInput's signature is more verbose than
 // plain Input.
 
-const loginSchema = z.object({
-  email: z.string().email("Enter a valid email"),
-  password: z.string().min(1, "Password required"),
-});
-
-type LoginValues = z.infer<typeof loginSchema>;
+type LoginValues = { email: string; password: string };
 
 export function LoginScreen() {
+  const { t } = useT();
   const busy = useSignal(false);
   const err = useSignal<string | null>(null);
+
+  // Schema is built with the translator so zod's validation messages
+  // are localised. Captured once at mount — switching language mid-form
+  // (rare on the login screen) keeps the messages from mount time.
+  const loginSchema = useMemo(
+    () =>
+      z.object({
+        email: z.string().email(t("login.emailInvalid")),
+        password: z.string().min(1, t("login.passwordRequired")),
+      }),
+    [t],
+  );
 
   // Probe whether the install has zero admins so the "create one via
   // CLI" hint only shows in that genuinely-empty state (v1.7.46). The
@@ -88,7 +98,7 @@ export function LoginScreen() {
     try {
       await signin(values.email, values.password);
     } catch (e) {
-      err.value = isAPIError(e) ? e.message : "Sign-in failed.";
+      err.value = isAPIError(e) ? e.message : t("login.failed");
     } finally {
       busy.value = false;
     }
@@ -102,8 +112,8 @@ export function LoginScreen() {
     <div class="min-h-screen flex items-center justify-center bg-muted p-6">
       <Card class="w-full max-w-sm">
         <CardHeader class="space-y-1">
-          <CardTitle class="text-xl">Railbase admin</CardTitle>
-          <CardDescription>Sign in to continue.</CardDescription>
+          <CardTitle class="text-xl">{t("login.title")}</CardTitle>
+          <CardDescription>{t("login.subtitle")}</CardDescription>
         </CardHeader>
         <CardContent>
           <Form {...form}>
@@ -113,7 +123,7 @@ export function LoginScreen() {
                 name="email"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Email</FormLabel>
+                    <FormLabel>{t("login.email")}</FormLabel>
                     <FormControl>
                       <Input
                         type="email"
@@ -132,7 +142,7 @@ export function LoginScreen() {
                 name="password"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Password</FormLabel>
+                    <FormLabel>{t("login.password")}</FormLabel>
                     <FormControl>
                       <PasswordInput
                         autoComplete="current-password"
@@ -165,22 +175,20 @@ export function LoginScreen() {
                 disabled={busy.value || form.formState.isSubmitting}
                 class="w-full"
               >
-                {busy.value ? "Signing in…" : "Sign in"}
+                {busy.value ? t("login.submitting") : t("login.submit")}
               </Button>
 
               <p class="text-xs text-muted-foreground text-center">
                 <Link href="/forgot-password" class="underline">
-                  Forgot password?
+                  {t("login.forgotPassword")}
                 </Link>
               </p>
 
               {noAdminsYet ? (
                 <p class="text-xs text-muted-foreground">
-                  No admins yet? Create one with{" "}
-                  <code class="font-mono px-1 py-0.5 bg-muted rounded">
-                    railbase admin create &lt;email&gt;
-                  </code>
-                  {" "}or use the bootstrap wizard.
+                  {t("login.noAdmins", {
+                    cmd: "railbase admin create <email>",
+                  })}
                 </p>
               ) : null}
             </form>

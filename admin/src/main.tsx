@@ -1,6 +1,7 @@
 import { render } from "preact";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./app";
+import { initI18n } from "./i18n";
 import "./styles.css";
 
 // One QueryClient per process. We disable refetchOnWindowFocus
@@ -28,9 +29,15 @@ const queryClient = new QueryClient({
 const root = document.getElementById("root");
 if (!root) throw new Error("admin: missing #root");
 
-render(
-  <QueryClientProvider client={queryClient}>
-    <App />
-  </QueryClientProvider>,
-  root,
-);
+// Resolve the stored / browser-detected locale before the first paint
+// so a non-English admin doesn't see a flash of English chrome. initI18n
+// never rejects (it falls back to English on any failure), so the
+// .finally render always runs.
+void initI18n().finally(() => {
+  render(
+    <QueryClientProvider client={queryClient}>
+      <App />
+    </QueryClientProvider>,
+    root,
+  );
+});

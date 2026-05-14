@@ -26,14 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/lib/ui/select.ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
+import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 
 // Translations editor admin screen (v1.7.20 §3.11). Closes one of the
 // remaining §3.11 admin-UI surfaces — operators can audit per-locale
@@ -497,70 +490,76 @@ function TranslationsTable({
   control: ReturnType<typeof useForm<Record<string, string>>>["control"];
   reference: Record<string, string>;
 }) {
-  if (rows.length === 0) {
-    return (
-      <Card className="p-6 text-sm text-muted-foreground">
-        No translation keys yet. The reference (en) bundle is empty.
-      </Card>
-    );
-  }
+  // QDatatable client mode over the key list. The Translation column has
+  // no `accessor`, so the built-in search box filters by key only — which
+  // is exactly the affordance an operator wants in a long key bundle.
+  // Form state lives in RHF and survives pagination (fields keep their
+  // value when unmounted), so Save still submits every key.
+  const columns = useMemo<ColumnDef<string>[]>(
+    () => [
+      {
+        id: "key",
+        header: "Key",
+        width: "40%",
+        accessor: (k) => k,
+        class: "align-top font-mono text-[12px] text-foreground break-all",
+        cell: (k) => k,
+      },
+      {
+        id: "translation",
+        header: "Translation",
+        class: "align-top",
+        cell: (k) => {
+          const ref = reference[k];
+          return (
+            <FormField
+              control={control}
+              // Translation keys may contain dots ("auth.signin"), which
+              // RHF treats as nested paths. Cast through `as string` per
+              // the kit's dynamic-keys recipe — the schema's flat
+              // z.object() shape matches the flat accessor RHF uses when
+              // the name string is treated as a single literal key.
+              name={k as string}
+              render={({ field }) => {
+                const v = field.value ?? "";
+                const showHint = (v === "" || v === undefined) && ref;
+                return (
+                  <FormItem>
+                    <FormControl>
+                      <Input
+                        type="text"
+                        placeholder={ref ?? ""}
+                        className="h-8 text-sm"
+                        {...field}
+                      />
+                    </FormControl>
+                    {showHint ? (
+                      <div className="mt-1 text-[11px] text-muted-foreground font-mono break-all">
+                        reference: {ref}
+                      </div>
+                    ) : null}
+                    <FormMessage />
+                  </FormItem>
+                );
+              }}
+            />
+          );
+        },
+      },
+    ],
+    [control, reference],
+  );
+
   return (
-    <Card className="overflow-hidden p-0">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-[40%]">Key</TableHead>
-            <TableHead>Translation</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((k) => {
-            const ref = reference[k];
-            return (
-              <TableRow key={k}>
-                <TableCell className="align-top font-mono text-[12px] text-foreground break-all">
-                  {k}
-                </TableCell>
-                <TableCell className="align-top">
-                  <FormField
-                    control={control}
-                    // Translation keys may contain dots ("auth.signin"),
-                    // which RHF treats as nested paths. Cast through
-                    // `as string` per the kit's dynamic-keys recipe — the
-                    // schema's flat z.object() shape matches the flat
-                    // accessor RHF uses when the name string is treated
-                    // as a single literal key.
-                    name={k as string}
-                    render={({ field }) => {
-                      const v = field.value ?? "";
-                      const showHint = (v === "" || v === undefined) && ref;
-                      return (
-                        <FormItem>
-                          <FormControl>
-                            <Input
-                              type="text"
-                              placeholder={ref ?? ""}
-                              className="h-8 text-sm"
-                              {...field}
-                            />
-                          </FormControl>
-                          {showHint ? (
-                            <div className="mt-1 text-[11px] text-muted-foreground font-mono break-all">
-                              reference: {ref}
-                            </div>
-                          ) : null}
-                          <FormMessage />
-                        </FormItem>
-                      );
-                    }}
-                  />
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </Card>
+    <QDatatable
+      columns={columns}
+      data={rows}
+      rowKey={(k) => k}
+      pageSize={50}
+      search
+      searchPlaceholder="Filter keys…"
+      emptyMessage="No translation keys yet. The reference (en) bundle is empty."
+    />
   );
 }
 

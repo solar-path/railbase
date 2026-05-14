@@ -180,13 +180,10 @@ func (d *Deps) MountSetupOnly(r chi.Router) {
 	r.Get("/_bootstrap", setupBootstrapStubHandler)
 	r.Post("/_bootstrap", setupBootstrapRefuseHandler)
 	d.mountSetupDB(r)
-	// v1.7.43 — mailer-setup endpoints are public-by-design (no admin yet).
-	// In setup-mode the Settings manager isn't wired (no DB connection),
-	// so /mailer-save / /mailer-skip nil-guard early; the operator must
-	// finish DB setup first which kicks the process back into normal-boot
-	// where Settings IS wired. /mailer-status still works (returns clean
-	// state), letting the wizard render the form pre-emptively.
-	d.mountSetupMailer(r)
+	// v0.9 — the first-run wizard is DB + admin only. Mailer + auth
+	// configuration moved to the authenticated Settings surface (see
+	// adminapi.go Mount), so they are no longer wired in setup-mode:
+	// the Settings manager isn't available pre-DB anyway.
 }
 
 // setupBootstrapStubHandler returns the admin-SPA-compatible probe

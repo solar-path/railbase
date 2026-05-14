@@ -1,7 +1,5 @@
-import { Fragment, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { adminAPI } from "../api/admin";
 import type { Webhook, Delivery } from "../api/types";
@@ -11,6 +9,18 @@ import { Input } from "@/lib/ui/input.ui";
 import { Textarea } from "@/lib/ui/textarea.ui";
 import { Badge } from "@/lib/ui/badge.ui";
 import { Card, CardContent } from "@/lib/ui/card.ui";
+import { QDatatable, type ColumnDef, type RowAction } from "@/lib/ui/QDatatable.ui";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/lib/ui/drawer.ui";
+import {
+  QEditableForm,
+  type QEditableField,
+} from "@/lib/ui/QEditableForm.ui";
 import {
   Table,
   TableBody,
@@ -19,15 +29,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/lib/ui/table.ui";
-import {
-  Form,
-  FormControl,
-  FormDescription,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/lib/ui/form.ui";
 
 // Create-webhook form schema (kit's <Form> + RHF + zod, mirrors
 // login.tsx). url is validated client-side as http(s):// (the backend
@@ -53,8 +54,6 @@ const createWebhookSchema = z.object({
   description: z.string(),
 });
 
-type CreateWebhookValues = z.infer<typeof createWebhookSchema>;
-
 // Webhooks admin screen (v1.7.17 §3.11). Companion to the
 // `railbase webhooks ...` CLI; backend route family is
 // /api/_admin/webhooks. Display-once contract on the secret: Create
@@ -65,10 +64,55 @@ type CreateWebhookValues = z.infer<typeof createWebhookSchema>;
 // (window.confirm), expand to view recent deliveries. Failed
 // deliveries get a "Replay" button that re-enqueues a fresh attempt.
 
+// Static column set. pause / resume / delete are surfaced via
+// QDatatable's per-row action menu; the row body is click-through to
+// the deliveries drawer.
+const columns: ColumnDef<Webhook>[] = [
+  {
+    id: "name",
+    header: "name",
+    accessor: "name",
+    cell: (w) => <span class="font-medium">{w.name}</span>,
+  },
+  {
+    id: "url",
+    header: "url",
+    accessor: "url",
+    cell: (w) => (
+      <span class="font-mono text-xs text-muted-foreground max-w-xs truncate block">
+        <code class="font-mono">{w.url}</code>
+      </span>
+    ),
+  },
+  {
+    id: "events",
+    header: "events",
+    accessor: (w) => w.events.join(","),
+    cell: (w) => <EventsCell events={w.events} />,
+  },
+  {
+    id: "status",
+    header: "status",
+    accessor: (w) => (w.active ? "active" : "paused"),
+    cell: (w) => <StatusBadge active={w.active} />,
+  },
+  {
+    id: "created",
+    header: "created",
+    accessor: "created_at",
+    cell: (w) => (
+      <span class="font-mono text-xs text-muted-foreground whitespace-nowrap">
+        {w.created_at}
+      </span>
+    ),
+  },
+];
+
 export function WebhooksScreen() {
   const qc = useQueryClient();
 
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Row-click opens the deliveries drawer for the selected webhook.
+  const [drawerFor, setDrawerFor] = useState<Webhook | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createdSecret, setCreatedSecret] = useState<
     { secret: string; record: Webhook } | null
@@ -108,6 +152,35 @@ export function WebhooksScreen() {
 
   const items = q.data?.items ?? [];
 
+  // pause XOR resume depending on the row's active flag; delete is
+  // always available behind a window.confirm.
+  const rowActions = (w: Webhook): RowAction<Webhook>[] => [
+    {
+      label: "pause",
+      hidden: () => !w.active,
+      onSelect: () => pauseM.mutate(w.id),
+    },
+    {
+      label: "resume",
+      hidden: () => w.active,
+      onSelect: () => resumeM.mutate(w.id),
+    },
+    {
+      label: "delete",
+      destructive: true,
+      separatorBefore: true,
+      onSelect: () => {
+        if (
+          window.confirm(
+            `Delete webhook "${w.name}"? Recent delivery history will cascade away too.`,
+          )
+        ) {
+          deleteM.mutate(w.id);
+        }
+      },
+    },
+  ];
+
   return (
     <AdminPage>
       <AdminPage.Header
@@ -131,108 +204,58 @@ export function WebhooksScreen() {
       ) : null}
 
       <AdminPage.Body>
-      {q.isLoading ? (
-        <div className="text-sm text-muted-foreground">Loading…</div>
-      ) : items.length === 0 ? (
+      {!q.isLoading && items.length === 0 ? (
         <EmptyState onCreate={() => setCreateOpen(true)} />
       ) : (
         <Card>
-          <CardContent className="p-0 overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>name</TableHead>
-                  <TableHead>url</TableHead>
-                  <TableHead>events</TableHead>
-                  <TableHead>status</TableHead>
-                  <TableHead>created</TableHead>
-                  <TableHead></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((w) => {
-                  const isOpen = expandedId === w.id;
-                  return (
-                    <Fragment key={w.id}>
-                      <TableRow
-                        onClick={() => setExpandedId(isOpen ? null : w.id)}
-                        className="cursor-pointer"
-                      >
-                        <TableCell className="font-medium">{w.name}</TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground max-w-xs truncate">
-                          <code className="font-mono">{w.url}</code>
-                        </TableCell>
-                        <TableCell>
-                          <EventsCell events={w.events} />
-                        </TableCell>
-                        <TableCell>
-                          <StatusBadge active={w.active} />
-                        </TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
-                          {w.created_at}
-                        </TableCell>
-                        <TableCell className="text-right whitespace-nowrap">
-                          <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                            {w.active ? (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => pauseM.mutate(w.id)}
-                                disabled={pauseM.isPending}
-                                className="border-input bg-muted text-foreground hover:bg-muted/70"
-                              >
-                                pause
-                              </Button>
-                            ) : (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => resumeM.mutate(w.id)}
-                                disabled={resumeM.isPending}
-                                className="border-primary/40 bg-primary/10 text-primary hover:bg-primary/20"
-                              >
-                                resume
-                              </Button>
-                            )}
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              onClick={() => {
-                                if (window.confirm(`Delete webhook "${w.name}"? Recent delivery history will cascade away too.`)) {
-                                  deleteM.mutate(w.id);
-                                }
-                              }}
-                            >
-                              delete
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                      {isOpen ? (
-                        <TableRow>
-                          <TableCell colSpan={6} className="bg-muted">
-                            <DeliveryTimeline webhookID={w.id} />
-                          </TableCell>
-                        </TableRow>
-                      ) : null}
-                    </Fragment>
-                  );
-                })}
-              </TableBody>
-            </Table>
+          <CardContent className="p-3 overflow-x-auto">
+            <QDatatable
+              columns={columns}
+              data={items}
+              loading={q.isLoading}
+              rowKey="id"
+              rowActions={rowActions}
+              onRowClick={(w) => setDrawerFor(w)}
+              emptyMessage="No webhooks."
+            />
           </CardContent>
         </Card>
       )}
       </AdminPage.Body>
 
-      {createOpen ? (
-        <CreateModal
-          pending={createM.isPending}
-          error={createM.error instanceof Error ? createM.error.message : null}
-          onClose={() => setCreateOpen(false)}
-          onSubmit={(input) => createM.mutate(input)}
-        />
-      ) : null}
+      {/* Deliveries drawer — opened by clicking a webhook row. */}
+      <Drawer
+        direction="right"
+        open={drawerFor != null}
+        onOpenChange={(o) => {
+          if (!o) setDrawerFor(null);
+        }}
+      >
+        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-3xl">
+          {drawerFor ? (
+            <>
+              <DrawerHeader>
+                <DrawerTitle className="font-mono">{drawerFor.name}</DrawerTitle>
+                <DrawerDescription>
+                  <code className="font-mono">{drawerFor.url}</code>
+                </DrawerDescription>
+              </DrawerHeader>
+              <div className="flex-1 overflow-y-auto">
+                <DeliveryTimeline webhookID={drawerFor.id} />
+              </div>
+            </>
+          ) : null}
+        </DrawerContent>
+      </Drawer>
+
+      {/* Create drawer — Drawer + QEditableForm, mirrors the
+          Schemas/Collections pattern. */}
+      <WebhookCreateDrawer
+        open={createOpen}
+        pending={createM.isPending}
+        onClose={() => setCreateOpen(false)}
+        onSubmit={(input) => createM.mutateAsync(input)}
+      />
     </AdminPage>
   );
 }
@@ -467,193 +490,168 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
   );
 }
 
-function CreateModal({
+// WebhookCreateDrawer — right-side Drawer hosting QEditableForm in
+// create mode (mirrors the Schemas/Collections pattern). Events are a
+// string[] in form state; the textarea reflects a newline-joined view
+// and re-splits on input. Validation reuses the zod schema — issues map
+// to QEditableForm's per-field error slots.
+function WebhookCreateDrawer({
+  open,
   pending,
-  error,
   onClose,
   onSubmit,
 }: {
+  open: boolean;
   pending: boolean;
-  error: string | null;
   onClose: () => void;
   onSubmit: (input: {
     name: string;
     url: string;
     events: string[];
     description?: string;
-  }) => void;
+  }) => Promise<unknown>;
 }) {
-  // Kit's <Form> + react-hook-form + zod (mirrors login.tsx). Events
-  // are stored as string[] in form state; the textarea reflects a
-  // newline-joined view and re-splits on input. URL validity is
-  // enforced via zod refinement (http/https only) — errors render
-  // automatically through <FormMessage/>.
-  const form = useForm<CreateWebhookValues>({
-    resolver: zodResolver(createWebhookSchema),
-    defaultValues: { name: "", url: "", events: [], description: "" },
-    mode: "onSubmit",
-  });
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [formError, setFormError] = useState<string | null>(null);
 
-  function handleSubmit(values: CreateWebhookValues) {
-    onSubmit({
-      name: values.name.trim(),
-      url: values.url.trim(),
-      events: values.events,
-      description: values.description.trim() || undefined,
-    });
-  }
+  const close = () => {
+    setFieldErrors({});
+    setFormError(null);
+    onClose();
+  };
+
+  const fields: QEditableField[] = [
+    { key: "name", label: "Name", required: true },
+    {
+      key: "url",
+      label: "URL",
+      required: true,
+      helpText: "https:// — the backend re-validates.",
+    },
+    {
+      key: "events",
+      label: "Events",
+      required: true,
+      helpText:
+        "One per line or comma-separated. Dotted patterns; * matches one segment (e.g. record.*.posts).",
+    },
+    { key: "description", label: "Description" },
+  ];
+
+  const renderInput = (
+    f: QEditableField,
+    value: unknown,
+    onChange: (v: unknown) => void,
+  ) => {
+    switch (f.key) {
+      case "name":
+        return (
+          <Input
+            value={(value as string) ?? ""}
+            onInput={(e) => onChange(e.currentTarget.value)}
+            placeholder="slack-on-post-create"
+            autoComplete="off"
+          />
+        );
+      case "url":
+        return (
+          <Input
+            value={(value as string) ?? ""}
+            onInput={(e) => onChange(e.currentTarget.value)}
+            placeholder="https://example.com/hooks/railbase"
+            autoComplete="off"
+            className="font-mono"
+          />
+        );
+      case "events":
+        return (
+          <Textarea
+            rows={3}
+            value={((value as string[]) ?? []).join("\n")}
+            onInput={(e) =>
+              onChange(
+                e.currentTarget.value
+                  .split(/[\n,]/)
+                  .map((s) => s.trim())
+                  .filter((s) => s.length > 0),
+              )
+            }
+            placeholder={"record.created.posts\nrecord.*.tags"}
+            className="font-mono"
+          />
+        );
+      case "description":
+        return (
+          <Textarea
+            rows={2}
+            value={(value as string) ?? ""}
+            onInput={(e) => onChange(e.currentTarget.value)}
+            placeholder="What this webhook does, who owns it…"
+          />
+        );
+      default:
+        return null;
+    }
+  };
+
+  const handleCreate = async (vals: Record<string, unknown>) => {
+    setFieldErrors({});
+    setFormError(null);
+    const parsed = createWebhookSchema.safeParse(vals);
+    if (!parsed.success) {
+      const fe: Record<string, string> = {};
+      for (const issue of parsed.error.issues) {
+        const k = issue.path[0];
+        if (typeof k === "string" && !fe[k]) fe[k] = issue.message;
+      }
+      setFieldErrors(fe);
+      return;
+    }
+    const v = parsed.data;
+    try {
+      await onSubmit({
+        name: v.name.trim(),
+        url: v.url.trim(),
+        events: v.events,
+        description: v.description.trim() || undefined,
+      });
+      // Parent's mutation onSuccess closes the drawer + flips the banner.
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Create failed.");
+    }
+  };
 
   return (
-    <ModalShell onClose={onClose} title="Create webhook">
-      <Form {...form}>
-        <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-3">
-          <FormField
-            control={form.control}
-            name="name"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Name (required)</FormLabel>
-                <FormControl>
-                  <Input
-                    autoFocus
-                    type="text"
-                    placeholder="slack-on-post-create"
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <FormField
-            control={form.control}
-            name="url"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>URL (https://, required)</FormLabel>
-                <FormControl>
-                  <Input
-                    type="text"
-                    placeholder="https://example.com/hooks/railbase"
-                    className="font-mono"
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <FormField
-            control={form.control}
-            name="events"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Events (one per line or comma-separated, required)</FormLabel>
-                <FormControl>
-                  <Textarea
-                    rows={3}
-                    placeholder={"record.created.posts\nrecord.*.tags"}
-                    className="font-mono"
-                    value={field.value.join("\n")}
-                    onInput={(e) => {
-                      const raw = e.currentTarget.value;
-                      const parsed = raw
-                        .split(/[\n,]/)
-                        .map((s) => s.trim())
-                        .filter((s) => s.length > 0);
-                      field.onChange(parsed);
-                    }}
-                    onBlur={field.onBlur}
-                    name={field.name}
-                    ref={field.ref}
-                  />
-                </FormControl>
-                <FormDescription className="text-[11px]">
-                  Dotted patterns; <span className="font-mono">*</span> matches one segment.
-                  See <span className="font-mono">record.*.posts</span> for every verb on a collection.
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <FormField
-            control={form.control}
-            name="description"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Description (optional)</FormLabel>
-                <FormControl>
-                  <Textarea
-                    rows={2}
-                    placeholder="What this webhook does, who owns it…"
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          {error ? (
-            <Card className="border-destructive/30 bg-destructive/10">
-              <CardContent className="p-2 text-xs text-destructive">
-                {error}
-              </CardContent>
-            </Card>
-          ) : null}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              disabled={pending || form.formState.isSubmitting}
-            >
-              {pending ? "Creating…" : "Create"}
-            </Button>
-          </div>
-        </form>
-      </Form>
-    </ModalShell>
-  );
-}
-
-function ModalShell({
-  onClose,
-  title,
-  children,
-}: {
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className="fixed inset-0 z-40 bg-foreground/40 flex items-center justify-center p-4"
-      onClick={onClose}
+    <Drawer
+      direction="right"
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) close();
+      }}
     >
-      <Card
-        className="max-w-md w-full shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <CardContent className="p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">{title}</h2>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onClose}
-              aria-label="Close"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              ×
-            </Button>
-          </div>
-          {children}
-        </CardContent>
-      </Card>
-    </div>
+      <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-lg">
+        <DrawerHeader>
+          <DrawerTitle>Create webhook</DrawerTitle>
+          <DrawerDescription>
+            An outbound subscriber — every matching record event triggers an
+            HMAC-signed HTTP POST.
+          </DrawerDescription>
+        </DrawerHeader>
+        <div className="flex-1 overflow-y-auto px-4 pb-4">
+          <QEditableForm
+            mode="create"
+            fields={fields}
+            values={{ name: "", url: "", events: [], description: "" }}
+            renderInput={renderInput}
+            onCreate={handleCreate}
+            onCancel={close}
+            fieldErrors={fieldErrors}
+            formError={formError}
+            disabled={pending}
+          />
+        </div>
+      </DrawerContent>
+    </Drawer>
   );
 }
 

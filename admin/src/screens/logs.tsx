@@ -1,40 +1,93 @@
-import { Fragment, useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { adminAPI } from "../api/admin";
-import { Pager } from "../layout/pager";
+import type { LogEvent } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
-import { Card, CardContent } from "@/lib/ui/card.ui";
+import { Checkbox } from "@/lib/ui/checkbox.ui";
+import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 import { ScrollText } from "@/lib/ui/icons";
 
 // Logs viewer — paginated, filterable list of structured log events.
 // Backend endpoint: GET /api/_admin/logs (v1.7.6+).
 //
-// Filters update the query key directly; changing any filter resets
-// the page to 1. Search input is debounced (~300ms) so we don't fire
-// a request on every keystroke.
+// Server-paginated via QDatatable's `fetch` mode — the table owns
+// page/pageSize. Bespoke filters flow through `deps`; the search input
+// is debounced (~300ms) so we don't fire a request on every keystroke.
+//
+// Live-tail: Logs is a debug-tool first — the operator expects to SEE
+// new lines flowing. Since QDatatable now owns pagination internally
+// (the screen can't read the current page), live-tail is driven by an
+// explicit `liveTail` toggle instead of the old "auto-refresh only on
+// page 1" rule. While `liveTail` is on, a `tick` counter increments
+// every 10s and rides in `deps`, forcing QDatatable to refetch the
+// current page. The operator pauses the tail (e.g. while browsing
+// history) by unchecking the toggle.
 
 type LevelFilter = "" | "debug" | "info" | "warn" | "error";
 
+const columns: ColumnDef<LogEvent>[] = [
+  {
+    id: "at",
+    header: "at",
+    accessor: "created",
+    cell: (e) => (
+      <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">
+        {e.created}
+      </span>
+    ),
+  },
+  {
+    id: "level",
+    header: "level",
+    accessor: "level",
+    cell: (e) => <Badge variant={levelVariant(e.level)}>{e.level}</Badge>,
+  },
+  {
+    id: "message",
+    header: "message",
+    accessor: "message",
+    cell: (e) => <span className="block max-w-md truncate">{e.message}</span>,
+  },
+  {
+    id: "attrs",
+    header: "attrs",
+    cell: (e) => (
+      <span className="font-mono text-xs text-muted-foreground block max-w-xs truncate">
+        {attrsPreview(e.attrs)}
+      </span>
+    ),
+  },
+  {
+    id: "request",
+    header: "request",
+    accessor: "request_id",
+    cell: (e) => (
+      <span className="font-mono text-xs" title={e.request_id ?? ""}>
+        {e.request_id ? e.request_id.slice(0, 8) + "…" : "—"}
+      </span>
+    ),
+  },
+  {
+    id: "user",
+    header: "user",
+    accessor: "user_id",
+    cell: (e) => (
+      <span className="font-mono text-xs" title={e.user_id ?? ""}>
+        {e.user_id ? e.user_id.slice(0, 8) + "…" : "—"}
+      </span>
+    ),
+  },
+];
+
 export function LogsScreen() {
-  const [page, setPage] = useState(1);
-  const perPage = 50;
+  const [total, setTotal] = useState(0);
 
   const [level, setLevel] = useState<LevelFilter>("");
   const [requestId, setRequestId] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState(""); // debounced
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Debounce the search input. 300ms feels snappy without hammering.
   useEffect(() => {
@@ -44,39 +97,17 @@ export function LogsScreen() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  // Reset to page 1 whenever any filter changes. Keep this in an
-  // effect rather than the setters because the debounced search lives
-  // on its own clock.
+  // Live-tail — a tick counter incremented every 10s while `liveTail`
+  // is on. The tick rides in QDatatable's `deps` so the current page
+  // refetches on each beat. Pulse ring next to the title signals the
+  // tail is alive.
+  const [liveTail, setLiveTail] = useState(true);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    setPage(1);
-  }, [level, search, requestId]);
-
-  // Auto-poll while on page 1 — Logs is debug-tool first; operator
-  // expects to SEE new lines flowing. Pages 2+ stop auto-refresh so a
-  // historical browse isn't yanked from under the operator's cursor.
-  const q = useQuery({
-    queryKey: ["logs", { page, perPage, level, search, request_id: requestId }],
-    queryFn: () =>
-      adminAPI.logs({
-        page,
-        perPage,
-        level: level || undefined,
-        search: search || undefined,
-        request_id: requestId || undefined,
-      }),
-    refetchInterval: page === 1 ? 10_000 : false,
-  });
-  const isLive = page === 1;
-  // Pulse ring next to the title every time a fresh fetch lands while
-  // on page 1 — visual signal that the tail is alive.
-  const [pulseKey, setPulseKey] = useState(0);
-  useEffect(() => {
-    if (!q.dataUpdatedAt) return;
-    setPulseKey((k) => k + 1);
-  }, [q.dataUpdatedAt]);
-
-  const total = q.data?.totalItems ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / perPage));
+    if (!liveTail) return;
+    const id = window.setInterval(() => setTick((t) => t + 1), 10_000);
+    return () => clearInterval(id);
+  }, [liveTail]);
 
   return (
     <AdminPage>
@@ -85,18 +116,18 @@ export function LogsScreen() {
           <span className="inline-flex items-center gap-2">
             <ScrollText className="h-5 w-5 text-muted-foreground" />
             Logs
-            {isLive ? (
+            {liveTail ? (
               <span
-                key={pulseKey}
+                key={tick}
                 className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-primary"
-                title="Live tail — refetches every 10s on page 1"
+                title="Live tail — refetches every 10s"
               >
                 <LivePulseDot />
                 live
               </span>
             ) : (
               <Badge variant="outline" className="font-mono text-[10px] uppercase tracking-wide">
-                paused (page {page})
+                paused
               </Badge>
             )}
           </span>
@@ -110,7 +141,6 @@ export function LogsScreen() {
             <a href="/_/logs/audit" className="underline">Audit log</a>.
           </>
         }
-        actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
       />
 
       <AdminPage.Toolbar>
@@ -148,6 +178,13 @@ export function LogsScreen() {
             className="w-64 h-8 font-mono text-xs"
           />
         </label>
+        <label className="flex items-center gap-1">
+          <Checkbox
+            checked={liveTail}
+            onCheckedChange={(c) => setLiveTail(c === true)}
+          />
+          <span className="text-muted-foreground">live tail</span>
+        </label>
         {(level || search || requestId) ? (
           <Button
             variant="outline"
@@ -165,68 +202,24 @@ export function LogsScreen() {
       </AdminPage.Toolbar>
 
       <AdminPage.Body>
-      <Card>
-        <CardContent className="p-0 overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>at</TableHead>
-                <TableHead>level</TableHead>
-                <TableHead>message</TableHead>
-                <TableHead>attrs</TableHead>
-                <TableHead>request</TableHead>
-                <TableHead>user</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(q.data?.items ?? []).map((e) => {
-                const isOpen = expandedId === e.id;
-                return (
-                  <Fragment key={e.id}>
-                    <TableRow
-                      onClick={() => setExpandedId(isOpen ? null : e.id)}
-                      className="cursor-pointer"
-                    >
-                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
-                        {e.created}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={levelVariant(e.level)}>{e.level}</Badge>
-                      </TableCell>
-                      <TableCell className="max-w-md truncate">{e.message}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground max-w-xs truncate">
-                        {attrsPreview(e.attrs)}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs" title={e.request_id ?? ""}>
-                        {e.request_id ? e.request_id.slice(0, 8) + "…" : "—"}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs" title={e.user_id ?? ""}>
-                        {e.user_id ? e.user_id.slice(0, 8) + "…" : "—"}
-                      </TableCell>
-                    </TableRow>
-                    {isOpen ? (
-                      <TableRow>
-                        <TableCell colSpan={6} className="bg-muted">
-                          <pre className="font-mono text-xs text-foreground whitespace-pre-wrap break-all p-2">
-                            {JSON.stringify(e.attrs ?? {}, null, 2)}
-                          </pre>
-                        </TableCell>
-                      </TableRow>
-                    ) : null}
-                  </Fragment>
-                );
-              })}
-              {q.data?.items.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-muted-foreground text-center py-4">
-                    No log events.
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+        <QDatatable
+          columns={columns}
+          rowKey="id"
+          pageSize={50}
+          emptyMessage="No log events."
+          deps={[level, search, requestId, tick]}
+          fetch={async (params) => {
+            const r = await adminAPI.logs({
+              page: params.page,
+              perPage: params.pageSize,
+              level: level || undefined,
+              search: search || undefined,
+              request_id: requestId || undefined,
+            });
+            setTotal(r.totalItems);
+            return { rows: r.items, total: r.totalItems };
+          }}
+        />
       </AdminPage.Body>
     </AdminPage>
   );
@@ -247,9 +240,9 @@ function levelVariant(l: string): "default" | "secondary" | "destructive" | "out
 }
 
 // LivePulseDot — small green dot with a pulse animation; signals that
-// the Logs screen is in live-tail mode (refetchInterval armed). The
-// animation uses `animate-ping` (provided by tw-animate-css) on an
-// absolutely-positioned outer disc; inner disc is the static fill.
+// the Logs screen is in live-tail mode. The animation uses
+// `animate-ping` (provided by tw-animate-css) on an absolutely-
+// positioned outer disc; inner disc is the static fill.
 function LivePulseDot() {
   return (
     <span className="relative inline-flex h-1.5 w-1.5">
@@ -260,7 +253,6 @@ function LivePulseDot() {
 }
 
 // Compact one-line preview of an attrs object for the table cell.
-// Full JSON is shown in the expanded sub-row.
 function attrsPreview(a: Record<string, unknown> | undefined | null): string {
   if (!a) return "";
   const keys = Object.keys(a);

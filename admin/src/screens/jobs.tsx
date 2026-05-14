@@ -1,20 +1,11 @@
-import { Fragment, useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { adminAPI } from "../api/admin";
-import { Pager } from "../layout/pager";
+import type { JobRecord } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
-import { Card, CardContent } from "@/lib/ui/card.ui";
+import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 
 // Jobs queue browser — paginated, filterable list of `_jobs` rows.
 // Backend endpoint: GET /api/_admin/jobs (v1.7.7+).
@@ -22,17 +13,80 @@ import { Card, CardContent } from "@/lib/ui/card.ui";
 // Read-only: actions like cancel / run-now / reset live in the
 // `railbase jobs` CLI. The admin screen is the operator's "what's
 // happening" pane, not the control surface.
+//
+// Server-paginated via QDatatable's `fetch` mode — the table owns
+// page/pageSize; bespoke status/kind filters flow through `deps`.
 
 type StatusFilter = "" | "pending" | "running" | "completed" | "failed" | "cancelled";
 
+const columns: ColumnDef<JobRecord>[] = [
+  {
+    id: "created",
+    header: "created",
+    accessor: "created_at",
+    cell: (j) => (
+      <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">
+        {j.created_at}
+      </span>
+    ),
+  },
+  {
+    id: "kind",
+    header: "kind",
+    accessor: "kind",
+    cell: (j) => <span className="font-mono">{j.kind}</span>,
+  },
+  {
+    id: "queue",
+    header: "queue",
+    accessor: "queue",
+    cell: (j) => (
+      <span className="font-mono text-xs text-muted-foreground">{j.queue}</span>
+    ),
+  },
+  {
+    id: "status",
+    header: "status",
+    accessor: "status",
+    cell: (j) => <Badge variant={statusVariant(j.status)}>{j.status}</Badge>,
+  },
+  {
+    id: "attempts",
+    header: "attempts",
+    cell: (j) => (
+      <span className="font-mono text-xs whitespace-nowrap">
+        {j.attempts}/{j.max_attempts}
+      </span>
+    ),
+  },
+  {
+    id: "last_error",
+    header: "last error",
+    accessor: "last_error",
+    cell: (j) => (
+      <span className="block max-w-md truncate text-xs text-destructive">
+        {j.last_error ? firstLine(j.last_error) : ""}
+      </span>
+    ),
+  },
+  {
+    id: "id",
+    header: "id",
+    accessor: "id",
+    cell: (j) => (
+      <span className="font-mono text-xs" title={j.id}>
+        {j.id.slice(0, 8)}…
+      </span>
+    ),
+  },
+];
+
 export function JobsScreen() {
-  const [page, setPage] = useState(1);
-  const perPage = 50;
+  const [total, setTotal] = useState(0);
 
   const [status, setStatus] = useState<StatusFilter>("");
   const [kindInput, setKindInput] = useState("");
   const [kind, setKind] = useState(""); // debounced
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Debounce the kind filter input. 300ms matches the logs viewer.
   useEffect(() => {
@@ -41,25 +95,6 @@ export function JobsScreen() {
     }, 300);
     return () => clearTimeout(t);
   }, [kindInput]);
-
-  // Reset to page 1 whenever any filter changes.
-  useEffect(() => {
-    setPage(1);
-  }, [status, kind]);
-
-  const q = useQuery({
-    queryKey: ["jobs", { page, perPage, status, kind }],
-    queryFn: () =>
-      adminAPI.jobs({
-        page,
-        perPage,
-        status: status || undefined,
-        kind: kind || undefined,
-      }),
-  });
-
-  const total = q.data?.totalItems ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / perPage));
 
   return (
     <AdminPage>
@@ -72,7 +107,6 @@ export function JobsScreen() {
             run-now / reset / recover.
           </>
         }
-        actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
       />
 
       <AdminPage.Toolbar>
@@ -117,95 +151,23 @@ export function JobsScreen() {
       </AdminPage.Toolbar>
 
       <AdminPage.Body>
-      <Card>
-        <CardContent className="p-0 overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>created</TableHead>
-                <TableHead>kind</TableHead>
-                <TableHead>queue</TableHead>
-                <TableHead>status</TableHead>
-                <TableHead>attempts</TableHead>
-                <TableHead>last error</TableHead>
-                <TableHead>id</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(q.data?.items ?? []).map((j) => {
-                const isOpen = expandedId === j.id;
-                return (
-                  <Fragment key={j.id}>
-                    <TableRow
-                      onClick={() => setExpandedId(isOpen ? null : j.id)}
-                      className="cursor-pointer"
-                    >
-                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
-                        {j.created_at}
-                      </TableCell>
-                      <TableCell className="font-mono">{j.kind}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">{j.queue}</TableCell>
-                      <TableCell>
-                        <Badge variant={statusVariant(j.status)}>{j.status}</Badge>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs whitespace-nowrap">
-                        {j.attempts}/{j.max_attempts}
-                      </TableCell>
-                      <TableCell className="max-w-md truncate text-xs text-destructive">
-                        {j.last_error ? firstLine(j.last_error) : ""}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs" title={j.id}>
-                        {j.id.slice(0, 8)}…
-                      </TableCell>
-                    </TableRow>
-                    {isOpen ? (
-                      <TableRow>
-                        <TableCell colSpan={7} className="bg-muted">
-                          <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 p-3 text-xs">
-                            <dt className="text-muted-foreground">id</dt>
-                            <dd className="font-mono">{j.id}</dd>
-                            <dt className="text-muted-foreground">queue</dt>
-                            <dd className="font-mono">{j.queue}</dd>
-                            <dt className="text-muted-foreground">run_after</dt>
-                            <dd className="font-mono">{j.run_after}</dd>
-                            <dt className="text-muted-foreground">started_at</dt>
-                            <dd className="font-mono">{j.started_at ?? "—"}</dd>
-                            <dt className="text-muted-foreground">completed_at</dt>
-                            <dd className="font-mono">{j.completed_at ?? "—"}</dd>
-                            <dt className="text-muted-foreground">locked_by</dt>
-                            <dd className="font-mono">{j.locked_by ?? "—"}</dd>
-                            <dt className="text-muted-foreground">locked_until</dt>
-                            <dd className="font-mono">{j.locked_until ?? "—"}</dd>
-                            <dt className="text-muted-foreground">cron_id</dt>
-                            <dd className="font-mono">{j.cron_id ?? "—"}</dd>
-                            {j.last_error ? (
-                              <>
-                                <dt className="text-muted-foreground self-start">last_error</dt>
-                                <dd>
-                                  <pre className="font-mono text-xs text-destructive whitespace-pre-wrap break-all m-0">
-                                    {j.last_error}
-                                  </pre>
-                                </dd>
-                              </>
-                            ) : null}
-                          </dl>
-                        </TableCell>
-                      </TableRow>
-                    ) : null}
-                  </Fragment>
-                );
-              })}
-              {q.data?.items.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-muted-foreground text-center py-4">
-                    No jobs.
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+        <QDatatable
+          columns={columns}
+          rowKey="id"
+          pageSize={50}
+          emptyMessage="No jobs."
+          deps={[status, kind]}
+          fetch={async (params) => {
+            const r = await adminAPI.jobs({
+              page: params.page,
+              perPage: params.pageSize,
+              status: status || undefined,
+              kind: kind || undefined,
+            });
+            setTotal(r.totalItems);
+            return { rows: r.items, total: r.totalItems };
+          }}
+        />
       </AdminPage.Body>
     </AdminPage>
   );
@@ -227,7 +189,7 @@ function statusVariant(s: string): "default" | "secondary" | "destructive" | "ou
 }
 
 // Truncate a multi-line error to the first non-empty line for the
-// table cell. Full text shows in the expanded sub-row.
+// table cell.
 function firstLine(s: string): string {
   for (const line of s.split("\n")) {
     const t = line.trim();

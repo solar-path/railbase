@@ -27,14 +27,11 @@ import {
   FormLabel,
   FormMessage,
 } from "@/lib/ui/form.ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
+import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
+
+// One row of the per-kind preferences grid: a kind plus its per-channel
+// pref records, keyed by channel name.
+type KindRow = { kind: string; byChannel: Map<string, NotificationPrefRow> };
 
 // Admin notification preferences editor (v1.7.35 §3.9.1). Closes the
 // v1.5.3 "admin-side preferences editor deferred" note. Backend
@@ -423,6 +420,35 @@ function UserPrefsEditor({ userID }: { userID: string }) {
     setPrefs((current) => current.filter((p) => p.kind !== kind));
   };
 
+  // Prefs grid columns: a `kind` label plus one centred Switch column
+  // per channel. The `remove` affordance moves into QDatatable's row-
+  // action menu. Rebuilt each render — cheap (≤4 columns) and the cell
+  // closures need the current `togglePref`.
+  const gridColumns: ColumnDef<KindRow>[] = [
+    {
+      id: "kind",
+      header: "kind",
+      accessor: (r) => r.kind,
+      cell: (r) => <span className="font-mono text-sm">{r.kind}</span>,
+    },
+    ...CHANNELS.map(
+      (c): ColumnDef<KindRow> => ({
+        id: c,
+        header: c,
+        align: "center",
+        cell: (r) => (
+          <div className="inline-flex">
+            <Switch
+              checked={r.byChannel.get(c)?.enabled ?? false}
+              onCheckedChange={() => togglePref(r.kind, c)}
+              aria-label={`${r.kind} on ${c}`}
+            />
+          </div>
+        ),
+      }),
+    ),
+  ];
+
   // The header Save button submits the settings form, which runs
   // zod validation first and only then PUTs the combined envelope
   // (prefs grid + validated settings). Field-level errors stay on the
@@ -519,58 +545,21 @@ function UserPrefsEditor({ userID }: { userID: string }) {
           </div>
         </header>
 
-        {prefsByKind.length === 0 ? (
-          <div className="px-4 py-6 text-sm text-muted-foreground text-center">
-            No per-kind preferences yet. Add a kind above to override
-            channel defaults.
-          </div>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>kind</TableHead>
-                {CHANNELS.map((c) => (
-                  <TableHead key={c} className="text-center">
-                    {c}
-                  </TableHead>
-                ))}
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {prefsByKind.map(({ kind, byChannel }) => (
-                <TableRow key={kind}>
-                  <TableCell className="font-mono text-sm">{kind}</TableCell>
-                  {CHANNELS.map((c) => {
-                    const row = byChannel.get(c);
-                    return (
-                      <TableCell key={c} className="text-center">
-                        <div className="inline-flex">
-                          <Switch
-                            checked={row?.enabled ?? false}
-                            onCheckedChange={() => togglePref(kind, c)}
-                            aria-label={`${kind} on ${c}`}
-                          />
-                        </div>
-                      </TableCell>
-                    );
-                  })}
-                  <TableCell className="text-right">
-                    <Button
-                      type="button"
-                      variant="link"
-                      size="sm"
-                      onClick={() => removeKindRow(kind)}
-                      className="h-auto px-0 text-xs text-destructive"
-                    >
-                      remove
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
+        <div className="p-3">
+          <QDatatable
+            columns={gridColumns}
+            data={prefsByKind}
+            rowKey={(r) => r.kind}
+            rowActions={[
+              {
+                label: "remove",
+                destructive: true,
+                onSelect: (r) => removeKindRow(r.kind),
+              },
+            ]}
+            emptyMessage="No per-kind preferences yet. Add a kind above to override channel defaults."
+          />
+        </div>
       </Card>
 
       {/* Card 2: settings form (RHF + zod) */}

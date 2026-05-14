@@ -9,16 +9,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/lib/ui/card.ui";
-import { Button } from "@/lib/ui/button.ui";
 import { Alert, AlertDescription } from "@/lib/ui/alert.ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
+import { QDatatable, type ColumnDef, type RowAction } from "@/lib/ui/QDatatable.ui";
 
 // Cache inspector admin screen — read-only listing of registered
 // cache.Cache instances + a manual Clear action per row. Backend:
@@ -36,6 +28,78 @@ import {
 // concern; the inspector is observability + the one nuclear button
 // (Clear). Surgical knobs (drop one key, change capacity) are a
 // future slice if metrics show real demand.
+
+// Column set for the cache instance table. All read-only formatting;
+// the per-row Clear action is wired in the component via rowActions.
+const columns: ColumnDef<CacheInstance>[] = [
+  {
+    id: "name",
+    header: "Name",
+    accessor: "name",
+    headClass: "uppercase tracking-wide text-xs",
+    cell: (c) => <span class="font-mono text-xs">{c.name}</span>,
+  },
+  {
+    id: "size",
+    header: "Size",
+    accessor: (c) => c.stats.size,
+    align: "right",
+    headClass: "uppercase tracking-wide text-xs",
+    class: "tabular-nums",
+    cell: (c) => c.stats.size.toLocaleString(),
+  },
+  {
+    id: "hits",
+    header: "Hits",
+    accessor: (c) => c.stats.hits,
+    align: "right",
+    headClass: "uppercase tracking-wide text-xs",
+    class: "tabular-nums",
+    cell: (c) => c.stats.hits.toLocaleString(),
+  },
+  {
+    id: "misses",
+    header: "Misses",
+    accessor: (c) => c.stats.misses,
+    align: "right",
+    headClass: "uppercase tracking-wide text-xs",
+    class: "tabular-nums",
+    cell: (c) => c.stats.misses.toLocaleString(),
+  },
+  {
+    id: "hit_rate",
+    header: "Hit rate",
+    accessor: (c) => c.stats.hit_rate_pct,
+    align: "right",
+    headClass: "uppercase tracking-wide text-xs",
+    class: "tabular-nums",
+    cell: (c) => {
+      const reqs = c.stats.hits + c.stats.misses;
+      return reqs > 0 ? (
+        `${c.stats.hit_rate_pct}%`
+      ) : (
+        <span class="text-muted-foreground">—</span>
+      );
+    },
+  },
+  {
+    id: "evictions",
+    header: "Evictions",
+    accessor: (c) => c.stats.evictions,
+    align: "right",
+    headClass: "uppercase tracking-wide text-xs",
+    class: "tabular-nums",
+    cell: (c) => (
+      <span
+        class={
+          c.stats.evictions > 0 ? "text-foreground" : "text-muted-foreground"
+        }
+      >
+        {c.stats.evictions.toLocaleString()}
+      </span>
+    ),
+  },
+];
 
 export function CacheScreen() {
   const qc = useQueryClient();
@@ -74,6 +138,27 @@ export function CacheScreen() {
       ? Math.round((totals.hits / totalRequests) * 1000) / 10
       : 0;
 
+  // Per-row Clear — same window.confirm guard as before. The
+  // disabled state localises to the in-flight instance.
+  const rowActions = (c: CacheInstance): RowAction<CacheInstance>[] => [
+    {
+      label:
+        clearM.isPending && clearM.variables === c.name
+          ? "Clearing…"
+          : "Clear",
+      disabled: () => clearM.isPending && clearM.variables === c.name,
+      onSelect: () => {
+        if (
+          window.confirm(
+            `Clear cache "${c.name}"?\n\nThis drops every entry AND resets the hit/miss counters. Active loads in flight will complete; subsequent reads will miss and reload.`,
+          )
+        ) {
+          clearM.mutate(c.name);
+        }
+      },
+    },
+  ];
+
   return (
     <AdminPage>
       <AdminPage.Header
@@ -105,98 +190,34 @@ export function CacheScreen() {
         />
       </div>
 
-      {/* Table / empty / error / loading */}
-      {q.isLoading ? (
-        <div class="text-sm text-muted-foreground">Loading…</div>
-      ) : q.isError ? (
+      {/* Table / error — empty state handled by QDatatable's emptyMessage. */}
+      {q.isError ? (
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load cache instances: {String(q.error)}
           </AlertDescription>
         </Alert>
-      ) : instances.length === 0 ? (
-        <Card class="border-dashed bg-muted">
-          <CardContent class="p-6 text-center text-sm text-muted-foreground">
-            No caches registered.
-            <div class="mt-2 max-w-xl mx-auto text-xs">
-              The cache primitive ships with v1.5.1 but per-subsystem wiring is
-              gradual — instances will appear here as they&apos;re registered in{" "}
-              <code class="font-mono rounded bg-card px-1">app.go</code>.
-            </div>
-          </CardContent>
-        </Card>
       ) : (
         <Card>
-          <CardContent class="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead class="uppercase tracking-wide text-xs">Name</TableHead>
-                  <TableHead class="text-right uppercase tracking-wide text-xs">Size</TableHead>
-                  <TableHead class="text-right uppercase tracking-wide text-xs">Hits</TableHead>
-                  <TableHead class="text-right uppercase tracking-wide text-xs">Misses</TableHead>
-                  <TableHead class="text-right uppercase tracking-wide text-xs">Hit rate</TableHead>
-                  <TableHead class="text-right uppercase tracking-wide text-xs">Evictions</TableHead>
-                  <TableHead class="text-right uppercase tracking-wide text-xs">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {instances.map((c) => {
-                  const reqs = c.stats.hits + c.stats.misses;
-                  const isClearing =
-                    clearM.isPending && clearM.variables === c.name;
-                  return (
-                    <TableRow key={c.name}>
-                      <TableCell class="align-top">
-                        <span class="font-mono text-xs">{c.name}</span>
-                      </TableCell>
-                      <TableCell class="text-right align-top tabular-nums">
-                        {c.stats.size.toLocaleString()}
-                      </TableCell>
-                      <TableCell class="text-right align-top tabular-nums">
-                        {c.stats.hits.toLocaleString()}
-                      </TableCell>
-                      <TableCell class="text-right align-top tabular-nums">
-                        {c.stats.misses.toLocaleString()}
-                      </TableCell>
-                      <TableCell class="text-right align-top tabular-nums">
-                        {reqs > 0 ? `${c.stats.hit_rate_pct}%` : (
-                          <span class="text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell
-                        class={
-                          "text-right align-top tabular-nums " +
-                          (c.stats.evictions > 0
-                            ? "text-foreground"
-                            : "text-muted-foreground")
-                        }
-                      >
-                        {c.stats.evictions.toLocaleString()}
-                      </TableCell>
-                      <TableCell class="text-right align-top">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={isClearing}
-                          onClick={() => {
-                            if (
-                              window.confirm(
-                                `Clear cache "${c.name}"?\n\nThis drops every entry AND resets the hit/miss counters. Active loads in flight will complete; subsequent reads will miss and reload.`,
-                              )
-                            ) {
-                              clearM.mutate(c.name);
-                            }
-                          }}
-                        >
-                          {isClearing ? "Clearing…" : "Clear"}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+          <CardContent class="p-3">
+            <QDatatable
+              columns={columns}
+              data={instances}
+              loading={q.isLoading}
+              rowKey="name"
+              rowActions={rowActions}
+              emptyMessage={
+                <span>
+                  No caches registered.
+                  <span class="mt-2 block max-w-xl mx-auto text-xs">
+                    The cache primitive ships with v1.5.1 but per-subsystem
+                    wiring is gradual — instances will appear here as
+                    they&apos;re registered in{" "}
+                    <code class="font-mono rounded bg-card px-1">app.go</code>.
+                  </span>
+                </span>
+              }
+            />
           </CardContent>
         </Card>
       )}

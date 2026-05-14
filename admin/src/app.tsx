@@ -16,15 +16,20 @@ import { NotificationsPrefsScreen } from "./screens/notifications-prefs";
 import { TrashScreen } from "./screens/trash";
 import { MailerTemplatesScreen } from "./screens/mailer_templates";
 import { EmailEventsScreen } from "./screens/email-events";
-import { MailerScreen } from "./screens/mailer";
+import { MailerConfigScreen } from "./screens/mailer_config";
+import { AuthMethodsScreen } from "./screens/auth_methods";
 import { RealtimeScreen } from "./screens/realtime";
 import { WebhooksScreen } from "./screens/webhooks";
 import { HooksScreen } from "./screens/hooks";
 import { I18nScreen } from "./screens/i18n";
 import { HealthScreen } from "./screens/health";
 import { CacheScreen } from "./screens/cache";
-import { RecordsScreen } from "./screens/records";
+import { StripeScreen } from "./screens/stripe";
+import { RecordsScreen, DataHomeScreen } from "./screens/records";
 import { RecordEditorScreen } from "./screens/record_editor";
+// Collection create/edit is no longer its own screen — it's a Drawer
+// hosted by SchemaScreen. The /collections/* routes below render
+// SchemaScreen, which opens the drawer from the matched route.
 // System tables (api_tokens / admins / admin_sessions / sessions /
 // jobs) are now reached via /data/_xxx URLs and dispatched from
 // records.tsx — no direct routes in this file.
@@ -117,10 +122,21 @@ function Routes() {
         <Route path="/" component={DashboardScreen} />
         <Route path="/schema" component={SchemaScreen} />
 
-        {/* Data: /data/:name handles both user collections and the
-            system tables (records.tsx dispatches on the _ prefix). */}
+        {/* Runtime collection management. The create/edit UI is a Drawer
+            on the Schemas page — these routes render SchemaScreen, which
+            reads the matched route and opens the drawer accordingly.
+            Distinct prefix from /data/* so it doesn't collide with the
+            parametric record routes; activeTopTab treats /collections as
+            the Data tab. */}
+        <Route path="/collections/new" component={SchemaScreen} />
+        <Route path="/collections/:name/edit" component={SchemaScreen} />
+
+        {/* Data: /data is the tab landing (redirects to the first
+            collection); /data/:name handles both user collections and
+            the system tables (records.tsx dispatches on the _ prefix). */}
         <Route path="/data/:name/:id" component={RecordEditorScreen} />
         <Route path="/data/:name" component={RecordsScreen} />
+        <Route path="/data" component={DataHomeScreen} />
 
         {/* Logs */}
         <Route path="/logs/audit" component={AuditScreen} />
@@ -133,10 +149,12 @@ function Routes() {
 
         {/* Settings */}
         <Route path="/settings" component={SettingsScreen} />
-        <Route path="/settings/mailer" component={MailerScreen} />
+        <Route path="/settings/mailer" component={MailerConfigScreen} />
         <Route path="/settings/mailer/templates" component={MailerTemplatesScreen} />
+        <Route path="/settings/auth" component={AuthMethodsScreen} />
         <Route path="/settings/notifications" component={NotificationsPrefsScreen} />
         <Route path="/settings/webhooks" component={WebhooksScreen} />
+        <Route path="/settings/stripe" component={StripeScreen} />
         <Route path="/settings/backups" component={BackupsScreen} />
         <Route path="/settings/hooks" component={HooksScreen} />
         <Route path="/settings/i18n" component={I18nScreen} />

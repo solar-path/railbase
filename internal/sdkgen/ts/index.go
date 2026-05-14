@@ -31,6 +31,10 @@ func EmitIndex(specs []builder.CollectionSpec) string {
 
 import { RailbaseAPIError } from "./errors.js";
 import type { RailbaseError } from "./errors.js";
+import { stripeClient } from "./stripe.js";
+import { notificationsClient } from "./notifications.js";
+import { realtimeClient } from "./realtime.js";
+import { i18nClient } from "./i18n.js";
 `)
 
 	// Imports: one per collection wrapper + types.
@@ -67,6 +71,10 @@ export interface ClientOptions {
 /** Subset of the request surface every wrapper needs. */
 export interface HTTPClient {
   request<T>(method: string, path: string, opts?: { body?: unknown }): Promise<T>;
+  /** Authenticated raw fetch — escape hatch for streaming endpoints
+   *  (SSE). Returns the raw Response so the caller can read res.body;
+   *  realtime.ts uses this since EventSource can't carry a bearer token. */
+  stream(path: string, init?: RequestInit): Promise<Response>;
   setToken(token: string | null): void;
   setTenant(tenant: string | null): void;
 }
@@ -87,6 +95,16 @@ class FetchHTTPClient implements HTTPClient {
 
   setToken(token: string | null) { this.token = token; }
   setTenant(tenant: string | null) { this.tenant = tenant; }
+
+  /** Authenticated raw fetch. Stamps the same Authorization / X-Tenant
+   *  headers as request(), but returns the Response untouched so a
+   *  caller can stream res.body (used by realtime.ts for SSE). */
+  async stream(path: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    if (this.token) headers.set("Authorization", "Bearer " + this.token);
+    if (this.tenant) headers.set("X-Tenant", this.tenant);
+    return this.fetchImpl(this.baseURL + path, { ...init, headers });
+  }
 
   async request<T>(method: string, path: string, opts: { body?: unknown } = {}): Promise<T> {
     const headers: Record<string, string> = { "Accept": "application/json" };
@@ -126,6 +144,14 @@ export function createRailbaseClient(opts: ClientOptions) {
     setTenant: (t: string | null) => http.setTenant(t),
     /** GET /api/auth/me — collection-agnostic. */
     me: () => getMe(http),
+    /** Stripe billing — config + checkout wrappers. Schema-independent. */
+    stripe: stripeClient(http),
+    /** In-app notifications — list / read / preferences. Schema-independent. */
+    notifications: notificationsClient(http),
+    /** Realtime — typed SSE topic subscriptions. Schema-independent. */
+    realtime: realtimeClient(http),
+    /** i18n — translation bundles + client-side Translator. Schema-independent. */
+    i18n: i18nClient(http),
 
 `)
 

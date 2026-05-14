@@ -6,6 +6,7 @@ import type {
   AuthResponse,
   AdminRecord,
   BatchResponse,
+  CollectionSpec,
   SchemaResponse,
   SettingsListResponse,
   AuditListResponse,
@@ -20,6 +21,11 @@ import type {
   EmailEventsListResponse,
   MailerTemplatesListResponse,
   MailerTemplateView,
+  MailerConfigStatus,
+  MailerProbeResult,
+  MailerSaveResult,
+  AuthMethodsStatus,
+  AuthSaveResult,
   NotificationsListResponse,
   NotificationsStatsResponse,
   NotificationPrefsUsersResponse,
@@ -81,6 +87,22 @@ export const adminAPI = {
   // ---- schema ----
   schema(): Promise<SchemaResponse> {
     return api.request("GET", "/schema");
+  },
+
+  // ---- runtime collection management (v0.9) ----
+  // Create / edit / drop collections without a code deploy. The server
+  // runs the DDL, persists the spec, and updates the live registry so
+  // the new collection's /api/collections/{name}/records routes work
+  // immediately. Only collections listed in SchemaResponse.editable
+  // may be updated or deleted — code-defined ones are source-owned.
+  createCollection(spec: CollectionSpec): Promise<CollectionSpec> {
+    return api.request("POST", "/collections", { body: spec });
+  },
+  updateCollection(name: string, spec: CollectionSpec): Promise<CollectionSpec> {
+    return api.request("PATCH", `/collections/${encodeURIComponent(name)}`, { body: spec });
+  },
+  deleteCollection(name: string): Promise<void> {
+    return api.request("DELETE", `/collections/${encodeURIComponent(name)}`);
   },
 
   // ---- settings ----
@@ -252,6 +274,28 @@ export const adminAPI = {
   },
   mailerTemplateView(kind: string): Promise<MailerTemplateView> {
     return api.request("GET", `/mailer-templates/${encodeURIComponent(kind)}`);
+  },
+
+  // ---- mailer config (Settings → Mailer) ----
+  // The masked status snapshot + the probe / save endpoints behind
+  // RequireAdmin. Going through the client (not raw fetch) so the
+  // bearer token rides along.
+  mailerStatus(): Promise<MailerConfigStatus> {
+    return api.request("GET", "/_setup/mailer-status");
+  },
+  mailerProbe(body: Record<string, unknown>): Promise<MailerProbeResult> {
+    return api.request("POST", "/_setup/mailer-probe", { body });
+  },
+  mailerSave(body: Record<string, unknown>): Promise<MailerSaveResult> {
+    return api.request("POST", "/_setup/mailer-save", { body });
+  },
+
+  // ---- auth methods config (Settings → Auth methods) ----
+  authStatus(): Promise<AuthMethodsStatus> {
+    return api.request("GET", "/_setup/auth-status");
+  },
+  authSave(body: Record<string, unknown>): Promise<AuthSaveResult> {
+    return api.request("POST", "/_setup/auth-save", { body });
   },
 
   // ---- notifications (v1.7.10 §3.11 / docs/17 #132-133) ----

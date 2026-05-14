@@ -56,6 +56,45 @@ func Register(c *builder.CollectionBuilder) {
 	bySource[name] = c
 }
 
+// Add registers c at runtime — the admin-UI counterpart of Register.
+// Unlike Register it returns an error instead of panicking: a bad
+// request must not take down the process. Validation runs here, the
+// same as Register.
+//
+// Replace=false: a name already in the registry is an error (the
+// caller wanted a fresh create). Replace=true: an existing entry is
+// overwritten in place — used by the runtime "edit collection" path
+// after the DDL has been applied.
+func Add(c *builder.CollectionBuilder, replace bool) error {
+	if c == nil {
+		return fmt.Errorf("registry: nil collection")
+	}
+	if err := c.Validate(); err != nil {
+		return fmt.Errorf("registry: %w", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	name := c.Spec().Name
+	if _, dup := bySource[name]; dup && !replace {
+		return fmt.Errorf("registry: collection %q already registered", name)
+	}
+	bySource[name] = c
+	return nil
+}
+
+// Remove drops a collection from the registry. Returns true if the
+// name was present. Runtime-only — the compile-time registry is never
+// shrunk.
+func Remove(name string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	_, ok := bySource[name]
+	delete(bySource, name)
+	return ok
+}
+
 // All returns the registered collections in deterministic order
 // (alphabetical by name). Returned slice is a snapshot — caller
 // can sort/filter/iterate freely.

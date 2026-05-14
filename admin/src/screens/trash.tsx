@@ -1,17 +1,10 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { adminAPI, recordsAPI } from "../api/admin";
-import { Pager } from "../layout/pager";
+import type { TrashRecord } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
+import { QDatatable, type ColumnDef, type RowAction } from "@/lib/ui/QDatatable.ui";
 import { Card, CardContent } from "@/lib/ui/card.ui";
 
 // Trash admin screen — cross-collection listing of soft-deleted
@@ -30,16 +23,17 @@ import { Card, CardContent } from "@/lib/ui/card.ui";
 
 export function TrashScreen() {
   const qc = useQueryClient();
-  const [page, setPage] = useState(1);
-  const perPage = 50;
 
   const [collection, setCollection] = useState<string>(""); // "" = all
   const [flash, setFlash] = useState<string | null>(null);
-
-  // Reset to page 1 whenever the collection filter changes.
-  useEffect(() => {
-    setPage(1);
-  }, [collection]);
+  const [total, setTotal] = useState(0);
+  // `collections` is the .SoftDelete() registry list — it rides along
+  // in the same /trash response, so the fetch closure stashes it here
+  // for the filter dropdown rather than spending a second round-trip.
+  // `loaded` gates the "no soft-delete" empty state so it doesn't
+  // flash before the first fetch resolves.
+  const [collections, setCollections] = useState<string[]>([]);
+  const [loaded, setLoaded] = useState(false);
 
   // Auto-fade the flash banner. 5 s matches the backups screen.
   useEffect(() => {
@@ -48,19 +42,7 @@ export function TrashScreen() {
     return () => clearTimeout(t);
   }, [flash]);
 
-  const q = useQuery({
-    queryKey: ["trash", { page, perPage, collection }],
-    queryFn: () =>
-      adminAPI.trashList({
-        page,
-        perPage,
-        collection: collection || undefined,
-      }),
-  });
-
-  // Single restore mutation keyed off (collection, id). We expose
-  // the in-flight target via the variables so the row spinner can
-  // localise to that one button rather than the whole table.
+  // Single restore mutation keyed off (collection, id).
   const restoreM = useMutation({
     mutationFn: (args: { collection: string; id: string }) =>
       recordsAPI.restoreRecord(args.collection, args.id),
@@ -70,12 +52,89 @@ export function TrashScreen() {
     },
   });
 
-  const items = q.data?.items ?? [];
-  const collections = q.data?.collections ?? [];
-  const total = q.data?.totalItems ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / perPage));
-
   const hasSoftDelete = collections.length > 0;
+
+  const columns: ColumnDef<TrashRecord>[] = [
+    {
+      id: "deleted",
+      header: "deleted",
+      accessor: "deleted",
+      cell: (it) => (
+        <span
+          className="font-mono text-xs text-muted-foreground whitespace-nowrap"
+          title={it.deleted}
+        >
+          {relativeTime(it.deleted)}
+        </span>
+      ),
+    },
+    {
+      id: "collection",
+      header: "collection",
+      accessor: "collection",
+      cell: (it) => (
+        <span className="inline-block bg-muted rounded px-1.5 py-0.5 text-xs font-mono">
+          {it.collection}
+        </span>
+      ),
+    },
+    {
+      id: "id",
+      header: "id",
+      accessor: "id",
+      cell: (it) => (
+        <span className="font-mono text-xs" title={it.id}>
+          {it.id.slice(0, 8)}…
+        </span>
+      ),
+    },
+    {
+      id: "created",
+      header: "created",
+      accessor: "created",
+      cell: (it) => (
+        <span
+          className="font-mono text-xs text-muted-foreground whitespace-nowrap"
+          title={it.created}
+        >
+          {relativeTime(it.created)}
+        </span>
+      ),
+    },
+    {
+      id: "updated",
+      header: "updated",
+      accessor: "updated",
+      cell: (it) => (
+        <span
+          className="font-mono text-xs text-muted-foreground whitespace-nowrap"
+          title={it.updated}
+        >
+          {relativeTime(it.updated)}
+        </span>
+      ),
+    },
+  ];
+
+  const rowActions = (it: TrashRecord): RowAction<TrashRecord>[] => {
+    const idShort = it.id.slice(0, 8);
+    const pending =
+      restoreM.isPending &&
+      restoreM.variables?.collection === it.collection &&
+      restoreM.variables?.id === it.id;
+    return [
+      {
+        label: pending ? "Restoring…" : "Restore",
+        disabled: () => pending,
+        onSelect: () => {
+          if (!window.confirm(`Restore ${it.collection}/${idShort}…?`)) {
+            return;
+          }
+          restoreM.mutate({ collection: it.collection, id: it.id });
+        },
+      },
+    ];
+  };
 
   return (
     <AdminPage>
@@ -88,7 +147,6 @@ export function TrashScreen() {
             restored or stay until your retention policy permanently purges them.
           </>
         }
-        actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
       />
 
       {flash ? (
@@ -148,9 +206,7 @@ export function TrashScreen() {
       ) : null}
 
       <AdminPage.Body>
-      {q.isLoading ? (
-        <div className="text-sm text-muted-foreground">Loading…</div>
-      ) : !hasSoftDelete ? (
+      {loaded && !hasSoftDelete ? (
         // No collection declares .SoftDelete() — distinct from "empty
         // trash". This guides the dev to the schema builder rather
         // than implying the trash is just empty.
@@ -159,90 +215,39 @@ export function TrashScreen() {
           Add the flag to a collection in your schema to start collecting
           tombstones here.
         </div>
-      ) : items.length === 0 ? (
-        <div className="rounded border border-dashed border-input bg-muted px-4 py-8 text-center text-sm text-muted-foreground space-y-1">
-          <div>(No soft-deleted records — nothing to restore.)</div>
-          <div className="text-xs text-muted-foreground">
-            Soft-deleted records linger here instead of being physically removed,
-            so an accidental delete is one click away from being undone.
-          </div>
-        </div>
       ) : (
         <Card>
-          <CardContent className="p-0 overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>deleted</TableHead>
-                  <TableHead>collection</TableHead>
-                  <TableHead>id</TableHead>
-                  <TableHead>created</TableHead>
-                  <TableHead>updated</TableHead>
-                  <TableHead className="text-right">actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((it) => {
-                  const idShort = it.id.slice(0, 8);
-                  const pending =
-                    restoreM.isPending &&
-                    restoreM.variables?.collection === it.collection &&
-                    restoreM.variables?.id === it.id;
-                  return (
-                    <TableRow key={`${it.collection}/${it.id}`}>
-                      <TableCell
-                        className="font-mono text-xs text-muted-foreground whitespace-nowrap"
-                        title={it.deleted}
-                      >
-                        {relativeTime(it.deleted)}
-                      </TableCell>
-                      <TableCell>
-                        <span className="inline-block bg-muted rounded px-1.5 py-0.5 text-xs font-mono">
-                          {it.collection}
-                        </span>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs" title={it.id}>
-                        {idShort}…
-                      </TableCell>
-                      <TableCell
-                        className="font-mono text-xs text-muted-foreground whitespace-nowrap"
-                        title={it.created}
-                      >
-                        {relativeTime(it.created)}
-                      </TableCell>
-                      <TableCell
-                        className="font-mono text-xs text-muted-foreground whitespace-nowrap"
-                        title={it.updated}
-                      >
-                        {relativeTime(it.updated)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="link"
-                          size="sm"
-                          disabled={pending}
-                          onClick={() => {
-                            if (
-                              !window.confirm(
-                                `Restore ${it.collection}/${idShort}…?`,
-                              )
-                            ) {
-                              return;
-                            }
-                            restoreM.mutate({
-                              collection: it.collection,
-                              id: it.id,
-                            });
-                          }}
-                        >
-                          {pending ? "Restoring…" : "Restore"}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+          <CardContent className="p-3 overflow-x-auto">
+            <QDatatable
+              columns={columns}
+              rowKey={(it) => `${it.collection}/${it.id}`}
+              pageSize={50}
+              rowActions={rowActions}
+              deps={[collection]}
+              emptyMessage={
+                <span className="space-y-1">
+                  <span className="block">
+                    (No soft-deleted records — nothing to restore.)
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    Soft-deleted records linger here instead of being physically
+                    removed, so an accidental delete is one click away from being
+                    undone.
+                  </span>
+                </span>
+              }
+              fetch={async (params) => {
+                const r = await adminAPI.trashList({
+                  page: params.page,
+                  perPage: params.pageSize,
+                  collection: collection || undefined,
+                });
+                setTotal(r.totalItems);
+                setCollections(r.collections);
+                setLoaded(true);
+                return { rows: r.items, total: r.totalItems };
+              }}
+            />
           </CardContent>
         </Card>
       )}

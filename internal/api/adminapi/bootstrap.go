@@ -40,17 +40,16 @@ func (d *Deps) bootstrapProbeHandler(w http.ResponseWriter, r *http.Request) {
 // bootstrapped, further admins must be created via authenticated
 // CLI or admin API endpoints (the latter not in v0.8 scope).
 //
-// v1.7.43 gate: refuses to run unless either
-//   - mailer.configured_at IS SET (mailer successfully configured), OR
-//   - mailer.setup_skipped_at IS SET (operator explicitly skipped)
+// v0.9 — auth-methods and mailer configuration moved out of the
+// first-run wizard into Settings. The two server-side preconditions
+// that previously enforced "wizard step touched" (mailerGateError +
+// authGateError) were removed: admin creation now depends only on the
+// admin count being zero. Mailer / auth surfaces are still managed via
+// `_settings` keys (read/written through the authenticated KV
+// endpoint), but they are no longer admission gates for bootstrap.
 //
-// Without either, 412 Precondition Failed with a clear "Configure
-// mailer first" message. The wizard front-end blocks the Admin step
-// when mailer-status reports neither flag, so a well-behaved client
-// never hits this branch — but the server-side check is the
-// authoritative guard (defends against direct-API misuse).
-//
-// On success enqueues TWO email jobs (provided mailer NOT skipped):
+// On success enqueues TWO email jobs (provided mailer NOT skipped via
+// `mailer.setup_skipped_at`):
 //   - admin_welcome to the new admin (login URL + onboarding)
 //   - admin_created_notice broadcast to every EXISTING admin (compromise
 //     detection). On bootstrap (first admin) the broadcast set is empty
@@ -70,25 +69,6 @@ func (d *Deps) bootstrapCreateHandler(w http.ResponseWriter, r *http.Request) {
 	if count > 0 {
 		rerr.WriteJSON(w, rerr.New(rerr.CodeForbidden,
 			"bootstrap refused: %d admin(s) already exist; use `railbase admin create` instead", count))
-		return
-	}
-
-	// v1.7.43 mailer-gate: BEFORE any work, check that the operator
-	// either configured the mailer OR explicitly skipped it. Returning
-	// 412 here lets the wizard front-end re-route the operator back
-	// to the Mailer step without re-rendering the form.
-	if blocker := mailerGateError(r.Context(), d); blocker != nil {
-		rerr.WriteJSON(w, blocker)
-		return
-	}
-	// v1.7.47 auth-gate: same shape as the mailer-gate above. The Auth
-	// Methods step sits between Database and Mailer in the wizard, and
-	// the front-end's "Create admin" submit must NOT reach the DB
-	// without the operator either having configured methods OR
-	// explicitly skipped them (in which case password-only is the
-	// recorded safe default).
-	if blocker := authGateError(r.Context(), d); blocker != nil {
-		rerr.WriteJSON(w, blocker)
 		return
 	}
 
@@ -138,60 +118,6 @@ func (d *Deps) bootstrapCreateHandler(w http.ResponseWriter, r *http.Request) {
 	enqueueAdminEmails(r.Context(), d, admin, "wizard (POST /_bootstrap)", "bootstrap-self")
 
 	d.writeAdminAuth(w, tok, admin)
-}
-
-// mailerGateError returns a typed 412 error when neither
-// mailer.configured_at nor mailer.setup_skipped_at is set in settings.
-// nil → operator has either configured OR skipped, admin-create allowed.
-//
-// Why 412 (not 400 or 403): 412 Precondition Failed is the standard
-// semantic for "your request is well-formed but a server-side state
-// invariant isn't met". The wizard front-end maps this to "go back
-// to the Mailer step".
-func mailerGateError(ctx context.Context, d *Deps) *rerr.Error {
-	if d.Settings == nil {
-		// Settings manager missing — likely setup-mode boot path. We
-		// can't enforce the gate; bypass it but log a warning so the
-		// operator notices the unusual state.
-		if d.Log != nil {
-			d.Log.Warn("bootstrap mailer-gate: Settings manager nil, bypassing check")
-		}
-		return nil
-	}
-	configured, _, _ := d.Settings.GetString(ctx, settingsKeyConfiguredAt)
-	skipped, _, _ := d.Settings.GetString(ctx, settingsKeySkippedAt)
-	if configured != "" || skipped != "" {
-		return nil
-	}
-	return rerr.New(rerr.CodePreconditionFailed,
-		"mailer is not configured yet. Complete the mailer step of the setup wizard, or explicitly skip it. Admin creation requires either a working mailer OR a recorded skip-decision so welcome notifications and compromise-detection broadcasts can fire.")
-}
-
-// authGateError mirrors mailerGateError for the v1.7.47 auth-methods
-// step. The wizard front-end maps this 412 to "go back to the Auth
-// Methods step". Two flags accept the request:
-//
-//   - auth.configured_at  — operator went through the step + saved
-//   - auth.setup_skipped_at — operator explicitly skipped (password
-//     remains on as the safe default; see setup_auth.go skip handler)
-//
-// nil → either flag set, admin-create proceeds.
-func authGateError(ctx context.Context, d *Deps) *rerr.Error {
-	if d.Settings == nil {
-		// Same setup-mode bypass logic as mailerGateError. Without a
-		// Settings manager we can't enforce; let it through but log.
-		if d.Log != nil {
-			d.Log.Warn("bootstrap auth-gate: Settings manager nil, bypassing check")
-		}
-		return nil
-	}
-	configured, _, _ := d.Settings.GetString(ctx, settingsKeyAuthConfiguredAt)
-	skipped, _, _ := d.Settings.GetString(ctx, settingsKeyAuthSkippedAt)
-	if configured != "" || skipped != "" {
-		return nil
-	}
-	return rerr.New(rerr.CodePreconditionFailed,
-		"authentication methods are not configured yet. Complete the auth-methods step of the setup wizard, or explicitly skip it. Admin creation requires either a configured method set OR a recorded skip-decision so the install isn't created with zero sign-in paths.")
 }
 
 // adminCreationViaCLI is the audit/payload "via" tag for CLI-side

@@ -10,14 +10,7 @@ import {
   CardTitle,
 } from "@/lib/ui/card.ui";
 import { Alert, AlertDescription } from "@/lib/ui/alert.ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
+import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 
 // Realtime monitor admin screen — read-only snapshot of active SSE
 // subscriptions on the broker. Backend: GET /api/_admin/realtime
@@ -28,6 +21,74 @@ import {
 // surgically kicking subs is rarely the right tool (fix the slow
 // client, not the symptom). Per-row drop count surfaces in red when
 // non-zero so operators notice backpressure events.
+
+// Read-only column set for the active-subscription table.
+const columns: ColumnDef<RealtimeSubscription>[] = [
+  {
+    id: "user",
+    header: "User",
+    accessor: "user_id",
+    headClass: "uppercase tracking-wide text-xs",
+    cell: (s) => <span class="font-mono text-xs">{shortenID(s.user_id)}</span>,
+  },
+  {
+    id: "tenant",
+    header: "Tenant",
+    accessor: "tenant_id",
+    headClass: "uppercase tracking-wide text-xs",
+    cell: (s) =>
+      s.tenant_id ? (
+        <span class="font-mono text-xs">{shortenID(s.tenant_id)}</span>
+      ) : (
+        <span class="text-xs text-muted-foreground">site</span>
+      ),
+  },
+  {
+    id: "topics",
+    header: "Topics",
+    accessor: (s) => s.topics.join(","),
+    headClass: "uppercase tracking-wide text-xs",
+    cell: (s) => (
+      <>
+        {s.topics.map((t, i) => (
+          <code
+            key={`${s.id}-t-${i}`}
+            class="font-mono mr-1 inline-block rounded bg-muted px-1.5 py-0.5 text-xs"
+          >
+            {t}
+          </code>
+        ))}
+      </>
+    ),
+  },
+  {
+    id: "created",
+    header: "Created",
+    accessor: "created_at",
+    headClass: "uppercase tracking-wide text-xs",
+    class: "text-xs text-muted-foreground",
+    cell: (s) => relativeTime(s.created_at),
+  },
+  {
+    id: "dropped",
+    header: "Dropped",
+    accessor: "dropped",
+    align: "right",
+    headClass: "uppercase tracking-wide text-xs",
+    cell: (s) => (
+      <span
+        class={
+          "tabular-nums " +
+          (s.dropped > 0
+            ? "font-semibold text-destructive"
+            : "text-muted-foreground")
+        }
+      >
+        {s.dropped}
+      </span>
+    ),
+  },
+];
 
 export function RealtimeScreen() {
   const q = useQuery({
@@ -63,81 +124,34 @@ export function RealtimeScreen() {
         />
       </div>
 
-      {/* Table */}
-      {q.isLoading ? (
-        <div class="text-sm text-muted-foreground">Loading…</div>
-      ) : q.isError ? (
+      {/* Table — error rendered above; empty + loading handled inline by QDatatable. */}
+      {q.isError ? (
         <Alert variant="destructive">
           <AlertDescription>
             Failed to load realtime stats. Is the realtime broker wired? ({String(q.error)})
           </AlertDescription>
         </Alert>
-      ) : subs.length === 0 ? (
-        <Card class="border-dashed bg-muted">
-          <CardContent class="p-6 text-center text-sm text-muted-foreground">
-            No active subscriptions.
-            <div class="mt-1 text-xs">
-              Connect with{" "}
-              <code class="font-mono rounded bg-card px-1">
-                curl -N {`<host>`}/api/realtime?topics=posts/*
-              </code>{" "}
-              to see one appear here.
-            </div>
-          </CardContent>
-        </Card>
       ) : (
         <Card>
-          <CardContent class="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead class="uppercase tracking-wide text-xs">User</TableHead>
-                  <TableHead class="uppercase tracking-wide text-xs">Tenant</TableHead>
-                  <TableHead class="uppercase tracking-wide text-xs">Topics</TableHead>
-                  <TableHead class="uppercase tracking-wide text-xs">Created</TableHead>
-                  <TableHead class="text-right uppercase tracking-wide text-xs">Dropped</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {subs.map((s) => (
-                  <TableRow key={s.id}>
-                    <TableCell class="align-top">
-                      <span class="font-mono text-xs">{shortenID(s.user_id)}</span>
-                    </TableCell>
-                    <TableCell class="align-top">
-                      {s.tenant_id ? (
-                        <span class="font-mono text-xs">{shortenID(s.tenant_id)}</span>
-                      ) : (
-                        <span class="text-xs text-muted-foreground">site</span>
-                      )}
-                    </TableCell>
-                    <TableCell class="align-top">
-                      {s.topics.map((t, i) => (
-                        <code
-                          key={`${s.id}-t-${i}`}
-                          class="font-mono mr-1 inline-block rounded bg-muted px-1.5 py-0.5 text-xs"
-                        >
-                          {t}
-                        </code>
-                      ))}
-                    </TableCell>
-                    <TableCell class="align-top text-xs text-muted-foreground">
-                      {relativeTime(s.created_at)}
-                    </TableCell>
-                    <TableCell
-                      class={
-                        "text-right align-top tabular-nums " +
-                        (s.dropped > 0
-                          ? "font-semibold text-destructive"
-                          : "text-muted-foreground")
-                      }
-                    >
-                      {s.dropped}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+          <CardContent class="p-3">
+            <QDatatable
+              columns={columns}
+              data={subs}
+              loading={q.isLoading}
+              rowKey="id"
+              emptyMessage={
+                <span>
+                  No active subscriptions.
+                  <span class="mt-1 block text-xs">
+                    Connect with{" "}
+                    <code class="font-mono rounded bg-card px-1">
+                      curl -N {`<host>`}/api/realtime?topics=posts/*
+                    </code>{" "}
+                    to see one appear here.
+                  </span>
+                </span>
+              }
+            />
           </CardContent>
         </Card>
       )}

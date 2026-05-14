@@ -1,4 +1,4 @@
-.PHONY: help build build-embed test test-race vet lint run-dev run-embed clean docker compose-up compose-down smoke cross-compile check-size release-snapshot verify-release
+.PHONY: help build build-embed test test-race vet lint run-dev run-embed clean docker compose-up compose-down smoke cross-compile check-size release-snapshot verify-release reset
 
 GOFLAGS ?=
 COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
@@ -11,6 +11,15 @@ LDFLAGS := -s -w \
 	-X github.com/railbase/railbase/internal/buildinfo.Date=$(DATE)
 
 DEV_DSN ?= postgres://$(shell whoami)@/railbase?host=/tmp&sslmode=disable
+
+# Dev-DB connection params used by `make reset` to DROP/CREATE the
+# database. Defaults match DEV_DSN's local-socket setup; override on the
+# command line for non-default Postgres deployments, e.g.
+#   make reset DEV_DB_NAME=otherdb DEV_DB_USER=postgres DEV_DB_HOST=localhost
+DEV_DB_NAME ?= railbase
+DEV_DB_USER ?= $(shell whoami)
+DEV_DB_HOST ?= /tmp
+DATA_DIR    ?= pb_data
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -132,6 +141,16 @@ docker: ## Build production docker image
 		--build-arg TAG=$(TAG) \
 		--build-arg DATE=$(DATE) \
 		-t railbase:$(TAG) -t railbase:latest .
+
+reset: ## Wipe install state — kill running binary, drop $(DATA_DIR), drop+recreate $(DEV_DB_NAME). Next start enters the bootstrap wizard from scratch.
+	@echo "→ stopping any running railbase…"
+	-@pkill -f 'bin/railbase' 2>/dev/null; true
+	@echo "→ removing $(DATA_DIR)/ (DSN, secret, audit seal key, hooks, storage, logs)…"
+	rm -rf $(DATA_DIR)
+	@echo "→ dropping + recreating database $(DEV_DB_NAME) as $(DEV_DB_USER) via $(DEV_DB_HOST)…"
+	psql -h $(DEV_DB_HOST) -U $(DEV_DB_USER) -d postgres -c "DROP DATABASE IF EXISTS $(DEV_DB_NAME);"
+	psql -h $(DEV_DB_HOST) -U $(DEV_DB_USER) -d postgres -c "CREATE DATABASE $(DEV_DB_NAME);"
+	@echo "✓ reset complete — next 'make dev' / 'make run-dev' starts in setup mode; open http://localhost:8095/_/bootstrap (or http://localhost:5173/_/bootstrap under 'make dev')."
 
 clean:
 	rm -rf bin/

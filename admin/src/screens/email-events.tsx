@@ -1,21 +1,11 @@
-import { Fragment, useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { adminAPI } from "../api/admin";
 import type { EmailEvent } from "../api/types";
-import { Pager } from "../layout/pager";
 import { AdminPage } from "../layout/admin_page";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/lib/ui/table.ui";
-import { Card, CardContent } from "@/lib/ui/card.ui";
+import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 
 // Email events browser — paginated, filterable list of `_email_events`
 // rows (one row per recipient per send, populated by every
@@ -23,17 +13,81 @@ import { Card, CardContent } from "@/lib/ui/card.ui";
 //
 // Backend endpoint: GET /api/_admin/email-events (v1.7.35e+).
 //
-// Filter bar shape mirrors logs.tsx: every input updates the query key
-// directly; changing any filter resets the page to 1. Recipient is
+// Server-paginated via QDatatable's `fetch` mode — the table owns
+// page/pageSize. Bespoke filters flow through `deps`; recipient is
 // debounced ~300ms because every keystroke would otherwise fire a
 // network round-trip on substring search.
 
 type EventFilter = "" | "sent" | "failed" | "bounced" | "opened" | "clicked" | "complained";
 type BounceTypeFilter = "" | "hard" | "soft" | "transient";
 
+const columns: ColumnDef<EmailEvent>[] = [
+  {
+    id: "time",
+    header: "time",
+    accessor: "occurred_at",
+    cell: (e) => (
+      <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">
+        {e.occurred_at}
+      </span>
+    ),
+  },
+  {
+    id: "event",
+    header: "event",
+    accessor: "event",
+    cell: (e) => <Badge variant={eventVariant(e.event)}>{e.event}</Badge>,
+  },
+  {
+    id: "recipient",
+    header: "recipient",
+    accessor: "recipient",
+    cell: (e) => (
+      <span className="font-mono text-xs block max-w-xs truncate" title={e.recipient}>
+        {e.recipient}
+      </span>
+    ),
+  },
+  {
+    id: "subject",
+    header: "subject",
+    accessor: "subject",
+    cell: (e) => (
+      <span className="block max-w-md truncate" title={e.subject ?? ""}>
+        {e.subject || <span className="text-muted-foreground">—</span>}
+      </span>
+    ),
+  },
+  {
+    id: "template",
+    header: "template",
+    accessor: "template",
+    cell: (e) => (
+      <span className="font-mono text-xs" title={e.template ?? ""}>
+        {e.template || <span className="text-muted-foreground">—</span>}
+      </span>
+    ),
+  },
+  {
+    id: "driver",
+    header: "driver",
+    accessor: "driver",
+    cell: (e) => <span className="font-mono text-xs">{e.driver}</span>,
+  },
+  {
+    id: "code",
+    header: "code",
+    accessor: "error_code",
+    cell: (e) => (
+      <span className="font-mono text-xs" title={e.error_code ?? ""}>
+        {e.error_code || <span className="text-muted-foreground">—</span>}
+      </span>
+    ),
+  },
+];
+
 export function EmailEventsScreen() {
-  const [page, setPage] = useState(1);
-  const perPage = 50;
+  const [total, setTotal] = useState(0);
 
   const [recipientInput, setRecipientInput] = useState("");
   const [recipient, setRecipient] = useState(""); // debounced
@@ -42,7 +96,6 @@ export function EmailEventsScreen() {
   const [bounceType, setBounceType] = useState<BounceTypeFilter>("");
   const [since, setSince] = useState("");
   const [until, setUntil] = useState("");
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Debounce the recipient input. 300ms feels snappy without hammering.
   useEffect(() => {
@@ -52,33 +105,6 @@ export function EmailEventsScreen() {
     return () => clearTimeout(t);
   }, [recipientInput]);
 
-  // Reset to page 1 whenever any filter changes. The debounced
-  // `recipient` lives on its own clock — track that one too so the
-  // first character of a substring search snaps back to page 1.
-  useEffect(() => {
-    setPage(1);
-  }, [recipient, event, template, bounceType, since, until]);
-
-  const q = useQuery({
-    queryKey: [
-      "email-events",
-      { page, perPage, recipient, event, template, bounce_type: bounceType, since, until },
-    ],
-    queryFn: () =>
-      adminAPI.listEmailEvents({
-        page,
-        perPage,
-        recipient: recipient || undefined,
-        event: event || undefined,
-        template: template || undefined,
-        bounce_type: bounceType || undefined,
-        since: since ? localToRFC3339(since) : undefined,
-        until: until ? localToRFC3339(until) : undefined,
-      }),
-  });
-
-  const total = q.data?.totalItems ?? 0;
-  const totalPages = Math.max(1, q.data?.totalPages ?? Math.ceil(total / perPage));
   const hasFilter = !!(recipient || event || template || bounceType || since || until);
 
   return (
@@ -91,7 +117,6 @@ export function EmailEventsScreen() {
             One row per recipient per <code className="font-mono">mailer.Send</code> call.
           </>
         }
-        actions={<Pager page={page} totalPages={totalPages} onChange={setPage} />}
       />
 
       <AdminPage.Toolbar>
@@ -182,70 +207,27 @@ export function EmailEventsScreen() {
       </AdminPage.Toolbar>
 
       <AdminPage.Body>
-      <Card>
-        <CardContent className="p-0 overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>time</TableHead>
-                <TableHead>event</TableHead>
-                <TableHead>recipient</TableHead>
-                <TableHead>subject</TableHead>
-                <TableHead>template</TableHead>
-                <TableHead>driver</TableHead>
-                <TableHead>code</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(q.data?.items ?? []).map((e) => {
-                const isOpen = expandedId === e.id;
-                return (
-                  <Fragment key={e.id}>
-                    <TableRow
-                      onClick={() => setExpandedId(isOpen ? null : e.id)}
-                      className="cursor-pointer"
-                    >
-                      <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
-                        {e.occurred_at}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={eventVariant(e.event)}>{e.event}</Badge>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs max-w-xs truncate" title={e.recipient}>
-                        {e.recipient}
-                      </TableCell>
-                      <TableCell className="max-w-md truncate" title={e.subject ?? ""}>
-                        {e.subject || <span className="text-muted-foreground">—</span>}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs" title={e.template ?? ""}>
-                        {e.template || <span className="text-muted-foreground">—</span>}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">{e.driver}</TableCell>
-                      <TableCell className="font-mono text-xs" title={e.error_code ?? ""}>
-                        {e.error_code || <span className="text-muted-foreground">—</span>}
-                      </TableCell>
-                    </TableRow>
-                    {isOpen ? (
-                      <TableRow>
-                        <TableCell colSpan={7} className="bg-muted">
-                          <ExpandedRow event={e} />
-                        </TableCell>
-                      </TableRow>
-                    ) : null}
-                  </Fragment>
-                );
-              })}
-              {q.data?.items.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-muted-foreground text-center py-4">
-                    No email events.
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+        <QDatatable
+          columns={columns}
+          rowKey="id"
+          pageSize={50}
+          emptyMessage="No email events."
+          deps={[recipient, event, template, bounceType, since, until]}
+          fetch={async (params) => {
+            const r = await adminAPI.listEmailEvents({
+              page: params.page,
+              perPage: params.pageSize,
+              recipient: recipient || undefined,
+              event: event || undefined,
+              template: template || undefined,
+              bounce_type: bounceType || undefined,
+              since: since ? localToRFC3339(since) : undefined,
+              until: until ? localToRFC3339(until) : undefined,
+            });
+            setTotal(r.totalItems);
+            return { rows: r.items, total: r.totalItems };
+          }}
+        />
       </AdminPage.Body>
     </AdminPage>
   );
@@ -278,40 +260,4 @@ function eventVariant(ev: string): "default" | "secondary" | "destructive" | "ou
     case "clicked":    return "secondary";
     default:           return "outline";
   }
-}
-
-// ExpandedRow renders the full event payload below the table row. It
-// surfaces error_message + metadata which are too long for the table
-// itself; metadata is pretty-printed JSON so the operator can spot the
-// MTA / plugin extras at a glance.
-function ExpandedRow({ event }: { event: EmailEvent }) {
-  return (
-    <div className="p-3 space-y-2 text-xs">
-      <Field label="id" value={event.id} mono />
-      <Field label="message_id" value={event.message_id || "—"} mono />
-      {event.error_message ? (
-        <Field label="error_message" value={event.error_message} />
-      ) : null}
-      {event.bounce_type ? (
-        <Field label="bounce_type" value={event.bounce_type} mono />
-      ) : null}
-      {event.metadata && Object.keys(event.metadata).length > 0 ? (
-        <div>
-          <div className="text-muted-foreground">metadata</div>
-          <pre className="font-mono text-xs text-foreground whitespace-pre-wrap break-all rounded bg-background border border-input p-2 mt-1">
-            {JSON.stringify(event.metadata, null, 2)}
-          </pre>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function Field({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="flex gap-2">
-      <span className="text-muted-foreground w-32 shrink-0">{label}</span>
-      <span className={"text-foreground break-all " + (mono ? "font-mono" : "")}>{value}</span>
-    </div>
-  );
 }
