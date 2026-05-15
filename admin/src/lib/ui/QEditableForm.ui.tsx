@@ -45,9 +45,21 @@ export interface QEditableField {
   readOnly?: boolean
 }
 
+/**
+ * `fields` may be a fixed array OR a function of the current draft. The
+ * function form unlocks the discriminator-inside-form pattern: a
+ * `kind`/`driver`/`type` field changes which subsequent fields the form
+ * renders without the host needing to lift draft state. Pass a function
+ * when later fields depend on an earlier one; pass the bare array
+ * otherwise.
+ */
+export type QEditableFields =
+  | QEditableField[]
+  | ((draft: Record<string, unknown>) => QEditableField[])
+
 export interface QEditableFormProps {
   mode: QEditableFormMode
-  fields: QEditableField[]
+  fields: QEditableFields
   /** Current values — the record being edited, or seed defaults for create. */
   values: Record<string, unknown>
   /**
@@ -167,11 +179,16 @@ function CreateForm({
     }
   }
 
+  // Resolve a function-typed `fields` against the live draft so a
+  // discriminator field (e.g. `kind`) can drive the rest of the form
+  // without the host having to lift draft state out of QEditableForm.
+  const resolvedFields = typeof fields === 'function' ? fields(draft) : fields
+
   return (
     <form onSubmit={submit} class="space-y-4">
       {notice}
       <div class="space-y-3">
-        {fields.map((f) => (
+        {resolvedFields.map((f) => (
           <div key={f.key} class="space-y-1">
             <FieldLabel field={f} />
             {f.readOnly ? (
@@ -271,11 +288,16 @@ function EditForm({
     }
   }
 
+  // In edit mode there's no whole-form draft — each row owns its own
+  // `editValue`. Resolve `fields` against the persisted `values` so a
+  // function-typed `fields` still gets a stable, sensible input.
+  const resolvedFields = typeof fields === 'function' ? fields(values) : fields
+
   return (
     <div class="space-y-4">
       {notice}
       <div class="divide-y divide-border rounded-md border">
-        {fields.map((f) => {
+        {resolvedFields.map((f) => {
           const isEditing = editingKey === f.key
           const err = rowError[f.key]
           return (

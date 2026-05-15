@@ -101,7 +101,13 @@ export function realtimeClient(http: HTTPClient) {
             const frame = buf.slice(0, idx);
             buf = buf.slice(idx + 2);
             const ev = parseFrame(frame);
-            if (ev) yield ev;
+            // The parser doesn't know T at parse time — JSON
+            // arrives as ` + "`unknown`" + ` regardless of subscription
+            // generic. Cast at the yield site so the caller's
+            // ` + "`for await (const ev of rb.realtime.subscribe<Tasks>(...))`" + `
+            // gets ` + "`ev.data: Tasks`" + ` without re-typing on every iteration.
+            // Closes Sentinel FEEDBACK.md #7.
+            if (ev) yield ev as RealtimeEvent<T>;
           }
         }
       } finally {

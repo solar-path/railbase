@@ -72,6 +72,33 @@ import (
 	"time"
 )
 
+// Config is the operator-facing configuration shape. Re-exported
+// from internal/config so userland binaries (`./mydemo serve`) can
+// load + tweak it without importing internal/* (which Go's package
+// model refuses across module boundaries).
+//
+// v0.4.1 — added to close Sentinel FEEDBACK.md #1: prior to this
+// alias, OnBeforeServe / ServeStaticFS / Pool were defined but
+// unreachable because constructing an App required `internal/config`.
+type Config = config.Config
+
+// LoadConfig resolves config from env + .env + railbase.yaml + flags.
+// Thin re-export of internal/config.Load — exists so external
+// binaries can do their own setup before calling New:
+//
+//	cfg, err := railbase.LoadConfig()
+//	if err != nil { ... }
+//	cfg.HTTPAddr = ":9000"  // override
+//	app, _ := railbase.New(cfg)
+//	app.OnBeforeServe(...)
+//	app.Run(ctx)
+func LoadConfig() (Config, error) { return config.Load() }
+
+// DefaultConfig returns the baseline config (matches `Default()` in
+// internal/config). Use as the starting point for programmatic
+// config without reading env vars at all.
+func DefaultConfig() Config { return config.Default() }
+
 // App is the public Railbase server.
 //
 // EXPERIMENTAL: this surface (App, New, Run) is unstable until v1.
@@ -160,6 +187,34 @@ func (a *App) GoHooks() *hooks.GoHooks {
 // github.com/go-chi/chi/v5 Router — full chi feature set (Mount,
 // Route, Group, middleware chains) is available.
 //
+// Middleware stack — v0.4.2. Routes registered through this hook
+// inherit the SAME middleware chain as Railbase's built-in routes:
+// maintenance fence, JS $onRequest, i18n, CSRF (production only),
+// compat resolver, AUTH, tenant resolver, RBAC. Concretely:
+//
+//	app.OnBeforeServe(func(r chi.Router) {
+//	    r.Get("/api/cpm/{projectId}", func(w http.ResponseWriter, req *http.Request) {
+//	        p := railbase.PrincipalFrom(req.Context())  // <-- works
+//	        if !p.Authenticated() {
+//	            http.Error(w, "auth required", 401)
+//	            return
+//	        }
+//	        // ...use p.UserID to scope the query
+//	    })
+//	})
+//
+// Public routes (probes, webhooks with their own signature verification,
+// open APIs) work the same way: the handler just doesn't check
+// p.Authenticated() and accepts the zero Principal as "anonymous".
+// Auth middleware fast-paths a request with no Authorization header
+// + no session cookie, so the cost of running it on a public route
+// is negligible (no DB lookup, no hash).
+//
+// Before v0.4.2 these routes mounted on the bare root router without
+// middleware, so PrincipalFrom always returned the zero Principal
+// and embedders worked around it with private HMAC+sessions lookup
+// (Sentinel FEEDBACK.md #3). The wiring change closes that gap.
+//
 // Calling order: hooks run in the order registered. A hook called
 // twice registers twice (no de-duplication). Hooks registered AFTER
 // Run() returns or during shutdown are silently ignored — the router
@@ -180,6 +235,59 @@ func (a *App) OnBeforeServe(fn func(r chi.Router)) {
 		return
 	}
 	a.routerHooks = append(a.routerHooks, fn)
+}
+
+// Principal is the public shape of the authenticated request
+// identity. Custom HTTP routes registered via OnBeforeServe pull it
+// from the request context using PrincipalFrom. v0.4.1 — closes
+// Sentinel FEEDBACK.md #3, where the only way to identify the caller
+// in a custom route was to re-implement bearer-token parsing +
+// session lookup against `pb_data/.secret` (six SQL columns + an
+// HMAC + a key cache — exactly the work Railbase already did inside
+// the auth middleware).
+type Principal struct {
+	// UserID is uuid.Nil for unauthenticated requests. Use
+	// Authenticated() instead of comparing to uuid.Nil at call
+	// sites.
+	UserID uuid.UUID
+	// Collection is the auth collection name ("users", "admins",
+	// etc.) the principal belongs to. Empty for unauthenticated.
+	Collection string
+	// API token? Non-nil when the principal authenticated with an
+	// API token rather than a session. Useful for routes that want
+	// to forbid token auth (interactive flows).
+	APITokenID *uuid.UUID
+}
+
+// Authenticated reports whether the principal carries a real user.
+func (p Principal) Authenticated() bool { return p.UserID != uuid.Nil }
+
+// PrincipalFrom returns the authenticated identity stamped onto ctx
+// by Railbase's auth middleware. Use from inside custom HTTP
+// handlers registered via OnBeforeServe:
+//
+//	app.OnBeforeServe(func(r chi.Router) {
+//	    r.Get("/api/cpm/{id}", func(w http.ResponseWriter, req *http.Request) {
+//	        p := railbase.PrincipalFrom(req.Context())
+//	        if !p.Authenticated() {
+//	            http.Error(w, "auth required", 401)
+//	            return
+//	        }
+//	        // ... use p.UserID to scope the query
+//	    })
+//	})
+//
+// Returns the zero Principal for anonymous requests. Routes that
+// need authentication should check `p.Authenticated()` and 401
+// when false — there is no built-in middleware shortcut yet (the
+// custom route is outside the spec-aware RBAC pipeline).
+func PrincipalFrom(ctx context.Context) Principal {
+	p := authmw.PrincipalFrom(ctx)
+	return Principal{
+		UserID:     p.UserID,
+		Collection: p.CollectionName,
+		APITokenID: p.APITokenID,
+	}
 }
 
 // ServeStaticFS mounts a read-only filesystem at the given URL path.
@@ -469,7 +577,18 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	}
 
-	p, err := pool.New(ctx, pool.Config{DSN: dsn}, a.log)
+	// v0.4.2 — thread operator-tunable pool knobs (env / yaml). Zero
+	// values fall back to pool.New's documented defaults
+	// (MaxConns = max(4, GOMAXPROCS*2), etc.). Closes Sentinel
+	// FEEDBACK.md G2 — the scaffolded railbase.yaml `db.pool:` block
+	// is now actually honoured instead of warning at boot.
+	p, err := pool.New(ctx, pool.Config{
+		DSN:             dsn,
+		MaxConns:        a.cfg.DBMaxConns,
+		MinConns:        a.cfg.DBMinConns,
+		MaxConnLifetime: a.cfg.DBMaxConnLifetime,
+		MaxConnIdleTime: a.cfg.DBMaxConnIdleTime,
+	}, a.log)
 	if err != nil {
 		return fmt.Errorf("db pool: %w", err)
 	}
@@ -1519,17 +1638,36 @@ func (a *App) Run(ctx context.Context) error {
 		// SSE. Both transports coexist; clients pick whichever they
 		// prefer.
 		r.Get("/api/realtime/ws", realtime.WSHandler(realtimeBroker, realtimeClients, principalFn, tenantFn))
-	})
 
-	// OnBeforeServe hooks — embedders' custom routes go up AFTER every
-	// built-in mount has settled (so a user route can't shadow
-	// /api/_admin/* by mistake) and BEFORE the listener opens. Hook
-	// order is registration order; a panic in a hook brings down boot
-	// (same posture as a panic in any other init path). See
-	// App.OnBeforeServe for the contract.
-	for _, fn := range a.routerHooks {
-		fn(a.server.Router())
-	}
+		// OnBeforeServe hooks — embedders' custom routes go up AFTER
+		// every built-in mount has settled (so a user route can't
+		// shadow /api/_admin/* by mistake) and BEFORE the listener
+		// opens. Hook order is registration order; a panic in a hook
+		// brings down boot (same posture as a panic in any other init
+		// path). See App.OnBeforeServe for the contract.
+		//
+		// v0.4.2 — routerHooks are now invoked INSIDE this Group so
+		// custom routes inherit the same middleware stack as built-in
+		// routes: maintenance fence, JS $onRequest, i18n, CSRF, compat,
+		// auth, tenant, RBAC. Before v0.4.2 they were mounted on the
+		// bare root router, so `railbase.PrincipalFrom(r.Context())`
+		// inside a custom handler always returned the zero Principal
+		// (auth middleware never ran). Sentinel FEEDBACK.md #3 surfaced
+		// this — operators worked around it with a private
+		// HMAC+sessions lookup. This wiring closes the gap: a custom
+		// handler calling PrincipalFrom now reads the same identity the
+		// REST CRUD layer reads.
+		//
+		// Implication for embedders: a custom route registered via
+		// OnBeforeServe automatically participates in auth — Bearer +
+		// session cookie + API token, all three transports — without
+		// any further wiring. If a route should be PUBLIC (e.g. a
+		// /healthz-style probe), the handler simply doesn't check
+		// p.Authenticated() and accepts the zero Principal as "public".
+		for _, fn := range a.routerHooks {
+			fn(r)
+		}
+	})
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- a.server.ListenAndServe() }()

@@ -22,12 +22,54 @@ import (
 	"syscall"
 
 	"github.com/railbase/railbase/internal/buildinfo"
+	"github.com/railbase/railbase/pkg/railbase"
 	"github.com/spf13/cobra"
 )
+
+// railbaseAppAlias re-exposes pkg/railbase.App under a local name so
+// the cli package can publish `cli.App` as a re-export without an
+// import cycle. The blank identifier on the package use ensures Go
+// keeps the import even when no other line in this file dereferences
+// it — the type alias below is the user-facing surface.
+type railbaseAppAlias = railbase.App
 
 // Execute runs the CLI without the `init` subcommand. Use from a
 // user project binary.
 func Execute() {
+	run(newRoot(false))
+}
+
+// ExecuteWith is Execute + a setup callback that lets the user
+// register custom routes / hooks / static mounts on the App BEFORE
+// it starts serving traffic. The CLI handles config loading + App
+// construction; the callback receives the live *App.
+//
+// Canonical userland shape:
+//
+//	package main
+//
+//	import (
+//	    _ "myapp/schema"
+//	    "myapp/cpm"
+//	    "github.com/railbase/railbase/pkg/railbase"
+//	    "github.com/railbase/railbase/pkg/railbase/cli"
+//	)
+//
+//	func main() {
+//	    cli.ExecuteWith(func(app *railbase.App) {
+//	        app.OnBeforeServe(func(r chi.Router) {
+//	            r.Get("/api/cpm/{projectId}", cpm.Compute(app.Pool()))
+//	        })
+//	    })
+//	}
+//
+// The callback fires for `serve` AND `dev`; other subcommands
+// (migrate, generate, audit verify, …) skip it — they don't run the
+// HTTP server, so route hooks would be no-ops. v0.4.1 — closes
+// Sentinel FEEDBACK.md #1, where Execute() was the only public entry
+// point and there was no hook for custom-route registration.
+func ExecuteWith(setup func(app *App)) {
+	appSetup = setup
 	run(newRoot(false))
 }
 
@@ -36,6 +78,16 @@ func Execute() {
 func ExecuteWithInit() {
 	run(newRoot(true))
 }
+
+// App is a re-export of `pkg/railbase.App` for the ExecuteWith
+// callback signature. Lets userland binaries register hooks without
+// importing pkg/railbase explicitly (the `cli` import already covers
+// what they need).
+type App = railbaseAppAlias
+
+// appSetup is the registered callback (or nil). Set by ExecuteWith;
+// invoked from the `serve`/`dev` runner after App construction.
+var appSetup func(*App)
 
 func run(root *cobra.Command) {
 	ctx, cancel := signal.NotifyContext(context.Background(),
@@ -76,6 +128,10 @@ func newRoot(includeInit bool) *cobra.Command {
 		// ^C lifecycle). Closes the Sentinel-style dev.sh
 		// orchestration papercut. See cli/dev.go.
 		newDevCmd(),
+		// v0.4.2 — single-binary build orchestrator (SPA + Go binary).
+		// Symmetric to `dev`, but for the production output path.
+		// Closes Sentinel FEEDBACK.md G3. See cli/build.go.
+		newBuildCmd(),
 		newVersionCmd(),
 		newMigrateCmd(),
 		newAdminCmd(),

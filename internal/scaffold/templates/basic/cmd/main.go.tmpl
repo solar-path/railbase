@@ -3,15 +3,41 @@
 // The blank import below loads {{.ModulePath}}/schema for its
 // init() side-effects: every collection in that package gets
 // registered with the global schema registry, so the CLI subcommands
-// (serve, migrate diff/up/status) automatically know about them.
+// (serve, migrate diff/up/status, generate, dev, build) automatically
+// know about them.
+//
+// `cli.ExecuteWith` is the extension seam — the callback fires after
+// railbase.New() builds the App and BEFORE the listener opens, so this
+// is where you register:
+//
+//   - Custom HTTP routes      → app.OnBeforeServe(func(r chi.Router) {...})
+//   - Custom Go hooks         → app.GoHooks().OnRecordBeforeCreate(...)
+//   - SPA mounted at /        → app.ServeStaticFS("/", webembed.FS())
+//
+// The default scaffold mounts the embedded SPA from webembed/. If
+// you're building an API-only service, delete the ServeStaticFS line
+// and the webembed/ package — the rest of the binary works unchanged.
 package main
 
 import (
-	_ "{{.ModulePath}}/schema"
+	"io/fs"
 
+	_ "{{.ModulePath}}/schema"
+	"{{.ModulePath}}/webembed"
+
+	"github.com/railbase/railbase/pkg/railbase"
 	"github.com/railbase/railbase/pkg/railbase/cli"
 )
 
 func main() {
-	cli.Execute()
+	cli.ExecuteWith(func(app *railbase.App) {
+		// Mount the embedded SPA at /. webembed.FS() returns nil if
+		// the embed subtree is empty — the guard below keeps boot
+		// silent in API-only builds.
+		if spa := webembed.FS(); spa != nil {
+			if _, err := fs.Stat(spa, "index.html"); err == nil {
+				app.ServeStaticFS("/", spa)
+			}
+		}
+	})
 }

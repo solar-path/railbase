@@ -157,6 +157,38 @@ func (c *compiler) emitCompare(v Compare) error {
 		}
 	}
 
+	// v0.4.2 — short-circuit anonymous comparisons against UUID-typed
+	// columns. Closes Sentinel FEEDBACK.md G4.
+	//
+	// The bug: `ListRule("@request.auth.id = owner")` with `owner` a
+	// Relation field (UUID FK). An anonymous request has AuthID = ""
+	// so the parameter binds the empty string, and Postgres tries to
+	// coerce '' to uuid for the equality, panicking with
+	//   ERROR: invalid input syntax for type uuid: "" (SQLSTATE 22P02)
+	// The REST layer surfaces this as a 500 "count failed" instead of
+	// the operator-expected "rule denies → empty list" outcome.
+	//
+	// Fix: detect "anonymous magic auth-id compared against UUID
+	// column" before emitting the comparison, and replace the whole
+	// node with a constant SQL false. Semantically correct — an
+	// anonymous principal cannot own any row keyed by a UUID FK, so
+	// the rule must deny.
+	//
+	// We do NOT short-circuit against text-typed columns (which
+	// happily accept ''); the existing `@request.auth.id != ''`
+	// idiom for "any authenticated user" keeps working unchanged.
+	if c.ctx.AuthID == "" {
+		if c.compareIsAnonUUID(v.L, v.R) || c.compareIsAnonUUID(v.R, v.L) {
+			// `=` against an empty principal never matches; `!=` against
+			// it could theoretically match every row, but treating a
+			// missing principal as "matches nothing" is the safer
+			// deny-by-default posture for rules. Both operators
+			// collapse to FALSE.
+			c.b.WriteString("(false)")
+			return nil
+		}
+	}
+
 	switch v.Op {
 	case "~":
 		return c.emitLike(v.L, v.R, false)
@@ -302,6 +334,55 @@ func (c *compiler) emitIdent(v Ident) error {
 		relSpec.Name,
 		relSpec.Name, c.spec.Name, relName)
 	return nil
+}
+
+// compareIsAnonUUID reports whether `magicSide` is the auth-id magic
+// var AND `columnSide` is an Ident that resolves to a UUID-typed column
+// on the current spec. Used by emitCompare to short-circuit the
+// anonymous-empty-string-into-UUID-column crash (FEEDBACK G4).
+//
+// Only flat idents are considered — dotted paths resolve through a
+// scalar subquery whose result is the related column's type; we leave
+// those alone because the related-collection schema isn't always
+// available at this layer (Schema resolver returning false on miss
+// would push the diagnostic upstream).
+func (c *compiler) compareIsAnonUUID(magicSide, columnSide Node) bool {
+	mv, ok := magicSide.(MagicVar)
+	if !ok {
+		return false
+	}
+	if mv.Name != "@request.auth.id" && mv.Name != "@me" {
+		return false
+	}
+	id, ok := columnSide.(Ident)
+	if !ok || id.DottedPath != "" {
+		return false
+	}
+	return c.identIsUUIDColumn(id.Name)
+}
+
+// identIsUUIDColumn says whether `name` is a UUID-typed column on the
+// current spec. System columns (`id`, `tenant_id`, `parent`) are
+// hard-coded; user fields are UUID only when declared as Relation.
+//
+// `parent` is uuid only when AdjacencyList is enabled — the column
+// doesn't exist otherwise, so a filter naming it would have been
+// rejected upstream by columnAllowed.
+func (c *compiler) identIsUUIDColumn(name string) bool {
+	switch name {
+	case "id":
+		return true
+	case "tenant_id":
+		return c.spec.Tenant
+	case "parent":
+		return c.spec.AdjacencyList
+	}
+	for _, f := range c.spec.Fields {
+		if f.Name == name {
+			return f.Type == builder.TypeRelation
+		}
+	}
+	return false
 }
 
 func (c *compiler) emitMagic(v MagicVar) {

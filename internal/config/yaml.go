@@ -60,8 +60,20 @@ type yamlHTTPSection struct {
 }
 
 type yamlDBSection struct {
-	DSN           *string `yaml:"dsn,omitempty"`
-	EmbedPostgres *bool   `yaml:"embed_postgres,omitempty"`
+	DSN           *string         `yaml:"dsn,omitempty"`
+	EmbedPostgres *bool           `yaml:"embed_postgres,omitempty"`
+	Pool          *yamlPoolSection `yaml:"pool,omitempty"`
+}
+
+// yamlPoolSection mirrors the `db.pool:` block in the scaffolded
+// railbase.yaml template. Field names match the template's keys
+// verbatim — adding/renaming requires touching template + parser
+// together. Closes Sentinel FEEDBACK.md G2.
+type yamlPoolSection struct {
+	MaxConns        *int    `yaml:"max_conns,omitempty"`
+	MinConns        *int    `yaml:"min_conns,omitempty"`
+	MaxConnLifetime *string `yaml:"max_conn_lifetime,omitempty"`
+	MaxConnIdleTime *string `yaml:"max_conn_idle_time,omitempty"`
 }
 
 type yamlLogSection struct {
@@ -154,6 +166,28 @@ func applyYAML(c *Config, yc yamlConfig) error {
 		}
 		if yc.DB.EmbedPostgres != nil {
 			c.EmbedPostgres = *yc.DB.EmbedPostgres
+		}
+		if yc.DB.Pool != nil {
+			if yc.DB.Pool.MaxConns != nil {
+				c.DBMaxConns = int32(*yc.DB.Pool.MaxConns)
+			}
+			if yc.DB.Pool.MinConns != nil {
+				c.DBMinConns = int32(*yc.DB.Pool.MinConns)
+			}
+			if yc.DB.Pool.MaxConnLifetime != nil {
+				d, err := time.ParseDuration(*yc.DB.Pool.MaxConnLifetime)
+				if err != nil {
+					return fmt.Errorf("db.pool.max_conn_lifetime: %w", err)
+				}
+				c.DBMaxConnLifetime = d
+			}
+			if yc.DB.Pool.MaxConnIdleTime != nil {
+				d, err := time.ParseDuration(*yc.DB.Pool.MaxConnIdleTime)
+				if err != nil {
+					return fmt.Errorf("db.pool.max_conn_idle_time: %w", err)
+				}
+				c.DBMaxConnIdleTime = d
+			}
 		}
 	}
 	if yc.Log != nil {

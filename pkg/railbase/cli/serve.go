@@ -31,6 +31,14 @@ migrating operators find it on muscle memory.`,
 			if err != nil {
 				return err
 			}
+			// v0.4.1 — ExecuteWith callback. Runs AFTER New (so the
+			// app exists + cfg is finalised) but BEFORE Run, which
+			// is the only window where OnBeforeServe registration
+			// has any effect. Nil-safe — bare `railbase serve`
+			// (via Execute()) leaves appSetup nil and skips.
+			if appSetup != nil {
+				appSetup(app)
+			}
 			return app.Run(cmd.Context())
 		},
 	}

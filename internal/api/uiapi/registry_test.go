@@ -257,3 +257,66 @@ func equalSlice(a, b []string) bool {
 	}
 	return true
 }
+
+// --- Sentinel FEEDBACK.md #9 — stripGeistImport regression. ---
+//
+// The bug: the admin SPA's styles.css contained
+// `@import "@fontsource-variable/geist";` for its own UI font. The
+// registry served that CSS unchanged to downstream user projects.
+// Their Vite build then failed to resolve the peer dep ("module not
+// found: @fontsource-variable/geist"), and the only way out was for
+// the user to install a font package they don't need. stripGeistImport
+// removes JUST that line before serving, leaving everything else
+// (including other @imports) intact.
+
+func TestStripGeistImport_RemovesGeistLineOnly(t *testing.T) {
+	in := `@import "@fontsource-variable/geist";
+@import "tailwindcss";
+:root { --color: red; }
+.button { color: var(--color); }
+`
+	out := stripGeistImport(in)
+	if strings.Contains(out, "@fontsource-variable/geist") {
+		t.Errorf("geist import not stripped:\n%s", out)
+	}
+	// Other @imports stay.
+	for _, want := range []string{
+		`@import "tailwindcss";`,
+		`:root { --color: red; }`,
+		`.button { color: var(--color); }`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("non-geist line %q was dropped:\n%s", want, out)
+		}
+	}
+}
+
+func TestStripGeistImport_NoGeist_NoOp(t *testing.T) {
+	// CSS without the geist line should pass through byte-for-byte
+	// (modulo the trailing-newline split/join round-trip).
+	in := `@import "tailwindcss";
+.button { color: red; }
+`
+	out := stripGeistImport(in)
+	if out != in {
+		t.Errorf("stripGeistImport mutated CSS that has no geist line:\nin:  %q\nout: %q", in, out)
+	}
+}
+
+func TestStripGeistImport_MultipleGeistOccurrences(t *testing.T) {
+	// Defensive: if the bundler ever emits the import on two lines
+	// (e.g. dev + prod variants), we strip both. Easy to verify since
+	// the implementation is line-based with Contains.
+	in := `@import "@fontsource-variable/geist";
+@import "tailwindcss";
+@import "@fontsource-variable/geist/400.css";
+.x { color: red; }
+`
+	out := stripGeistImport(in)
+	if strings.Contains(out, "fontsource-variable/geist") {
+		t.Errorf("not all geist lines stripped:\n%s", out)
+	}
+	if !strings.Contains(out, `@import "tailwindcss";`) {
+		t.Errorf("non-geist import lost:\n%s", out)
+	}
+}

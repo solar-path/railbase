@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 )
@@ -80,6 +81,20 @@ func Init(opts Options) ([]string, error) {
 	// into just the semver portion before splitting on whitespace.
 	if i := strings.Index(opts.RailbaseVersion, " "); i > 0 {
 		opts.RailbaseVersion = opts.RailbaseVersion[:i]
+	}
+	// v0.4.1 — coerce to a valid Go module version. Sentinel
+	// FEEDBACK.md #8 hit this: `git describe` produced
+	// `b2a9eb7-dirty`, the scaffold wrote it verbatim into go.mod's
+	// `require` line, and `go mod tidy` immediately failed with
+	// "version `b2a9eb7-dirty` invalid". The shape Go accepts is
+	// either a semver tag (vX.Y.Z) or a pseudo-version
+	// (v0.0.0-yyyymmddhhmmss-12charhash). When the incoming value
+	// matches neither, substitute the well-known "unknown" pseudo
+	// `v0.0.0-00010101000000-000000000000`, which `go mod tidy`
+	// accepts and operators recognise as "scaffolded from a
+	// non-tagged build, pick a real version before publishing".
+	if !isValidGoModuleVersion(opts.RailbaseVersion) {
+		opts.RailbaseVersion = "v0.0.0-00010101000000-000000000000"
 	}
 
 	if err := assertEmptyDir(opts.ProjectDir); err != nil {
@@ -205,3 +220,37 @@ func genSecret() (string, error) {
 	}
 	return hex.EncodeToString(buf[:]), nil
 }
+
+// isValidGoModuleVersion checks whether s matches one of the Go
+// module-system version shapes:
+//
+//   - Semver tag:       `vMAJOR.MINOR.PATCH` with optional `-pre+meta`
+//   - Pseudo-version:   `vMAJOR.MINOR.PATCH-yyyymmddhhmmss-XXXXXXXXXXXX`
+//     (12-char short commit hash)
+//
+// We don't try to parse fully — the regex covers the shapes Go itself
+// validates in cmd/go/internal/modload. If `go mod tidy` would reject
+// it, we substitute the unknown-pseudo placeholder. False positives
+// here (valid string that we mark invalid) are harmless: the
+// substitution just degrades to the placeholder, which is also valid.
+func isValidGoModuleVersion(s string) bool {
+	if s == "" {
+		return false
+	}
+	// `v0.0.0-dev` is the only non-formal value scaffold blesses,
+	// since it's also our existing buildinfo fallback.
+	if s == "v0.0.0-dev" {
+		return false // not valid for go.mod — but recognised; trigger pseudo substitution
+	}
+	return goVersionRE.MatchString(s)
+}
+
+// goVersionRE captures the two valid go.mod version shapes:
+//   - semver:     v1.2.3, v1.2.3-rc1, v1.2.3+meta, v1.2.3-rc1+meta
+//   - pseudo-v:   v0.0.0-yyyymmddhhmmss-abc123abc123 (12 hex chars)
+//
+// Strict but not exhaustive: doesn't reject e.g. v1.2.3-with-letters
+// in prerelease ID positions, which Go accepts.
+var goVersionRE = regexp.MustCompile(
+	`^v\d+\.\d+\.\d+(?:-\d{14}-[0-9a-f]{12})?(?:-[\w\.\-]+)?(?:\+[\w\.\-]+)?$`,
+)

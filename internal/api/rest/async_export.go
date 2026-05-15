@@ -606,8 +606,13 @@ func (h *asyncExportHandler) runExport(ctx context.Context, p *asyncExportPayloa
 
 	// Re-create the filter.Context from the captured principal. The
 	// auth middleware would have stamped these onto the request — we
-	// replay them verbatim.
-	fctx := filter.Context{AuthID: p.AuthID, AuthCollection: p.AuthColl}
+	// replay them verbatim. Schema resolver is wired so dotted-path
+	// rules survive the sync→async replay path.
+	fctx := filter.Context{
+		AuthID:         p.AuthID,
+		AuthCollection: p.AuthColl,
+		Schema:         schemaResolver,
+	}
 
 	// Compose WHERE: tenant scope → list rule → user filter. Same chain
 	// as the sync handler so the produced bytes match.

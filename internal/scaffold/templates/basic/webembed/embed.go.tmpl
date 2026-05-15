@@ -1,0 +1,33 @@
+// Package webembed exposes the built SPA (web/dist/) as an embed.FS so
+// the {{.ProjectName}} binary ships UI + API in one artefact. The
+// frontend is built once via `railbase build` (which runs
+// `npm run build` inside ./web, then copies dist/ → webembed/web-dist/),
+// and pulled in at compile time via the //go:embed directive below.
+//
+// In dev (no build step), web-dist/ contains only README.txt — the
+// server falls back to "no SPA mounted" and the operator runs
+// `railbase dev --web ./web` separately so Vite proxies /api → backend.
+//
+// To disable the SPA entirely (API-only build), delete this package
+// and remove the `app.ServeStaticFS("/", webembed.FS())` call from
+// cmd/{{.ProjectName}}/main.go.
+package webembed
+
+import (
+	"embed"
+	"io/fs"
+)
+
+//go:embed all:web-dist
+var raw embed.FS
+
+// FS returns the embedded SPA filesystem rooted at web-dist/. Returns
+// nil if the embed failed (web-dist/ missing or unreadable) — callers
+// guard with `if fsys := webembed.FS(); fsys != nil { ... }`.
+func FS() fs.FS {
+	sub, err := fs.Sub(raw, "web-dist")
+	if err != nil {
+		return nil
+	}
+	return sub
+}

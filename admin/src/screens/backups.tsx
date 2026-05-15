@@ -846,11 +846,11 @@ function ScheduleEditorDrawer({
   );
 }
 
-// ScheduleEditorBody — name + kind are parent-owned scalars above
-// the QEditableForm (the same discriminator pattern used by mailer /
-// notifications-prefs). The QEditableForm carries expression + enabled
-// + per-kind payload fields (`retention_days` / `out_dir` only when
-// kind === "scheduled_backup"; other kinds get an empty payload).
+// ScheduleEditorBody — every editable knob lives inside one
+// QEditableForm. `kind` is a discriminator: the form's `fields` is a
+// function of the live draft, so changing `kind` to `scheduled_backup`
+// makes `retention_days` + `out_dir` appear without the host having
+// to lift draft state.
 function ScheduleEditorBody({
   seed,
   onClose,
@@ -874,10 +874,6 @@ function ScheduleEditorBody({
     [kindsQ.data],
   );
 
-  // Parent-owned scalars.
-  const [name, setName] = useState<string>(seed?.name ?? "");
-  const [kind, setKind] = useState<string>(seed?.kind ?? "scheduled_backup");
-
   // Initial payload values lifted out of the opaque seed for the
   // friendly per-kind fields. For unknown shapes we still pass them
   // through verbatim on save.
@@ -891,11 +887,12 @@ function ScheduleEditorBody({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Seed the QEditableForm draft once. `expression` + `enabled` are
-  // always present; `retention_days` / `out_dir` only matter for the
-  // scheduled_backup kind, but live in the draft regardless so toggling
-  // between kinds doesn't drop the operator's typing.
+  // One-shot seed for QEditableForm. Carries every key so toggling
+  // `kind` between `scheduled_backup` and other handlers doesn't drop
+  // the operator's typing in retention_days / out_dir.
   const [draftSeed] = useState<Record<string, unknown>>(() => ({
+    name: seed?.name ?? "",
+    kind: seed?.kind ?? "scheduled_backup",
     expression: seed?.expression ?? "0 4 * * *",
     enabled: seed?.enabled ?? true,
     retention_days:
@@ -905,26 +902,61 @@ function ScheduleEditorBody({
     out_dir: typeof seedPayload.out_dir === "string" ? seedPayload.out_dir : "",
   }));
 
-  const fields: QEditableField[] = [
-    { key: "expression", label: "Cron expression", required: true },
-    { key: "enabled", label: "Enabled" },
-    ...(kind === "scheduled_backup"
-      ? [
-          {
-            key: "retention_days",
-            label: "Retention (days)",
-            helpText:
-              "Older archives are pruned after a successful backup. 0 disables pruning.",
-          } as QEditableField,
-          {
-            key: "out_dir",
-            label: "Output directory (optional)",
-            helpText:
-              "Defaults to <dataDir>/backups so manual + scheduled archives share the same retention sweep.",
-          } as QEditableField,
-        ]
-      : []),
-  ];
+  // Function-typed `fields` — recomputed on each draft change so the
+  // discriminator (`kind`) drives whether the backup-specific payload
+  // fields render. Other kinds get an empty payload + a CLI hint
+  // (rendered via QEditableForm's `notice` slot).
+  const fieldsForDraft = (d: Record<string, unknown>): QEditableField[] => {
+    const kind = String(d.kind ?? "");
+    return [
+      {
+        key: "name",
+        label: "Name",
+        required: !isEdit,
+        readOnly: isEdit,
+        helpText: !isEdit
+          ? "Letters, digits, underscore, hyphen. Used as the schedule identifier — cannot be changed later."
+          : undefined,
+      },
+      {
+        key: "kind",
+        label: "Kind",
+        required: true,
+        readOnly: isBuiltin,
+        helpText: isBuiltin ? (
+          "Builtin schedule — kind is locked."
+        ) : kind !== "scheduled_backup" ? (
+          <>
+            This kind takes an empty payload. For richer per-kind
+            configuration use the CLI:{" "}
+            <code className="font-mono">
+              railbase cron upsert {String(d.name || "<name>")} &quot;
+              {String(d.expression ?? "")}&quot; {kind} --payload
+              &apos;&#123;...&#125;&apos;
+            </code>
+          </>
+        ) : undefined,
+      },
+      { key: "expression", label: "Cron expression", required: true },
+      { key: "enabled", label: "Enabled" },
+      ...(kind === "scheduled_backup"
+        ? [
+            {
+              key: "retention_days",
+              label: "Retention (days)",
+              helpText:
+                "Older archives are pruned after a successful backup. 0 disables pruning.",
+            } as QEditableField,
+            {
+              key: "out_dir",
+              label: "Output directory (optional)",
+              helpText:
+                "Defaults to <dataDir>/backups so manual + scheduled archives share the same retention sweep.",
+            } as QEditableField,
+          ]
+        : []),
+    ];
+  };
 
   const renderInput = (
     f: QEditableField,
@@ -932,6 +964,33 @@ function ScheduleEditorBody({
     onChange: (v: unknown) => void,
   ) => {
     switch (f.key) {
+      case "name":
+        return (
+          <Input
+            value={(value as string) ?? ""}
+            onInput={(e) => onChange(e.currentTarget.value)}
+            placeholder="nightly-backup"
+            className="font-mono"
+          />
+        );
+      case "kind":
+        return (
+          <select
+            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm font-mono"
+            value={(value as string) ?? ""}
+            onChange={(e) => onChange(e.currentTarget.value)}
+          >
+            {availableKinds.length === 0 ? (
+              <option value={String(value ?? "")}>{String(value ?? "")}</option>
+            ) : (
+              availableKinds.map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))
+            )}
+          </select>
+        );
       case "expression":
         return <CronInput value={value} onChange={onChange} />;
       case "enabled":
@@ -978,15 +1037,16 @@ function ScheduleEditorBody({
     d: Record<string, unknown>,
   ): Record<string, string> => {
     const fe: Record<string, string> = {};
+    const name = String(d.name ?? "").trim();
     if (!isEdit) {
-      const trimmed = name.trim();
-      if (!trimmed) {
+      if (!name) {
         fe.name = "Name required";
-      } else if (!/^[A-Za-z0-9_-]{1,80}$/.test(trimmed)) {
+      } else if (!/^[A-Za-z0-9_-]{1,80}$/.test(name)) {
         fe.name = "Name: letters, digits, underscore, hyphen (≤ 80 chars)";
       }
     }
-    if (!kind.trim()) {
+    const kind = String(d.kind ?? "").trim();
+    if (!kind) {
       fe.kind = "Kind required";
     }
     const expr = String(d.expression ?? "").trim();
@@ -1012,6 +1072,7 @@ function ScheduleEditorBody({
       setFieldErrors(fe);
       return;
     }
+    const kind = String(d.kind ?? "").trim();
     // Build the payload per kind. For scheduled_backup we emit the
     // friendly {retention_days, out_dir} shape; for other kinds we
     // preserve whatever the schedule already carried (so editing a
@@ -1031,7 +1092,7 @@ function ScheduleEditorBody({
 
     try {
       await adminAPI.cronUpsert({
-        name: isEdit ? seed!.name : name.trim(),
+        name: isEdit ? seed!.name : String(d.name ?? "").trim(),
         expression: String(d.expression ?? "").trim(),
         kind,
         payload,
@@ -1044,85 +1105,17 @@ function ScheduleEditorBody({
   };
 
   return (
-    <div className="space-y-4">
-      {/* Name — parent-owned scalar above the QEditableForm. Locked
-          in edit mode since it's identity (also the URL path-param
-          for enable/disable/delete). */}
-      <div className="space-y-1.5">
-        <label className="font-mono text-xs font-medium text-muted-foreground">
-          Name {!isEdit ? <span className="text-destructive">*</span> : null}
-        </label>
-        <Input
-          value={name}
-          onInput={(e) => setName(e.currentTarget.value)}
-          placeholder="nightly-backup"
-          disabled={isEdit}
-          className="font-mono"
-        />
-        {fieldErrors.name ? (
-          <p className="text-xs text-destructive">{fieldErrors.name}</p>
-        ) : !isEdit ? (
-          <p className="text-xs text-muted-foreground">
-            Letters, digits, underscore, hyphen. Used as the schedule
-            identifier — cannot be changed later.
-          </p>
-        ) : null}
-      </div>
-
-      {/* Kind — parent-owned discriminator. Drives the per-kind
-          payload fields below. Locked for builtins. */}
-      <div className="space-y-1.5">
-        <label className="font-mono text-xs font-medium text-muted-foreground">
-          Kind <span className="text-destructive">*</span>
-        </label>
-        <select
-          className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm font-mono disabled:opacity-50"
-          value={kind}
-          onChange={(e) => setKind(e.currentTarget.value)}
-          disabled={isBuiltin}
-        >
-          {availableKinds.length === 0 ? (
-            <option value={kind}>{kind}</option>
-          ) : (
-            availableKinds.map((k) => (
-              <option key={k} value={k}>
-                {k}
-              </option>
-            ))
-          )}
-        </select>
-        {fieldErrors.kind ? (
-          <p className="text-xs text-destructive">{fieldErrors.kind}</p>
-        ) : isBuiltin ? (
-          <p className="text-xs text-muted-foreground">
-            Builtin schedule — kind is locked.
-          </p>
-        ) : null}
-      </div>
-
-      <QEditableForm
-        mode="create"
-        fields={fields}
-        values={draftSeed}
-        renderInput={renderInput}
-        onCreate={handleSave}
-        submitLabel={isEdit ? "Save" : "Create schedule"}
-        onCancel={onClose}
-        fieldErrors={fieldErrors}
-        formError={formError}
-      />
-
-      {kind !== "scheduled_backup" ? (
-        <p className="text-xs text-muted-foreground border-t pt-3">
-          This kind takes an empty payload. For richer per-kind
-          configuration use the CLI:{" "}
-          <code className="font-mono">
-            railbase cron upsert {name || "<name>"} &quot;{String(draftSeed.expression)}&quot;{" "}
-            {kind} --payload '&#123;...&#125;'
-          </code>
-        </p>
-      ) : null}
-    </div>
+    <QEditableForm
+      mode="create"
+      fields={fieldsForDraft}
+      values={draftSeed}
+      renderInput={renderInput}
+      onCreate={handleSave}
+      submitLabel={isEdit ? "Save" : "Create schedule"}
+      onCancel={onClose}
+      fieldErrors={fieldErrors}
+      formError={formError}
+    />
   );
 }
 

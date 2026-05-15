@@ -78,6 +78,24 @@ func writeInterface(b *strings.Builder, spec builder.CollectionSpec) {
 		b.WriteString("  verified: boolean;\n")
 		b.WriteString("  last_login_at?: string | null;\n")
 	}
+	// v0.4.1 — structural system fields injected by collection-level
+	// modifiers. Sentinel's FEEDBACK.md #5 caught these missing: the
+	// DB columns exist but the SDK Tasks interface had neither
+	// `parent` (AdjacencyList) nor `sort_index` (Ordered) nor
+	// `deleted` (SoftDelete) so every read site needed `as unknown
+	// as MyTask`.
+	if spec.AdjacencyList {
+		b.WriteString("  /** Self-FK to parent row. Null at the WBS root. */\n")
+		b.WriteString("  parent?: string | null;\n")
+	}
+	if spec.Ordered {
+		b.WriteString("  /** Per-parent ordering index. Server auto-assigns MAX+1 when omitted on insert. */\n")
+		b.WriteString("  sort_index: number;\n")
+	}
+	if spec.SoftDelete {
+		b.WriteString("  /** Tombstone timestamp. Null on live rows; non-null after DELETE. List queries hide tombstones unless `?includeDeleted=true`. */\n")
+		b.WriteString("  deleted?: string | null;\n")
+	}
 	for _, f := range spec.Fields {
 		// password is write-only — the server never returns it, so
 		// we omit from the read interface entirely. Codegen elsewhere
@@ -123,7 +141,17 @@ func tsType(f builder.FieldSpec) string {
 		// RFC 3339 string. v1 will add a Date-typed wrapper option.
 		return "string"
 	case builder.TypeJSON:
-		return "Record<string, unknown>"
+		// `unknown` instead of `Record<string, unknown>` — JSON
+		// columns are not restricted to objects, they can hold
+		// arrays, strings, numbers, booleans, or null. Sentinel
+		// FEEDBACK.md #6 hit this with `holidays JSONB` storing
+		// `string[]` and the generator emitting Record-shape that
+		// rejected array literals. `unknown` forces a type-narrow
+		// at the call site, which is correct ergonomics for an
+		// unconstrained JSON value. Users who want stricter typing
+		// can wrap the field type at the consumer level
+		// (`x.holidays as string[]`).
+		return "unknown"
 	case builder.TypeSelect:
 		return literalUnion(f.SelectValues)
 	case builder.TypeMultiSelect:

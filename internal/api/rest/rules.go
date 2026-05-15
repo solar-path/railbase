@@ -7,6 +7,7 @@ import (
 	authmw "github.com/railbase/railbase/internal/auth/middleware"
 	"github.com/railbase/railbase/internal/filter"
 	"github.com/railbase/railbase/internal/schema/builder"
+	"github.com/railbase/railbase/internal/schema/registry"
 	"github.com/railbase/railbase/internal/tenant"
 )
 
@@ -113,14 +114,38 @@ func compileRule(rule string, spec builder.CollectionSpec, ctx filter.Context, s
 }
 
 // filterCtx builds the magic-var context from the request principal.
+//
+// v0.4.1 — Schema resolver. Earlier we shipped Phase 2/A2 (dotted-
+// path filter support — `project.owner = @request.auth.id`) with
+// AST + SQL emission, but the REST handler created `filter.Context{}`
+// without populating Schema, so every dotted-path expression hit
+// "filter Context.Schema resolver not wired" at compile time. Sentinel
+// integration surfaced this — see FEEDBACK.md #4. Now wired to
+// `schemaResolver` below, which is just `registry.Get` adapted to
+// return the spec (not the builder) and the bool-ok form `filter`
+// expects.
 func filterCtx(p authmw.Principal) filter.Context {
+	base := filter.Context{Schema: schemaResolver}
 	if !p.Authenticated() {
-		return filter.Context{}
+		return base
 	}
-	return filter.Context{
-		AuthID:         p.UserID.String(),
-		AuthCollection: p.CollectionName,
+	base.AuthID = p.UserID.String()
+	base.AuthCollection = p.CollectionName
+	return base
+}
+
+// schemaResolver adapts registry.Get to the filter.Context.Schema
+// signature `func(name string) (CollectionSpec, bool)`. Returns
+// (zero, false) on miss so the filter compiler emits a clean
+// "unknown collection" error instead of a panic or SQL drift.
+//
+// Goroutine-safe — registry.Get serializes on the registry's mu.
+func schemaResolver(name string) (builder.CollectionSpec, bool) {
+	c := registry.Get(name)
+	if c == nil {
+		return builder.CollectionSpec{}, false
 	}
+	return c.Spec(), true
 }
 
 // combineFragments AND'd two compiledFragments. Either may be empty.

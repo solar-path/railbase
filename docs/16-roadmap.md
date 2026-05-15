@@ -143,6 +143,28 @@
 - Unified Timeline UI (`/_/logs`): один экран, фильтры actor_type/event/entity/tenant_id/request_id/outcome, drawer с before/after JSON diff.
 - Deep-dive views перенесены: App logs → Health → Process logs; Email events → Settings → Mailer → Deliveries; Notifications log → Settings → Notifications → Log.
 
+### v0.4.1 — Sentinel integration feedback ✅
+
+After Sentinel-v2 actually integrated v0.4, FEEDBACK.md (`/Users/work/apps/sentinel/FEEDBACK.md`) caught the gap between «surface объявлен» и «runtime wired + reachable from userland». Quote: *"surface добавили, чтобы пометить task закрытым, но не дошли до завершения — реэкспорта типов / wiring'а runtime'а."* — fair. Closed:
+
+**P0 (хуже всего — фичи объявлены, но недоступны):**
+
+- **P0/4 / dotted-path filter runtime** ✅ — `internal/api/rest/rules.go::filterCtx` теперь заполняет `filter.Context.Schema` (новый `schemaResolver` adapter над `registry.Get`). Async-export path в `async_export.go:610` тоже починен. Парсер + SQL emit были готовы со Sprint 2, но REST handlers создавали `filter.Context{}` без `Schema` — `project.owner = @request.auth.id` падало с "filter Context.Schema resolver not wired". **Самый позорный промах** — это поведение должен был ловить любой integration-тест Sentinel-стиля.
+- **P0/1 / Config из userland** ✅ — `railbase.Config = config.Config` type alias + `railbase.LoadConfig()` + `railbase.DefaultConfig()` re-export. Плюс `cli.ExecuteWith(setup func(*App))` callback pattern для зарегистрированных хуков: CLI сам читает cfg, конструирует App, вызывает `setup(app)`, потом Run. Userland binary теперь пишется в 8 строк без единого `internal/*` import'а.
+- **P0/2 / GoHooks типы** ✅ — новый публичный пакет `pkg/railbase/hooks` с aliases: `RecordEvent`, `Context`, `RecordHook`, `Principal`, `Registry`, event/action константы. Handler-литералы наконец-то можно писать без касания internal/hooks. Type aliases shared identity → `app.GoHooks().OnRecordBeforeCreate(coll, handler)` принимает handler декларированный через публичные types без явной конверсии.
+- **P0/3 / Principal в кастомных роутах** ✅ — `railbase.PrincipalFrom(ctx) Principal` + публичная `railbase.Principal {UserID, Collection, APITokenID}` структура. Закрывает воркэраунд из FEEDBACK.md #3 (HMAC bearer + SELECT FROM _sessions, шесть SQL колонок).
+
+**P1 (фичи работают но шероховатости):**
+
+- **P1/5 / SDK system fields** ✅ — `internal/sdkgen/ts/types.go::writeInterface` добавляет `parent` / `sort_index` / `deleted` поля когда spec.AdjacencyList / Ordered / SoftDelete. До этого DB columns были, а TS типа не было → `as unknown as MyTask` всюду в Sentinel.
+- **P1/6 / SDK JSON type** ✅ — `TypeJSON` теперь генерируется как `unknown` вместо `Record<string, unknown>`. JSON-колонка может быть array/scalar/null, не только объектом. Sentinel'овский `holidays: string[]` теперь работает без cast'а.
+- **P1/7 / Realtime generic** ✅ — `subscribe<T>` теперь честно `yield ev as RealtimeEvent<T>` при passthrough от untyped `parseFrame`. Закрывает `error TS2322: Type RealtimeEvent<unknown> is not assignable to type RealtimeEvent<T>`.
+- **P1/8 / scaffold go.mod валидная pseudo-version** ✅ — `internal/scaffold/scaffold.go::isValidGoModuleVersion` отбраковывает `b2a9eb7-dirty` и подставляет канонический `v0.0.0-00010101000000-000000000000`. `go mod tidy` теперь принимает scaffold'енный go.mod.
+- **P1/9 / `@fontsource-variable/geist`** ✅ — `internal/api/uiapi/registry.go::stripGeistImport` удаляет admin-only font import при serve'е `styles.css` downstream-проектам. У operator'а больше не ломается Vite на старте.
+- **P1/10 / default port** ✅ — `scaffold/templates/basic/railbase.yaml.tmpl` теперь эмитит `:8095` (matches binary default). Плюс комментарий объясняет precedence yaml < env < flag.
+
+**Метаvalue:** один реальный consumer ловит больше gap'ов чем самый тщательный аудит кодовой базы. Sentinel'овский цикл feedback → fix → next feedback это единственный надёжный путь к production-grade DX.
+
 ### v3.x Sentinel-derived improvements ✅
 
 Forensic audit of the Sentinel project (real consumer at /Users/work/apps/sentinel) revealed 14 concrete gaps where Railbase forced denormalisation, manual workarounds, or pivot-to-client. All addressed in this same branch:

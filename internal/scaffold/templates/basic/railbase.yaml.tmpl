@@ -1,18 +1,27 @@
 # {{.ProjectName}} — Railbase configuration.
 #
-# v0.2 reads only env vars. This file is here as documentation for
-# the v0.3+ yaml-config layer; setting values here today is a no-op.
-# Use environment variables instead:
+# Precedence (highest wins):
+#   1. CLI flags (--addr, --log-level, ...)
+#   2. Process env (RAILBASE_*)
+#   3. .env files (./.env, then <DataDir>/.env)
+#   4. This file (railbase.yaml — v0.4.1+ is honoured at boot)
+#   5. Built-in defaults
+#
+# Env var equivalents for the common knobs:
 #
 #   RAILBASE_DSN              postgres://... (required unless EMBED_POSTGRES)
 #   RAILBASE_EMBED_POSTGRES   true  (dev only)
-#   RAILBASE_HTTP_ADDR        :8090
+#   RAILBASE_HTTP_ADDR        :8095
 #   RAILBASE_LOG_LEVEL        debug | info | warn | error
 #   RAILBASE_LOG_FORMAT       json | text
 #   RAILBASE_PROD             true on production deploys
+#
+# Default port is :8095 — IANA-unassigned, no daemon collisions on
+# Linux/macOS/Windows. PocketBase uses :8090; we picked :8095
+# adjacent on purpose so muscle memory mostly works.
 
 http:
-  addr: ":8090"
+  addr: ":8095"
 
 db:
   # dsn: postgres://railbase:railbase@localhost:5432/{{.ProjectName}}?sslmode=disable

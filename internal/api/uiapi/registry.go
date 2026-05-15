@@ -173,7 +173,14 @@ func scan(f fs.FS) *registry {
 		r.manifest.Cn = string(b)
 	}
 	if b, err := fs.ReadFile(f, "src/styles.css"); err == nil {
-		r.manifest.Styles = string(b)
+		// v0.4.1 — strip the geist font import. The admin SPA pins
+		// `@fontsource-variable/geist` (admin/src/styles.css:10), but
+		// downstream `railbase ui init` consumers don't have that
+		// package in their package.json — emitting it unprefixed
+		// breaks Vite at startup. Closes Sentinel FEEDBACK.md #9.
+		// Operators who want the same font can `npm i
+		// @fontsource-variable/geist` and re-add the import.
+		r.manifest.Styles = stripGeistImport(string(b))
 	}
 
 	// Kit-base files — any src/lib/ui/*.{ts,tsx} that is NOT a
@@ -378,6 +385,27 @@ func classifyImports(c *Component, src string) {
 			}
 		}
 	}
+}
+
+// stripGeistImport removes the `@fontsource-variable/geist` @import
+// line from the styles.css blob before it ships to downstream
+// projects. The admin SPA needs the font; user projects don't, and
+// emitting the import breaks Vite at startup when the peer dep is
+// absent. v0.4.1 — closes Sentinel FEEDBACK.md #9.
+//
+// We strip just the exact line rather than a heuristic regex so that
+// any future intentional `@import` (e.g. `@import "tailwindcss"`)
+// stays intact.
+func stripGeistImport(css string) string {
+	lines := strings.Split(css, "\n")
+	out := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		if strings.Contains(ln, "@fontsource-variable/geist") {
+			continue
+		}
+		out = append(out, ln)
+	}
+	return strings.Join(out, "\n")
 }
 
 // sortedKeys is a tiny helper so we don't hand-roll the same loop in

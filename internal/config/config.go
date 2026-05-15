@@ -82,6 +82,26 @@ type Config struct {
 	//
 	// Auto-detected by Load() — operators don't set this directly.
 	SetupMode bool
+
+	// Pool tunables — operator-facing knobs for the pgx connection
+	// pool. Zero values fall back to the defaults in internal/db/pool
+	// (docs/03 spec: MaxConns = max(4, GOMAXPROCS*2), MinConns = 1,
+	// MaxConnLifetime = 1h, MaxConnIdleTime = 30m).
+	//
+	// Closes Sentinel FEEDBACK.md G2 — the scaffolded `railbase.yaml`
+	// shipped a `db.pool:` block before the config layer knew about
+	// the fields, so every boot logged "field pool not found in type
+	// config.yamlDBSection (continuing)". Now the block is honoured.
+	//
+	// Env equivalents:
+	//   RAILBASE_DB_MAX_CONNS          integer
+	//   RAILBASE_DB_MIN_CONNS          integer
+	//   RAILBASE_DB_MAX_CONN_LIFETIME  duration (1h, 30m, ...)
+	//   RAILBASE_DB_MAX_CONN_IDLE_TIME duration
+	DBMaxConns        int32
+	DBMinConns        int32
+	DBMaxConnLifetime time.Duration
+	DBMaxConnIdleTime time.Duration
 }
 
 // Default returns the baseline configuration with no env/flag overlay.
@@ -213,6 +233,37 @@ func Load() (Config, error) {
 			return c, fmt.Errorf("RAILBASE_DEV: %w", err)
 		}
 		c.DevMode = b
+	}
+	// Pool tunables (FEEDBACK G2). Parse as int64/duration and cap to
+	// int32 — pgxpool MaxConns/MinConns are int32. Negative or zero
+	// values stay as zero (pool layer applies the documented defaults).
+	if v := os.Getenv("RAILBASE_DB_MAX_CONNS"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 32)
+		if err != nil {
+			return c, fmt.Errorf("RAILBASE_DB_MAX_CONNS: %w", err)
+		}
+		c.DBMaxConns = int32(n)
+	}
+	if v := os.Getenv("RAILBASE_DB_MIN_CONNS"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 32)
+		if err != nil {
+			return c, fmt.Errorf("RAILBASE_DB_MIN_CONNS: %w", err)
+		}
+		c.DBMinConns = int32(n)
+	}
+	if v := os.Getenv("RAILBASE_DB_MAX_CONN_LIFETIME"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return c, fmt.Errorf("RAILBASE_DB_MAX_CONN_LIFETIME: %w", err)
+		}
+		c.DBMaxConnLifetime = d
+	}
+	if v := os.Getenv("RAILBASE_DB_MAX_CONN_IDLE_TIME"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return c, fmt.Errorf("RAILBASE_DB_MAX_CONN_IDLE_TIME: %w", err)
+		}
+		c.DBMaxConnIdleTime = d
 	}
 
 	// v1.7.39: consult the persisted DSN file BEFORE the zero-config
