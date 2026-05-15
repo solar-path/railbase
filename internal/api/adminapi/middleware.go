@@ -38,6 +38,8 @@ import (
 	"github.com/railbase/railbase/internal/admins"
 	authtoken "github.com/railbase/railbase/internal/auth/token"
 	rerr "github.com/railbase/railbase/internal/errors"
+	"github.com/railbase/railbase/internal/rbac"
+	"github.com/railbase/railbase/internal/rbac/actionkeys"
 )
 
 // AdminCookieName is the cookie set on /api/_admin/auth success. Kept
@@ -119,6 +121,43 @@ func RequireAdmin(next http.Handler) http.Handler {
 // — they need the raw token to rotate or revoke, which the middleware
 // doesn't expose post-lookup.
 func AdminTokenFromRequest(r *http.Request) (string, bool) { return extractAdminToken(r) }
+
+// requireAction wraps a handler with an RBAC gate. It enforces the
+// action key once the RequireAdmin gate has already passed, so calling
+// it on a handler outside the authenticated group is a no-op (the
+// resolved set is the guest set → denies everything anyway, but the
+// error envelope becomes a less-informative "rbac: not loaded" 500
+// rather than the 401 RequireAdmin emits).
+//
+// When Deps.RBAC is nil (rbac.Middleware not installed) the wrapper
+// FALLS OPEN — meaning it lets the request through. That preserves
+// the historical "any authenticated admin can do anything" contract
+// on deployments that haven't run migration 0029 or have explicitly
+// nil'd Deps.RBAC in tests. The migration is the one-line opt-in.
+//
+// Failure shape: 403 with a JSON body `{"error":"denied","action":"…"}`
+// matching the existing rerr envelope for forbidden actions.
+func requireAction(action actionkeys.ActionKey) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, err := rbac.Require(r.Context(), action)
+			if err == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// ErrNotLoaded => middleware not installed → fall open.
+			// The pre-v1.x contract is "any authenticated admin can do
+			// anything"; we don't want a missing migration to brick
+			// the admin UI.
+			if errors.Is(err, rbac.ErrNotLoaded) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			rerr.WriteJSON(w, rerr.New(rerr.CodeForbidden,
+				"rbac: action %q denied for this admin", string(action)))
+		})
+	}
+}
 
 func extractAdminToken(r *http.Request) (string, bool) {
 	if h := r.Header.Get("Authorization"); h != "" {

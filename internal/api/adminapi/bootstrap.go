@@ -14,6 +14,7 @@ import (
 	"github.com/railbase/railbase/internal/admins"
 	rerr "github.com/railbase/railbase/internal/errors"
 	"github.com/railbase/railbase/internal/jobs"
+	"github.com/railbase/railbase/internal/rbac"
 )
 
 // bootstrapProbeHandler reports whether the system has zero admins.
@@ -108,6 +109,20 @@ func (d *Deps) bootstrapCreateHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "session create"))
 		return
+	}
+	// v1.x — assign the new admin the site `system_admin` role so the
+	// rbac-gated handlers (PATCH /settings, etc.) recognise them as
+	// full-access. Best-effort: a failure here is LOGGED but does NOT
+	// fail bootstrap — the operator can re-assign via the role UI if
+	// the row goes missing. Without it, a fresh deployment would see
+	// the bootstrap admin denied at PATCH /settings, which would be a
+	// strictly worse UX than the pre-v1.x "any admin can do anything"
+	// behaviour.
+	if d.RBAC != nil {
+		if err := rbac.AssignSystemAdmin(r.Context(), d.RBAC, admin.ID); err != nil {
+			d.Log.Warn("bootstrap: failed to assign system_admin to new admin",
+				"admin_id", admin.ID, "err", err)
+		}
 	}
 	writeAuditOK(r.Context(), d, "admin.bootstrap", admin.ID, admin.Email, "", r)
 

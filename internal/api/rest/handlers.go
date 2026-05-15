@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -119,7 +120,14 @@ func (d *handlerDeps) recordURLFn(spec builder.CollectionSpec, row map[string]an
 	if id == "" {
 		return nil
 	}
-	ttl := d.filesDeps.URLTTL
+	// v1.x — pull TTL live per signer-builder invocation. Each call to
+	// this builder happens during a single response render, so reading
+	// it once at the top is fine (avoids divergence between siblings
+	// in the same JSON payload). New requests get the fresh value.
+	var ttl time.Duration
+	if d.filesDeps != nil && d.filesDeps.URLTTL != nil {
+		ttl = d.filesDeps.URLTTL()
+	}
 	if ttl == 0 {
 		ttl = 5 * 60 * 1_000_000_000 // 5 min as time.Duration value
 	}
@@ -549,6 +557,10 @@ func (d *handlerDeps) createHandler(w http.ResponseWriter, r *http.Request) {
 	// v1.3.0 realtime publish: fire AFTER the hook (so hooks can still
 	// mutate before subscribers see). nil-safe.
 	d.publishRecord(r, spec, realtime.VerbCreate, row)
+	// v3.x — auto-audit when CollectionSpec.Audit is on. No-op when
+	// off. Emitted post-commit so a failed insert never leaves a
+	// phantom audit row.
+	emitRecordAudit(r, d.audit, spec, recordVerbCreated, recordIDFromRow(row), nil, row)
 	buf, err := marshalRecordLoc(spec, row, d.recordURLFn(spec, row), requestLocaleFor(r.Context(), spec))
 	if err != nil {
 		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "marshal failed"))
@@ -598,6 +610,13 @@ func (d *handlerDeps) updateHandler(w http.ResponseWriter, r *http.Request) {
 		fields = evt.Record()
 	}
 
+	// Drop server-owned columns (sequential_code) up front: buildUpdate
+	// strips them anyway, so sizing the rule's placeholder offset off
+	// len(fields) without stripping first would desync the $N numbering
+	// (the rule would be numbered for columns that never hit the SET
+	// clause). Idempotent — buildUpdate re-strips defensively.
+	stripServerOwnedUpdateFields(spec, fields)
+
 	// Update placeholders run: $1..$N for SET, $(N+1) for id, then
 	// optional tenant fragment + rule. composeRowExtras chains them.
 	extras, err := composeRowExtras(r.Context(), spec, fctx, spec.Rules.Update, len(fields)+2)
@@ -612,6 +631,15 @@ func (d *handlerDeps) updateHandler(w http.ResponseWriter, r *http.Request) {
 		rerr.WriteJSON(w, qErr)
 		return
 	}
+	// v3.x Phase 1.5 — pre-image fetch for the v3 audit row. No-op
+	// when spec.Audit is off (short-circuit inside the helper) so
+	// non-audited collections pay zero cost. Best-effort: failure
+	// just means the audit row gets before=nil — UPDATE still
+	// proceeds. Reading BEFORE the UPDATE (not in the same tx)
+	// means a concurrent writer could shift the actual pre-image
+	// out from under us, but for audit purposes "what was visible
+	// to this request at the start" is the honest record.
+	auditBefore := fetchPreImage(r.Context(), q, spec, id)
 	// v1.5.12 AdjacencyList cycle/depth check on UPDATE. No-op if
 	// `parent` is not in the patch (no chain change).
 	if spec.AdjacencyList {
@@ -668,6 +696,9 @@ func (d *handlerDeps) updateHandler(w http.ResponseWriter, r *http.Request) {
 		_, _ = d.hooks.Dispatch(r.Context(), spec.Name, hooks.EventRecordAfterUpdate, row)
 	}
 	d.publishRecord(r, spec, realtime.VerbUpdate, row)
+	// v3.x — auto-audit with real before/after diff. auditBefore
+	// was captured before the UPDATE; row is the post-image.
+	emitRecordAudit(r, d.audit, spec, recordVerbUpdated, recordIDFromRow(row), auditBefore, row)
 	buf, err := marshalRecordLoc(spec, row, d.recordURLFn(spec, row), requestLocaleFor(r.Context(), spec))
 	if err != nil {
 		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "marshal failed"))
@@ -715,6 +746,10 @@ func (d *handlerDeps) deleteHandler(w http.ResponseWriter, r *http.Request) {
 		rerr.WriteJSON(w, qErr)
 		return
 	}
+	// v3.x Phase 1.5 — pre-image fetch for the v3 audit row. Same
+	// best-effort policy as updateHandler. Captured BEFORE the
+	// DELETE so the audit row records what was removed.
+	auditBefore := fetchPreImage(r.Context(), q, spec, id)
 	sql, args := buildDelete(spec, id, extras.Where, extras.Args)
 	var returned string
 	err = q.QueryRow(r.Context(), sql, args...).Scan(&returned)
@@ -743,6 +778,10 @@ func (d *handlerDeps) deleteHandler(w http.ResponseWriter, r *http.Request) {
 	// v1.3.0 realtime publish: delete event carries id only (no body
 	// after deletion). Subscribers correlate by id.
 	d.publishRecord(r, spec, realtime.VerbDelete, map[string]any{"id": id})
+	// v3.x — auto-audit with the captured pre-image. after is nil
+	// per delete semantics (the row is gone). entity_id carries the
+	// deleted id so the Timeline entity filter still hits.
+	emitRecordAudit(r, d.audit, spec, recordVerbDeleted, id, auditBefore, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

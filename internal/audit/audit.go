@@ -49,6 +49,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/railbase/railbase/internal/security"
 )
 
 // Outcome is the small enum of what an event resolved to.
@@ -79,11 +81,24 @@ type Event struct {
 
 // Writer is the persistence handle. Use NewWriter once on boot and
 // share for the lifetime of the process. Goroutine-safe.
+//
+// v3.x dual-write: when AttachStore is called, every Write also
+// forwards the event into the v3 Store (mapped onto site vs tenant
+// by tenant_id). This lets us migrate every legacy call-site to the
+// v3 timeline WITHOUT touching their code — each one keeps calling
+// the legacy Writer and the v3 tables fill in parallel. Phase 1.5
+// will detach the store and port call-sites to the Store directly.
 type Writer struct {
 	pool *pgxpool.Pool
 
 	mu       sync.Mutex // serialises hash-chain advancement
 	prevHash []byte     // last row's hash; 32 zero bytes before first write
+
+	// store is the optional v3 dual-write sink. Atomic-ish access:
+	// we set it once on boot via AttachStore + read it on every
+	// Write under the chain mutex, so plain field access is safe.
+	// Nil store ⇒ legacy-only (tests, pre-v3 deployments).
+	store *Store
 }
 
 // NewWriter constructs a Writer. The Bootstrap call (next) loads the
@@ -94,6 +109,25 @@ func NewWriter(pool *pgxpool.Pool) *Writer {
 		pool:     pool,
 		prevHash: make([]byte, 32), // genesis: all zeros
 	}
+}
+
+// AttachStore wires the v3 Store as a dual-write sink. Idempotent;
+// nil-safe (passing nil detaches). Called once on boot from
+// pkg/railbase/app.go after both Writer and Store are constructed.
+// Goroutine-safe because writes that observe the new pointer just
+// fan out to one more sink — no read-modify-write race.
+func (w *Writer) AttachStore(s *Store) { w.store = s }
+
+// Store returns the attached v3 Store, or nil if AttachStore was
+// never called. Lets call-sites that have a Writer reference also
+// reach the richer v3 surface (e.g. for Entity-shaped writes that
+// the legacy Event struct can't carry) without plumbing a second
+// dependency.
+func (w *Writer) Store() *Store {
+	if w == nil {
+		return nil
+	}
+	return w.store
 }
 
 // Bootstrap reads the last row's hash so subsequent writes link onto
@@ -188,7 +222,117 @@ func (w *Writer) Write(ctx context.Context, e Event) (uuid.UUID, error) {
 		return uuid.Nil, fmt.Errorf("audit: insert: %w", err)
 	}
 	w.prevHash = hash
+
+	// v3.x dual-write — fan the same event into the unified Store so
+	// the Logs → Timeline UI picks it up without touching the
+	// call-site. Site vs tenant target picked by TenantID; actor
+	// derived from UserCollection. Errors are SWALLOWED — the legacy
+	// chain is authoritative during Phase 1; the v3 write is best-
+	// effort. Once every call-site is ported (Phase 1.5) the legacy
+	// Write becomes a thin shim that just forwards to the Store.
+	if w.store != nil {
+		_ = forwardToStore(ctx, w.store, id, at, e, beforeJSON, afterJSON)
+	}
 	return id, nil
+}
+
+// forwardToStore mirrors one legacy Event into the v3 Store. Maps
+// UserCollection onto ActorType:
+//
+//	"_admins"      → ActorAdmin
+//	"_api_tokens"  → ActorAPIToken
+//	"" + UserID=0  → ActorSystem
+//	tenant write   → ActorUser  (collection-suffixed in actor_collection)
+//	other          → ActorUser  (tenant) / ActorAdmin (site, fallback)
+//
+// TenantID != Nil routes to _audit_log_tenant; otherwise site.
+//
+// The function reuses the legacy event's redacted before/after bytes
+// — no double-redaction, no extra allocations.
+func forwardToStore(ctx context.Context, s *Store, _ uuid.UUID, _ time.Time, e Event, beforeJSON, afterJSON []byte) error {
+	// Tenant write?
+	if e.TenantID != uuid.Nil {
+		actor := classifyActorForTenant(e.UserCollection)
+		_, err := s.WriteTenant(ctx, TenantEvent{
+			TenantID:        e.TenantID,
+			ActorType:       actor,
+			ActorID:         e.UserID,
+			ActorCollection: e.UserCollection,
+			Event:           e.Event,
+			Outcome:         e.Outcome,
+			Before:          rawIfNonEmpty(beforeJSON),
+			After:           rawIfNonEmpty(afterJSON),
+			ErrorCode:       e.ErrorCode,
+			IP:              e.IP,
+			UserAgent:       e.UserAgent,
+		})
+		return err
+	}
+	// Site write.
+	actor := classifyActorForSite(e.UserCollection, e.UserID)
+	_, err := s.WriteSite(ctx, SiteEvent{
+		ActorType:       actor,
+		ActorID:         e.UserID,
+		ActorCollection: e.UserCollection,
+		Event:           e.Event,
+		Outcome:         e.Outcome,
+		Before:          rawIfNonEmpty(beforeJSON),
+		After:           rawIfNonEmpty(afterJSON),
+		ErrorCode:       e.ErrorCode,
+		IP:              e.IP,
+		UserAgent:       e.UserAgent,
+	})
+	return err
+}
+
+func classifyActorForSite(coll string, userID uuid.UUID) ActorType {
+	switch coll {
+	case "_admins":
+		return ActorAdmin
+	case "_api_tokens":
+		return ActorAPIToken
+	case "":
+		if userID == uuid.Nil {
+			return ActorSystem
+		}
+		// Empty collection + non-nil user usually means a system-
+		// initiated event with denormalised id (rare). Treat as
+		// admin so the UI doesn't render it as anonymous.
+		return ActorAdmin
+	default:
+		// User-collection events on the site surface are rare but
+		// possible (forgot-password, signup before tenant context
+		// exists). Map to ActorAdmin as a safe fallback — the
+		// actor_collection column preserves the original collection
+		// for forensics.
+		return ActorAdmin
+	}
+}
+
+func classifyActorForTenant(coll string) ActorType {
+	switch coll {
+	case "_admins":
+		return ActorAdmin
+	case "_api_tokens":
+		return ActorAPIToken
+	case "":
+		return ActorSystem
+	default:
+		// Anything else (users, oauth_users, scim_users, …) is a
+		// human acting through a user collection — ActorUser.
+		return ActorUser
+	}
+}
+
+// rawIfNonEmpty returns the bytes as a json.RawMessage when present,
+// else nil. The Store's redactJSON would re-marshal and re-redact
+// otherwise — keeping the legacy-redacted bytes preserves a single
+// canonical form across both chains.
+func rawIfNonEmpty(b []byte) any {
+	if len(b) == 0 {
+		return nil
+	}
+	return json.RawMessage(b)
 }
 
 // Verify walks the chain from seq=1 forward and returns ErrChainBroken
@@ -595,8 +739,10 @@ type verifyRow struct {
 // passes through. Future versions can tighten by tagging fields
 // with `rb:"secret"` (requires reflection).
 //
-// v0.6 redacts top-level keys named "password", "password_hash",
-// "token", "token_key", "secret_key", "totp_secret", "secret".
+// The matching rule is centralised in `internal/security.IsSensitiveKey`
+// so every audit / log path uses the SAME definition of "credential
+// field" — adding a new credential family (e.g. `*_token`) immediately
+// covers audit payloads, structured logs, and any future filter.
 // Bearer tokens get the prefix-only treatment via separate logic
 // upstream when they're already extracted.
 func redactJSON(v any) ([]byte, error) {
@@ -627,13 +773,11 @@ func redact(v any) {
 		return
 	}
 	for k, vv := range m {
-		switch k {
-		case "password", "password_hash", "token", "token_key",
-			"secret_key", "totp_secret", "secret":
+		if security.IsSensitiveKey(k) {
 			m[k] = "[REDACTED]"
-		default:
-			redact(vv)
+			continue
 		}
+		redact(vv)
 	}
 }
 

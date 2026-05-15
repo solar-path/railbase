@@ -96,8 +96,8 @@ func TestFilesFlowE2E(t *testing.T) {
 		Driver:    driver,
 		Store:     files.NewStore(pool),
 		Signer:    []byte("test-signing-key-32-bytes-min!!!!"),
-		URLTTL:    1 * time.Minute,
-		MaxUpload: 5 << 20,
+		URLTTL:    StaticTTL(1 * time.Minute),
+		MaxUpload: StaticMaxUpload(5 << 20),
 	}
 
 	r := chi.NewRouter()

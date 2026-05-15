@@ -180,6 +180,53 @@ func TestIPFilterMiddleware_XFFOnlyWithTrustedProxy(t *testing.T) {
 	}
 }
 
+func TestIPFilterMiddleware_TrustedProxiesLiveUpdate(t *testing.T) {
+	// Phase 2c — `security.trusted_proxies` live: an atomic swap
+	// flips which hops are trusted for XFF walking without rebuilding
+	// the filter or restarting the process.
+	f, err := NewIPFilter(nil) // boot with empty list
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Update(nil, []string{"203.0.113.0/24"})
+	h := f.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+
+	build := func() *http.Request {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = "10.1.1.1:12345"
+		req.Header.Set("X-Forwarded-For", "203.0.113.5")
+		return req
+	}
+
+	// Initially trustedProxies is empty → XFF ignored → request passes.
+	rec1 := httptest.NewRecorder()
+	h.ServeHTTP(rec1, build())
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("pre-update: expected 200 (XFF ignored), got %d", rec1.Code)
+	}
+
+	// Operator adds the proxy CIDR live via UpdateTrustedProxies.
+	if err := f.UpdateTrustedProxies([]string{"10.0.0.0/8"}); err != nil {
+		t.Fatal(err)
+	}
+	// Same request now has its XFF walked → 203.0.113.5 in deny → 403.
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, build())
+	if rec2.Code != http.StatusForbidden {
+		t.Errorf("post-update: expected 403 (XFF now honoured + in deny), got %d", rec2.Code)
+	}
+
+	// Flipping back to empty re-disables XFF walking without restart.
+	if err := f.UpdateTrustedProxies(nil); err != nil {
+		t.Fatal(err)
+	}
+	rec3 := httptest.NewRecorder()
+	h.ServeHTTP(rec3, build())
+	if rec3.Code != http.StatusOK {
+		t.Errorf("post-clear: expected 200 again, got %d", rec3.Code)
+	}
+}
+
 func TestIPFilterMiddleware_EmptyRulesPassthrough(t *testing.T) {
 	f, _ := NewIPFilter(nil)
 	h := f.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -9,12 +9,18 @@ import { DashboardScreen } from "./screens/dashboard";
 import { SchemaScreen } from "./screens/schema";
 import { SettingsScreen } from "./screens/settings";
 import { LogsScreen } from "./screens/logs";
+import {
+  ProcessLogsScreen,
+  MailerDeliveriesScreen,
+  NotificationsLogScreen,
+} from "./screens/deep_dive_views";
 import { BackupsScreen } from "./screens/backups";
 import { NotificationsPrefsScreen } from "./screens/notifications-prefs";
 import { TrashScreen } from "./screens/trash";
 import { MailerTemplatesScreen } from "./screens/mailer_templates";
 import { MailerConfigScreen } from "./screens/mailer_config";
 import { AuthMethodsScreen } from "./screens/auth_methods";
+import { AdminsRolesScreen } from "./screens/admins_roles";
 import { RealtimeScreen } from "./screens/realtime";
 import { WebhooksScreen } from "./screens/webhooks";
 import { HooksScreen } from "./screens/hooks";
@@ -92,15 +98,23 @@ function Routes() {
             mapping. */}
 
         {/* --- Redirects (pre-v0.9 URLs → new locations) --- */}
-        <Route path="/audit" component={makeRedirect("/logs/audit")} />
-        <Route path="/logs" component={makeRedirect("/logs/app")} />
+        <Route path="/audit" component={makeRedirect("/logs/timeline")} />
+        <Route path="/logs" component={makeRedirect("/logs/timeline")} />
         <Route path="/realtime" component={makeRedirect("/logs/realtime")} />
         <Route path="/health" component={makeRedirect("/logs/health")} />
         <Route path="/cache" component={makeRedirect("/logs/cache")} />
         <Route path="/notifications/prefs" component={makeRedirect("/settings/notifications")} />
-        <Route path="/notifications" component={makeRedirect("/logs/notifications")} />
-        <Route path="/email-events" component={makeRedirect("/logs/email-events")} />
-        <Route path="/mailer/events" component={makeRedirect("/logs/email-events")} />
+        {/* v3.x unified-audit reorg — deep-dive views moved out of
+            Logs. App logs → Health → Process logs; email events →
+            Settings → Mailer → Deliveries; notifications log →
+            Settings → Notifications → Log. */}
+        <Route path="/logs/app" component={makeRedirect("/health/process-logs")} />
+        <Route path="/logs/email-events" component={makeRedirect("/settings/mailer/deliveries")} />
+        <Route path="/logs/notifications" component={makeRedirect("/settings/notifications/log")} />
+        <Route path="/logs/audit" component={makeRedirect("/logs/timeline")} />
+        <Route path="/notifications" component={makeRedirect("/settings/notifications/log")} />
+        <Route path="/email-events" component={makeRedirect("/settings/mailer/deliveries")} />
+        <Route path="/mailer/events" component={makeRedirect("/settings/mailer/deliveries")} />
         <Route path="/mailer-templates" component={makeRedirect("/settings/mailer/templates")} />
         <Route path="/mailer/templates" component={makeRedirect("/settings/mailer/templates")} />
         <Route path="/mailer" component={makeRedirect("/settings/mailer")} />
@@ -146,11 +160,18 @@ function Routes() {
         <Route path="/logs/cache" component={CacheScreen} />
         <Route path="/logs/:category" component={LogsScreen} />
 
+        {/* v3.x deep-dive views (moved out of Logs by the unified-
+            audit reorg — see docs/19-unified-audit.md). */}
+        <Route path="/health/process-logs" component={ProcessLogsScreen} />
+        <Route path="/settings/mailer/deliveries" component={MailerDeliveriesScreen} />
+        <Route path="/settings/notifications/log" component={NotificationsLogScreen} />
+
         {/* Settings */}
         <Route path="/settings" component={SettingsScreen} />
         <Route path="/settings/mailer" component={MailerConfigScreen} />
         <Route path="/settings/mailer/templates" component={MailerTemplatesScreen} />
         <Route path="/settings/auth" component={AuthMethodsScreen} />
+        <Route path="/settings/admins" component={AdminsRolesScreen} />
         <Route path="/settings/notifications" component={NotificationsPrefsScreen} />
         <Route path="/settings/webhooks" component={WebhooksScreen} />
         <Route path="/settings/stripe" component={StripeScreen} />

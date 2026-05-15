@@ -5,18 +5,15 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/railbase/railbase/internal/api/rest"
 	"github.com/railbase/railbase/internal/auth/secret"
 	"github.com/railbase/railbase/internal/files"
+	"github.com/railbase/railbase/internal/runtimeconfig"
 	"github.com/railbase/railbase/internal/settings"
 )
-
-func strconvParseInt64(s string) (int64, error) { return strconv.ParseInt(s, 10, 64) }
 
 // buildFilesDeps wires the v1.3.1 file storage subsystem.
 //
@@ -26,15 +23,18 @@ func strconvParseInt64(s string) (int64, error) { return strconv.ParseInt(s, 10,
 //	2. `RAILBASE_STORAGE_DIR` env
 //	3. `<dataDir>/storage` (default)
 //
-// Returns a *rest.FilesDeps with Driver/Store/Signer populated AND
-// the resolved storage directory (so the orphan_reaper builtin and
-// any other subsystem can walk the same tree the driver writes to).
-// Never returns nil for FilesDeps — even on error, callers get a
-// deps struct whose Driver is nil (handlers respond 503 cleanly);
-// the dir string is empty in that error case.
+// `storage.dir` is BOOT-TIME ONLY by design — changing the storage
+// root at runtime is a stateful operation (what happens to existing
+// uploads? does the FSDriver close + reopen?) that doesn't belong in
+// the live-reload contract. The env-var path stays as the operator's
+// pre-boot override; the admin UI will stop showing this knob in
+// Phase 4.
 //
-// v1.3.x will add an S3 driver swap-in here; v1.3.1 is FSDriver-only.
-func buildFilesDeps(ctx context.Context, mgr *settings.Manager, dataDir string, masterKey secret.Key, pool *pgxpool.Pool, log *slog.Logger) (*rest.FilesDeps, string, error) {
+// v1.x — URLTTL and MaxUpload are LIVE via runtimeconfig. We pass
+// method values into FilesDeps so the file handler reads the current
+// value on every request. An admin Settings UI edit takes effect on
+// the next call with no restart.
+func buildFilesDeps(ctx context.Context, mgr *settings.Manager, runtimeCfg *runtimeconfig.Config, dataDir string, masterKey secret.Key, pool *pgxpool.Pool, log *slog.Logger) (*rest.FilesDeps, string, error) {
 	dir := readSetting(ctx, mgr, "storage.dir", "RAILBASE_STORAGE_DIR", "")
 	if dir == "" {
 		dir = filepath.Join(dataDir, "storage")
@@ -56,32 +56,14 @@ func buildFilesDeps(ctx context.Context, mgr *settings.Manager, dataDir string, 
 	}
 	log.Info("files: FS driver mounted", "dir", dir)
 
-	// TTL knobs from settings; defaults match the rest.MountFiles
-	// fallback (5 min URL, 25 MiB upload ceiling).
-	ttl := 5 * time.Minute
-	if v := readSetting(ctx, mgr, "storage.url_ttl", "RAILBASE_STORAGE_URL_TTL", ""); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			ttl = d
-		} else {
-			log.Warn("files: bad storage.url_ttl, falling back to 5m", "v", v)
-		}
-	}
-	var maxUpload int64 = 25 << 20
-	if v := readSetting(ctx, mgr, "storage.max_upload_bytes", "RAILBASE_STORAGE_MAX_UPLOAD", ""); v != "" {
-		if n, err := strconvParseInt64(v); err == nil && n > 0 {
-			maxUpload = n
-		} else {
-			log.Warn("files: bad storage.max_upload_bytes, falling back to 25MiB", "v", v)
-		}
-	}
-
 	signer := make([]byte, len(masterKey))
 	copy(signer, masterKey[:])
 	return &rest.FilesDeps{
-		Driver:    driver,
-		Store:     files.NewStore(pool),
-		Signer:    signer,
-		URLTTL:    ttl,
-		MaxUpload: maxUpload,
+		Driver: driver,
+		Store:  files.NewStore(pool),
+		Signer: signer,
+		// Live method values — the handler calls these per-request.
+		URLTTL:    runtimeCfg.StorageURLTTL,
+		MaxUpload: runtimeCfg.MaxUploadBytes,
 	}, dir, nil
 }

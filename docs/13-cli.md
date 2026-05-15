@@ -145,14 +145,37 @@ railbase documents extract-text [--all | --document <id>]
 
 ```
 railbase audit verify
-  Verify hash chain integrity (если sealing enabled).
+  Walk hash chains end-to-end + verify Ed25519 seals where present.
+  Reports the first row whose recomputed hash doesn't match.
 
-railbase audit seal
-  Manual seal hash chain (signs latest hash с Ed25519).
+railbase audit seal-keygen [--force]
+  Write a fresh Ed25519 keypair to <dataDir>/.audit_seal_key
+  (chmod 0600). Refuses to overwrite without --force — historical
+  seals still verify against their persisted public_key, but new
+  seals shift to the new key.
 
 railbase audit export [--from <date>] [--to <date>] --out <file>
   Export audit log to JSON/CSV.
 ```
+
+#### Chain coverage (v3.x)
+
+`audit verify` currently walks the **legacy `_audit_log`** chain
+(chain v1). The v3.x split tables — `_audit_log_site` and
+`_audit_log_tenant` — have their own per-table chains, verified
+through Store APIs (`audit.Store.VerifySite` / `VerifyTenant`).
+
+**Phase 1**: the CLI's `audit verify` reports on chain v1 only. The
+v3 chains are write-path verified (chain advances atomically with
+each insert, broken chains surface immediately as failed writes) and
+read-path verifiable through the admin UI Timeline filter for
+`outcome=denied|error` rows.
+
+**Phase 1.5 plan**: extend `audit verify` to walk all three chains
+(legacy + site + per-tenant), with `--target=site|tenant|legacy|all`
+flag. Until then, deployments needing forensic-grade tamper-evidence
+should stay on legacy writers (the `Writer.AttachStore` dual-write
+keeps both chains in sync).
 
 ### Auth helpers
 

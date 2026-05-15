@@ -58,10 +58,17 @@ import (
 //
 // Production toggles auto-create on missing-key: false => create one
 // (dev mode); true => return an error so the operator notices.
+//
+// Signer, when set, REPLACES the local-keyfile path entirely. Used by
+// regulated deployments that hold the seal key in AWS KMS / Cloud HSM
+// (Phase 4 — see signer.go). When Signer != nil, KeyPath and
+// Production are ignored. The Signer's PublicKey() is captured for
+// each emitted seal row.
 type SealerOptions struct {
 	Pool       *pgxpool.Pool
 	KeyPath    string
 	Production bool
+	Signer     Signer
 }
 
 // Sealer signs successive ranges of the audit-log hash chain.
@@ -69,20 +76,24 @@ type SealerOptions struct {
 // SealUnsealed sequentially, but Verify is read-only and safe to call
 // concurrently from `railbase audit verify`.
 type Sealer struct {
-	pool       *pgxpool.Pool
-	privateKey ed25519.PrivateKey
-	publicKey  ed25519.PublicKey
+	pool   *pgxpool.Pool
+	signer Signer
 }
 
 // NewSealer constructs a Sealer from opts. It loads (or, in dev,
-// generates) the Ed25519 keypair from disk. Returns an error if:
+// generates) the Ed25519 keypair from disk — UNLESS opts.Signer is
+// non-nil, in which case it adopts that signer directly. Returns an
+// error if:
 //   - opts.Pool is nil
-//   - opts.KeyPath is empty
+//   - opts.Signer is nil AND opts.KeyPath is empty
 //   - the key file is missing and opts.Production is true
 //   - the key file exists but has wrong size / can't be read
 func NewSealer(opts SealerOptions) (*Sealer, error) {
 	if opts.Pool == nil {
 		return nil, errors.New("audit: sealer: pool is nil")
+	}
+	if opts.Signer != nil {
+		return &Sealer{pool: opts.Pool, signer: opts.Signer}, nil
 	}
 	if opts.KeyPath == "" {
 		return nil, errors.New("audit: sealer: key path empty")
@@ -91,19 +102,16 @@ func NewSealer(opts SealerOptions) (*Sealer, error) {
 	if err != nil {
 		return nil, err
 	}
-	pub, ok := priv.Public().(ed25519.PublicKey)
-	if !ok {
-		// Should be impossible given ed25519.PrivateKey contract, but the
-		// type assertion guards against future refactors that swap the
-		// concrete key type.
-		return nil, errors.New("audit: sealer: derived public key is not ed25519.PublicKey")
+	signer, err := newLocalSigner(priv)
+	if err != nil {
+		return nil, err
 	}
-	return &Sealer{pool: opts.Pool, privateKey: priv, publicKey: pub}, nil
+	return &Sealer{pool: opts.Pool, signer: signer}, nil
 }
 
 // PublicKey returns the active public key. Exposed so admin tooling
 // can print it for backup / out-of-band publication.
-func (s *Sealer) PublicKey() ed25519.PublicKey { return s.publicKey }
+func (s *Sealer) PublicKey() ed25519.PublicKey { return s.signer.PublicKey() }
 
 // SealUnsealed walks `_audit_log` rows whose `at` is strictly greater
 // than the last seal's `range_end` (or all rows when no seals exist
@@ -173,7 +181,10 @@ func (s *Sealer) SealUnsealed(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	signature := ed25519.Sign(s.privateKey, chainHead)
+	signature, err := s.signer.Sign(chainHead)
+	if err != nil {
+		return 0, fmt.Errorf("audit: sealer: sign: %w", err)
+	}
 
 	// range_start = previous seal's range_end (or firstAt's predecessor
 	// when this is the very first seal — we use firstAt directly there
@@ -187,7 +198,7 @@ func (s *Sealer) SealUnsealed(ctx context.Context) (int, error) {
 		INSERT INTO _audit_seals
 			(range_start, range_end, row_count, chain_head, signature, public_key)
 		VALUES ($1, $2, $3, $4, $5, $6)`,
-		rangeStart, lastAt, int64(rowCount), chainHead, signature, []byte(s.publicKey),
+		rangeStart, lastAt, int64(rowCount), chainHead, signature, []byte(s.signer.PublicKey()),
 	); err != nil {
 		return 0, fmt.Errorf("audit: sealer: insert seal: %w", err)
 	}

@@ -38,11 +38,11 @@ const (
 	AuthPasswordReset ActionKey = "auth.password_reset"
 
 	// MFA surface.
-	TOTPEnroll      ActionKey = "totp.enroll"
-	TOTPDisable     ActionKey = "totp.disable"
-	WebAuthnEnroll  ActionKey = "webauthn.enroll"
-	WebAuthnLogin   ActionKey = "webauthn.login"
-	WebAuthnDelete  ActionKey = "webauthn.delete"
+	TOTPEnroll     ActionKey = "totp.enroll"
+	TOTPDisable    ActionKey = "totp.disable"
+	WebAuthnEnroll ActionKey = "webauthn.enroll"
+	WebAuthnLogin  ActionKey = "webauthn.login"
+	WebAuthnDelete ActionKey = "webauthn.delete"
 
 	// Admin surface.
 	AdminsList    ActionKey = "admins.list"
@@ -64,6 +64,17 @@ const (
 	MailerTest    ActionKey = "mailer.test"
 	RBACRead      ActionKey = "rbac.read"
 	RBACWrite     ActionKey = "rbac.write"
+
+	// Database restore — irreversible destructive op (TRUNCATE CASCADE
+	// across every restored table). Deliberately NOT held by
+	// system_readonly nor by an arbitrary system_admin grant by name —
+	// bypass roles (site:system_admin) still pass, but operators
+	// downgrading admins to `system_readonly` lose restore power, and a
+	// custom role wanting restore-but-not-everything-else must mint a
+	// fresh grant. Paired with RAILBASE_ENABLE_UI_RESTORE env-flag at
+	// the handler level: the action key is necessary AND the deployment
+	// must opt into UI-side restore at all.
+	AdminBackupRestore ActionKey = "admin.backup.restore"
 
 	// Tenant-scoped actions (granted via tenant roles, not site roles).
 	TenantMembersList   ActionKey = "tenant.members.list"

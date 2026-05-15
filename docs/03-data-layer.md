@@ -1557,6 +1557,68 @@ GET    /api/collections/posts/trash                      # admin trash view
 
 ---
 
+## Per-collection audit (v3.x)
+
+PB пишет audit только на security-events. Railbase v3.x добавляет
+**opt-in per-collection auto-audit** — каждый Create / Update / Delete
+на коллекции с `.Audit()` automatically эмитит row в unified
+timeline (см. `19-unified-audit.md`).
+
+```go
+schema.Collection("vendors").
+    Audit().                         // ← opt-in CRUD auto-audit
+    Field("name", schema.String().Required()).
+    Field("status", schema.String())
+```
+
+### Поведение
+
+REST CRUD handlers (`internal/api/rest/handlers.go`) после `tx.Commit`
+вызывают `emitRecordAudit(r, d.audit, spec, verb, recordID, before, after)`
+— см. `internal/api/rest/audit_record.go`. Эмит идёт через legacy
+`audit.Writer` (с attached v3 Store), поэтому routing site/tenant
+делается автоматически по `spec.Tenant`:
+
+| spec.Tenant | Куда пишется | Chain |
+|---|---|---|
+| `true` | `_audit_log_tenant` (RLS scope) | per-tenant chain |
+| `false` | `_audit_log_site` | global site chain |
+
+Shape:
+
+```
+event:        "<collection>.created" | "<collection>.updated" | "<collection>.deleted"
+entity_type:  "<collection>"
+entity_id:    <record.id>
+actor:        from ctx Principal (PrincipalFrom — admin / user / api_token / system)
+before:       create=nil, update=nil (pre-image fetch — Phase 1.5), delete=nil
+after:        create=row, update=post-image, delete=nil
+outcome:      success (failures don't reach post-commit)
+```
+
+### Когда **не** включать
+
+- **`sessions`, `_admin_sessions`, `_sessions`** — high-frequency churn, chain cost не оправдан.
+- **Ephemeral lookup collections** — кешевые данные, дубль audit'а в общем потоке.
+- **Soft-delete restore** — `restoreHandler` пишет свой явный audit; auto-CRUD на restore был бы дубль.
+
+### Off by default
+
+Без `.Audit()` REST handlers вообще не вызывают audit writer
+(zero-cost short-circuit в `emitRecordAudit`). Включай явно для
+business-critical коллекций: orders, vendors, contracts, settings.
+
+### Auth + Tenant сочетания
+
+| Combo | Что попадает в timeline |
+|---|---|
+| `.Audit()` | site events с `actor_type=admin` (если admin REST) |
+| `.Audit().Tenant()` | tenant events с RLS, actor любого типа |
+| `.Audit().SoftDelete()` | DELETE → `*.deleted` event с `actor_type=admin` или `user` |
+| `.Audit().Auth()` | разрешено, но auth collections используют свои dedicated endpoints (`/auth-*`), которые пишут audit явно — `.Audit()` дублировал бы |
+
+---
+
 ## Batch operations
 
 PB feature `apis/batch.go`. Атомарный multi-record API.

@@ -233,29 +233,25 @@ func combineDetails(beforeJSON, afterJSON string) string {
 // (transient DB error, etc.) can't kill an otherwise-successful
 // export. This is the same fire-and-forget convention as the
 // emitExportAudit helper in the rest package.
+//
+// v3.x — entity_type="audit_export". No entity_id (export covers a
+// filter range, not a single resource). After payload carries the
+// filter snapshot + row count.
 func (d *Deps) emitAuditExportRow(ctx context.Context, r *http.Request,
 	f audit.ListFilter, outcome audit.Outcome, errCode string,
 	rows int, truncated bool,
 ) {
-	if d == nil || d.Audit == nil {
-		return
-	}
-	principal := AdminPrincipalFrom(r.Context())
-	after := map[string]any{
-		"rows":       rows,
-		"truncated":  truncated,
-		"filter":     filterSnapshot(f),
-	}
-	_, _ = d.Audit.Write(ctx, audit.Event{
-		UserID:         principal.AdminID,
-		UserCollection: "_admins",
-		Event:          "audit.exported",
-		Outcome:        outcome,
-		After:          after,
-		ErrorCode:      errCode,
-		IP:             clientIP(r),
-		UserAgent:      r.Header.Get("User-Agent"),
-	})
+	writeAuditEntity(ctx, d, EntityAuditInput{
+		Event:      "audit.exported",
+		EntityType: "audit_export",
+		Outcome:    outcome,
+		After: map[string]any{
+			"rows":      rows,
+			"truncated": truncated,
+			"filter":    filterSnapshot(f),
+		},
+		ErrorCode: errCode,
+	}, r)
 }
 
 // filterSnapshot reduces an audit.ListFilter to the subset of fields

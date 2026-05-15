@@ -813,6 +813,71 @@ func RegisterAuditSealBuiltins(reg *Registry, sealer AuditSealer, log *slog.Logg
 	})
 }
 
+// AuditPartitioner is the surface the `audit_partition` builtin needs
+// from the audit subsystem. Lives here (not importing
+// `internal/audit`) so the jobs package stays decoupled — the
+// dependency arrow points inward.
+//
+// EnsurePartitions creates monthly partitions of `_audit_log_site` +
+// `_audit_log_tenant` for the current month through PartitionWindow
+// months ahead. Idempotent.
+type AuditPartitioner interface {
+	EnsurePartitions(ctx context.Context) error
+}
+
+// RegisterAuditPartitionBuiltin installs the `audit_partition`
+// handler. Pre-creates next month's partition before a boundary-
+// crossing insert would otherwise fall through to `_default` (which
+// cannot be archived). Cheap no-op when partitions already exist.
+func RegisterAuditPartitionBuiltin(reg *Registry, partitioner AuditPartitioner, log *slog.Logger) {
+	if partitioner == nil {
+		return
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	reg.Register("audit_partition", func(ctx context.Context, j *Job) error {
+		if err := partitioner.EnsurePartitions(ctx); err != nil {
+			return fmt.Errorf("audit_partition: %w", err)
+		}
+		log.Info("jobs: audit_partition: partitions ensured")
+		return nil
+	})
+}
+
+// AuditArchiver is the surface the `audit_archive` builtin needs.
+// Archive sweeps every monthly partition older than the retention
+// window, streams its rows to a gzipped JSONL file, writes a seal
+// manifest, then DROPs the partition. Returns a summary the cron
+// log emits.
+type AuditArchiver interface {
+	Archive(ctx context.Context) (partitionsArchived int, rowsArchived int64, bytesWritten int64, err error)
+}
+
+// RegisterAuditArchiveBuiltin installs the `audit_archive` handler.
+// Runs after `audit_seal` so the seal table covers everything we
+// archive — partitions without a covering seal are skipped this run
+// and picked up on the next.
+func RegisterAuditArchiveBuiltin(reg *Registry, archiver AuditArchiver, log *slog.Logger) {
+	if archiver == nil {
+		return
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	reg.Register("audit_archive", func(ctx context.Context, j *Job) error {
+		parts, rows, bytes, err := archiver.Archive(ctx)
+		if err != nil {
+			return fmt.Errorf("audit_archive: %w", err)
+		}
+		log.Info("jobs: audit_archive",
+			"partitions_archived", parts,
+			"rows_archived", rows,
+			"bytes_written", bytes)
+		return nil
+	})
+}
+
 // NotificationFlusher is the surface the `flush_deferred_notifications`
 // builtin needs from the notifications subsystem. Lives here (rather
 // than importing `internal/notifications`) so the jobs package stays
@@ -913,6 +978,26 @@ func DefaultSchedules() []DefaultSchedule {
 			Name:       "audit_seal",
 			Expression: "0 5 * * *", // 05:00 daily
 			Kind:       "audit_seal",
+		},
+		{
+			// v3.x Phase 2 — partition pre-creation. Runs late so the
+			// next month's partition exists well before midnight UTC
+			// at month-end. Idempotent — no-op when partitions already
+			// exist, so a missed run is recovered on the next tick.
+			Name:       "audit_partition",
+			Expression: "55 23 * * *", // 23:55 daily
+			Kind:       "audit_partition",
+		},
+		{
+			// v3.x Phase 2 — sealed-segment archive sweep. Runs AFTER
+			// audit_seal (05:00) so the partitions about to be
+			// archived have their Ed25519 signature already covering
+			// them. Drops partitions older than the retention window
+			// (default 14 days) after writing them to gzipped JSONL +
+			// .seal.json manifest.
+			Name:       "audit_archive",
+			Expression: "0 6 * * *", // 06:00 daily
+			Kind:       "audit_archive",
 		},
 		{
 			// v1.7.34 — quiet-hours + digest flush. */5 cadence so a

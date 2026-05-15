@@ -10,14 +10,24 @@ import type {
   SchemaResponse,
   SettingsListResponse,
   AuditListResponse,
+  AuditTimelineResponse,
   LogsListResponse,
   JobsListResponse,
   APIToken,
   APITokensListResponse,
   APITokenCreatedResponse,
   BackupsListResponse,
+  BackupsCapabilities,
+  BackupsRestoreDryRunResponse,
+  BackupsRestoreBody,
+  BackupsRestoreResponse,
   CacheListResponse,
   BackupCreatedResponse,
+  CronSchedule,
+  CronListResponse,
+  CronKindsResponse,
+  CronUpsertBody,
+  CronRunNowResponse,
   EmailEventsListResponse,
   MailerTemplatesListResponse,
   MailerTemplateView,
@@ -50,6 +60,11 @@ import type {
   HookTestRunResult,
   I18nLocalesResponse,
   I18nFileResponse,
+  RBACRolesListResponse,
+  RBACRoleActionsResponse,
+  AdminsWithRolesResponse,
+  SettingsCatalogResponse,
+  SiteInfo,
 } from "./types";
 
 export const adminAPI = {
@@ -105,9 +120,26 @@ export const adminAPI = {
     return api.request("DELETE", `/collections/${encodeURIComponent(name)}`);
   },
 
+  // ---- site identity (v1.x) ----
+  // Public-readable {name, url} pulled from `site.name` / `site.url`
+  // settings. The shell uses this to render the sidebar brand live
+  // when the operator edits site.name. Mailer + WebAuthn still hold
+  // their boot-time copy — the General Settings screen surfaces a
+  // "restart required" badge for those consumers.
+  siteInfo(): Promise<SiteInfo> {
+    return api.request("GET", "/site-info");
+  },
+
   // ---- settings ----
   settingsList(): Promise<SettingsListResponse> {
     return api.request("GET", "/settings");
+  },
+  // v1.x typed catalog. Returns the curated set of known settings
+  // grouped by feature, plus the list of unknown persisted keys for
+  // the "Advanced (raw)" fallback. The General settings screen reads
+  // from THIS, not /settings, to render typed form controls.
+  settingsCatalog(): Promise<SettingsCatalogResponse> {
+    return api.request("GET", "/settings/catalog");
   },
   settingsSet(key: string, value: unknown): Promise<{ key: string; value: unknown }> {
     return api.request("PATCH", `/settings/${encodeURIComponent(key)}`, { body: value });
@@ -140,6 +172,45 @@ export const adminAPI = {
         since: opts.since,
         until: opts.until,
         error_code: opts.error_code,
+      },
+    });
+  },
+
+  // v3.x — unified Timeline. Single endpoint backing the
+  // Logs → Timeline screen (replaces the four-tab Audit / App logs /
+  // Email events / Notifications split). UNION'd across
+  // _audit_log_site + _audit_log_tenant; legacy _audit_log will join
+  // when the Phase 1.5 migration consolidates.
+  auditTimeline(opts: {
+    page?: number;
+    perPage?: number;
+    actor_type?: string;
+    actor_id?: string;
+    event?: string;
+    entity_type?: string;
+    entity_id?: string;
+    outcome?: string;
+    tenant_id?: string;
+    request_id?: string;
+    since?: string;
+    until?: string;
+    source?: "all" | "site" | "tenant";
+  } = {}): Promise<AuditTimelineResponse> {
+    return api.request("GET", "/audit/timeline", {
+      query: {
+        page: opts.page,
+        perPage: opts.perPage,
+        actor_type: opts.actor_type,
+        actor_id: opts.actor_id,
+        event: opts.event,
+        entity_type: opts.entity_type,
+        entity_id: opts.entity_id,
+        outcome: opts.outcome,
+        tenant_id: opts.tenant_id,
+        request_id: opts.request_id,
+        since: opts.since,
+        until: opts.until,
+        source: opts.source,
       },
     });
   },
@@ -233,6 +304,57 @@ export const adminAPI = {
   },
   backupsCreate(): Promise<BackupCreatedResponse> {
     return api.request("POST", "/backups");
+  },
+  // ---- restore (gated by RAILBASE_ENABLE_UI_RESTORE + RBAC) ----
+  // Capabilities is the SPA's first call on screen mount — it drives
+  // affordance visibility and the "disabled because …" tooltip. The
+  // dry-run endpoint is harmless (read-only manifest inspection) and
+  // fires when the operator opens the confirm drawer. The execute
+  // endpoint is the destructive one: maintenance.Begin flips on the
+  // server, the user-facing /api/* surface 503s until restore commits.
+  backupsCapabilities(): Promise<BackupsCapabilities> {
+    return api.request("GET", "/backups/capabilities");
+  },
+  backupsRestoreDryRun(name: string): Promise<BackupsRestoreDryRunResponse> {
+    return api.request(
+      "POST",
+      `/backups/${encodeURIComponent(name)}/restore-dry-run`,
+    );
+  },
+  backupsRestore(
+    name: string,
+    body: BackupsRestoreBody,
+  ): Promise<BackupsRestoreResponse> {
+    return api.request("POST", `/backups/${encodeURIComponent(name)}/restore`, {
+      body,
+    });
+  },
+
+  // ---- cron schedules ----
+  // CRUD-ish surface over `_cron`. Builtin schedules (from
+  // jobs.DefaultSchedules) are protected: their kind can't be changed
+  // via upsert and they can't be deleted from the admin UI — the
+  // backend returns a typed validation error in both cases.
+  cronList(): Promise<CronListResponse> {
+    return api.request("GET", "/cron");
+  },
+  cronKinds(): Promise<CronKindsResponse> {
+    return api.request("GET", "/cron/kinds");
+  },
+  cronUpsert(body: CronUpsertBody): Promise<CronSchedule> {
+    return api.request("POST", "/cron", { body });
+  },
+  cronEnable(name: string): Promise<CronSchedule> {
+    return api.request("POST", `/cron/${encodeURIComponent(name)}/enable`);
+  },
+  cronDisable(name: string): Promise<CronSchedule> {
+    return api.request("POST", `/cron/${encodeURIComponent(name)}/disable`);
+  },
+  cronRunNow(name: string): Promise<CronRunNowResponse> {
+    return api.request("POST", `/cron/${encodeURIComponent(name)}/run-now`);
+  },
+  cronDelete(name: string): Promise<void> {
+    return api.request("DELETE", `/cron/${encodeURIComponent(name)}`);
   },
 
   // ---- email events (v1.7.35e §3.1.4 follow-up) ----
@@ -540,6 +662,30 @@ export const adminAPI = {
         perPage: opts.perPage,
         collection: opts.collection,
       },
+    });
+  },
+
+  // ---- RBAC management (v1.x) ----
+  // The roles/actions endpoints are read-gated (rbac.read); the
+  // role-set swap is write-gated (rbac.write). The backend enforces
+  // the "last system_admin can't be downgraded" safety guard and
+  // returns 409 with a human-readable hint when violated — surface
+  // that hint to the operator instead of swallowing it.
+  rbacRolesList(): Promise<RBACRolesListResponse> {
+    return api.request("GET", "/rbac/roles");
+  },
+  rbacRoleActions(roleID: string): Promise<RBACRoleActionsResponse> {
+    return api.request("GET", `/rbac/roles/${encodeURIComponent(roleID)}/actions`);
+  },
+  adminsWithRoles(): Promise<AdminsWithRolesResponse> {
+    return api.request("GET", "/admins-with-roles");
+  },
+  setAdminRoles(
+    adminID: string,
+    roleNames: string[],
+  ): Promise<{ admin_id: string; roles: string[] }> {
+    return api.request("PUT", `/admins/${encodeURIComponent(adminID)}/roles`, {
+      body: { roles: roleNames },
     });
   },
 };

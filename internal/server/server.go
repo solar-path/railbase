@@ -40,6 +40,17 @@ type Config struct {
 	// for production. Nil = no security headers (dev mode).
 	SecurityHeaders *security.HeadersOptions
 
+	// CORS pairs static middleware config (allowed methods / headers /
+	// preflight max-age) with a live snapshot of the operator-tunable
+	// knobs (allowed origins + credentials flag). The middleware
+	// re-reads CORSLive on every request, so admin-UI edits to
+	// `security.cors.*` take effect on the very next call — no
+	// restart. Production wiring: CORSLive is `*runtimeconfig.Config`.
+	// Tests can pass `security.StaticCORSLive{}` to pin a snapshot.
+	// Nil disables the middleware entirely.
+	CORS     *security.CORSOptions
+	CORSLive security.CORSLive
+
 	// IPFilter, when non-nil, installs the IP allow/deny filter
 	// middleware. The handler itself is settings-driven; pass the
 	// instance whose Update() is wired to a settings.Manager subscriber.
@@ -96,6 +107,13 @@ func New(cfg Config) *Server {
 	// embedded iframe story stays flexible.
 	if cfg.SecurityHeaders != nil {
 		r.Use(security.Headers(*cfg.SecurityHeaders))
+	}
+	// CORS sits BEFORE auth / rate-limit so OPTIONS preflights short-
+	// circuit without spending a per-IP rate-limit token. Middleware is
+	// inert when AllowedOrigins is empty, so non-CORS deployments pay
+	// only an atomic.Load and a method check.
+	if cfg.CORS != nil {
+		r.Use(security.CORS(*cfg.CORS, cfg.CORSLive))
 	}
 	// Rate limiter sits AFTER the IP filter (deny first, then count)
 	// and BEFORE business routes. Probes /healthz + /readyz registered

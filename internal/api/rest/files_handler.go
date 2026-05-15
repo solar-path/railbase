@@ -28,12 +28,32 @@ import (
 // Driver may be nil — in that case the routes return 503 ("file
 // storage not configured") rather than 500. Keeps the surface tidy
 // for deployments that don't want file fields.
+//
+// v1.x — URLTTL and MaxUpload are now FUNC values, not static
+// scalars. The handlers call them on every request so admin Settings
+// UI changes to `storage.url_ttl` / `storage.max_upload_bytes` take
+// effect immediately. Production wiring passes runtimeconfig
+// accessors directly (method values); tests can use the static
+// helpers below.
 type FilesDeps struct {
 	Driver    files.Driver
 	Store     *files.Store
-	Signer    []byte        // master key for SignURL
-	URLTTL    time.Duration // inline-embed TTL (default 5min)
-	MaxUpload int64         // per-upload byte ceiling (default 25MB)
+	Signer    []byte               // master key for SignURL
+	URLTTL    func() time.Duration // inline-embed TTL (default 5min)
+	MaxUpload func() int64         // per-upload byte ceiling (default 25MB)
+}
+
+// StaticTTL returns a func() time.Duration that always returns d.
+// Test-only helper — production code wires runtimeconfig method
+// values directly.
+func StaticTTL(d time.Duration) func() time.Duration {
+	return func() time.Duration { return d }
+}
+
+// StaticMaxUpload returns a func() int64 that always returns n.
+// Test-only helper.
+func StaticMaxUpload(n int64) func() int64 {
+	return func() int64 { return n }
 }
 
 // MountFiles installs the v1.3.1 file upload + download routes onto r.
@@ -51,11 +71,11 @@ func MountFiles(r chi.Router, d *handlerDeps, fd *FilesDeps) {
 	if fd == nil {
 		fd = &FilesDeps{}
 	}
-	if fd.URLTTL == 0 {
-		fd.URLTTL = 5 * time.Minute
+	if fd.URLTTL == nil {
+		fd.URLTTL = StaticTTL(5 * time.Minute)
 	}
-	if fd.MaxUpload == 0 {
-		fd.MaxUpload = 25 << 20 // 25 MiB
+	if fd.MaxUpload == nil {
+		fd.MaxUpload = StaticMaxUpload(25 << 20) // 25 MiB
 	}
 	h := &filesHandler{deps: d, files: fd}
 
@@ -99,7 +119,7 @@ func (h *filesHandler) upload(w http.ResponseWriter, r *http.Request) {
 	// Parse multipart with a strict ceiling. ParseMultipartForm uses
 	// MAX_MEMORY as the in-memory budget; anything bigger spills to a
 	// disk-backed temp file managed by net/http.
-	r.Body = http.MaxBytesReader(w, r.Body, h.files.MaxUpload)
+	r.Body = http.MaxBytesReader(w, r.Body, h.files.MaxUpload())
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		rerr.WriteJSON(w, rerr.New(rerr.CodeValidation,
 			"multipart parse failed: %s", err.Error()))
@@ -307,7 +327,7 @@ func (h *filesHandler) download(w http.ResponseWriter, r *http.Request) {
 // record, field, filename) tuple. Used by upload responses + record
 // marshalling.
 func (h *filesHandler) signedURL(collection, recordID, field, filename string) string {
-	return signedFileURL(h.files.Signer, collection, recordID, field, filename, h.files.URLTTL)
+	return signedFileURL(h.files.Signer, collection, recordID, field, filename, h.files.URLTTL())
 }
 
 // signedFileURL is the free-function form of filesHandler.signedURL —

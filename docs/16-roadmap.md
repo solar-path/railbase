@@ -122,12 +122,39 @@
 
 ### Audit & ops
 
-- Audit log (no sealing yet)
+- Audit log (legacy `_audit_log`, chain v1, hash-only)
 - DB retry logic
 - File watcher hot reload
 - Rate limiting (per-IP, per-user, per-tenant)
-- Logs as records (PB feature)
-- Backup/restore (manual + scheduled)
+- Logs as records (PB feature) — `_logs` table, slog persistence, gated by `logs.persist`
+- Backup/restore (manual + scheduled, см. v1.x § UI restore)
+
+### v3.x Unified Audit Log — Phase 1 ✅
+
+Реализовано в этой ветке (см. [19-unified-audit.md](19-unified-audit.md) и
+[14-observability.md](14-observability.md#2-unified-audit-log-v3x-две-таблицы)):
+
+- Split `_audit_log_site` + `_audit_log_tenant` (chain v2), partition'ed by month.
+- `audit.Store` API: `WriteSite/WriteTenant + Entity/ActorOnly` safety wrappers.
+- Per-tenant chain isolation (одно offboarding не ломает чужой verify).
+- Transparent dual-write: legacy `audit.Writer.Write()` автоматически зеркалит в v3 через `AttachStore` (миграция callsite'ов без code-changes).
+- REST CRUD auto-audit через `CollectionSpec.Audit: true` (`<collection>.{created,updated,deleted}` events с entity).
+- `_audit_seals` extended: `target ∈ ('legacy'|'site'|'tenant')` + `tenant_id` колонка.
+- Unified Timeline UI (`/_/logs`): один экран, фильтры actor_type/event/entity/tenant_id/request_id/outcome, drawer с before/after JSON diff.
+- Deep-dive views перенесены: App logs → Health → Process logs; Email events → Settings → Mailer → Deliveries; Notifications log → Settings → Notifications → Log.
+
+### v3.x Unified Audit Log — Phase 1.5 / 2 / 3 / 4 ✅
+
+Все четыре фазы реализованы в этой же ветке:
+
+- **Phase 1.5 carryover** ✅ — все callsite'ы adminapi перешли на `writeAuditEntity` helper с явным `entity_type`/`entity_id`. `writeAuditEvent` (signin/refresh/logout/bootstrap/metrics.read) теперь использует `AuditStore.WriteSite` напрямую (actor-only events). Legacy `forwardToStore` остаётся для bare-Deps unit-test'ов в качестве fallback'а.
+- **Phase 1.5 #1 — Update/Delete before-image** ✅ — REST CRUD читает row PRE-UPDATE/DELETE через `fetchPreImage` helper и кладёт его в `before` для real diff в Timeline.
+- **Phase 2 partition + archive** ✅ — `audit_partition` cron (23:55) пред-создаёт месячные partition'ы, `audit_archive` cron (06:00) выгребает sealed-and-old partition'ы в gzip JSONL под `<dataDir>/audit/<target>/YYYY-MM/`, пишет seal manifest, DROP partition. Retention default 14 дней.
+- **Phase 2.1 full hash recompute** ✅ — `VerifyArchive` теперь rehydrate'ит canonical JSON из gzipped JSONL, пересчитывает SHA-256 chain (`site` или `tenant` форма), и для каждого seal'а в manifest'е делает `ed25519.Verify(public_key, chain_head, signature)` — структурная + криптографическая verify на disk без DB.
+- **Phase 3 ArchiveTarget interface** ✅ — `internal/audit/archive_target.go` определяет `ArchiveTarget` (PutArchive / Walk). LocalFSTarget — default. S3Target — за build tag `aws` (Object Lock retention настраивается на bucket'е operator'ом, Railbase лишь uploads). Env-driven opt-in: `RAILBASE_AUDIT_ARCHIVE_TARGET=s3` + `RAILBASE_AUDIT_S3_BUCKET/REGION/PREFIX/SSE_KMS_KEY`.
+- **Phase 4 KMSSigner** ✅ — `internal/audit/signer.go` определяет `Signer` interface. LocalSigner — default (читает `.audit_seal_key`). AWS KMSSigner — за build tag `aws` (Ed25519 ключ в KMS, private side never leaves). Env-driven opt-in: `RAILBASE_AUDIT_SEAL_SIGNER=aws-kms` + `RAILBASE_AUDIT_KMS_KEY_ID/REGION`.
+
+S3 + KMS implementations поставляются как scaffolding с build tag `aws` — default binary не зависит от aws-sdk-go-v2 (~30 MB transitive). Operators, которым нужен hardware-enforced WORM/HSM, пересобирают `go build -tags aws ./...` и добавляют SDK в `go.mod`.
 
 ### PB compat
 

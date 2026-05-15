@@ -112,6 +112,47 @@ export interface AuditListResponse {
   items: AuditEvent[];
 }
 
+/** v3.x — unified Timeline row (one event from _audit_log_site or
+ *  _audit_log_tenant). Backs the single-screen Logs UI that replaces
+ *  the four-tab split. tenant_id is null for site rows. before/after/
+ *  meta/error_data ride as raw JSON (any) — render-time consumers
+ *  diff or pretty-print as needed. */
+export interface AuditTimelineRow {
+  source: "site" | "tenant";
+  chain_version: number; // 2 = v3.x split; 1 = legacy (future surface)
+  seq: number;
+  id: string;
+  at: string; // RFC3339 nano
+  tenant_id: string | null;
+  actor: {
+    type: "system" | "admin" | "api_token" | "job" | "user";
+    id: string | null; // null = system
+    email: string;
+    collection: string;
+  };
+  event: string;
+  entity: {
+    type: string;
+    id: string;
+  };
+  outcome: "success" | "denied" | "error";
+  before: unknown | null;
+  after: unknown | null;
+  meta: unknown | null;
+  error_code: string;
+  error_data: unknown | null;
+  ip: string;
+  user_agent: string;
+  request_id: string;
+}
+
+export interface AuditTimelineResponse {
+  page: number;
+  perPage: number;
+  totalItems: number;
+  items: AuditTimelineRow[];
+}
+
 export interface LogEvent {
   id: string;
   level: string; // "DEBUG" | "INFO" | "WARN" | "ERROR"
@@ -207,6 +248,55 @@ export interface BackupsListResponse {
   items: BackupRecord[];
 }
 
+/** One row of the persisted `_cron` table as surfaced by the admin
+ *  API. `payload` is opaque JSON (per-kind shape). `is_builtin` flags
+ *  schedules from jobs.DefaultSchedules() (cleanup_*, audit_seal, …) —
+ *  the UI uses it to lock kind + hide the delete affordance. `kind_known`
+ *  is false when the kind isn't currently registered in the running
+ *  binary (e.g. an old schedule pointing at a removed handler). */
+export interface CronSchedule {
+  id: string;
+  name: string;
+  expression: string;
+  kind: string;
+  payload: unknown; // canonical JSON; UI renders / edits per kind
+  enabled: boolean;
+  last_run_at: string | null; // RFC3339
+  next_run_at: string | null; // RFC3339
+  created_at: string;
+  updated_at: string;
+  is_builtin: boolean;
+  kind_known: boolean;
+}
+
+/** GET /api/_admin/cron response. */
+export interface CronListResponse {
+  items: CronSchedule[];
+}
+
+/** GET /api/_admin/cron/kinds response. Backs the admin UI's kind
+ *  picker — order is unspecified, sort on the client side. */
+export interface CronKindsResponse {
+  kinds: string[];
+}
+
+/** POST /api/_admin/cron body. `payload` rides as raw JSON; the kind's
+ *  handler validates the per-kind shape (e.g. scheduled_backup expects
+ *  `{retention_days, out_dir?}`). `enabled` is optional: omit to keep
+ *  the existing value (defaults to true on first insert). */
+export interface CronUpsertBody {
+  name: string;
+  expression: string;
+  kind: string;
+  payload?: unknown;
+  enabled?: boolean;
+}
+
+/** POST /api/_admin/cron/{name}/run-now response. */
+export interface CronRunNowResponse {
+  job_id: string;
+}
+
 /** POST /api/_admin/backups response (201). Carries the manifest
  *  summary (tables_count + rows_count + schema_head) so the success
  *  banner can render "Backup created: N tables, M rows" without a
@@ -221,6 +311,67 @@ export interface BackupCreatedResponse {
     rows_count: number;
     schema_head: string;
   };
+}
+
+/** GET /api/_admin/backups/capabilities response. Probed on screen
+ *  mount so the SPA can decide whether to show the Restore affordance.
+ *  Three fields are independent on purpose: the UI distinguishes
+ *  "env flag missing" (operator action) from "this admin lacks the
+ *  role" (RBAC action) so the rendered tooltip is specific. */
+export interface BackupsCapabilities {
+  /** RAILBASE_ENABLE_UI_RESTORE truthy on the server — when false the
+   *  restore endpoints 503 regardless of RBAC. */
+  ui_restore_enabled: boolean;
+  /** This admin's RBAC view holds `admin.backup.restore`. */
+  can_restore: boolean;
+  /** A restore is currently in flight in this process (drives the
+   *  in-progress banner that stays even if the operator left the tab
+   *  open across the maintenance window). */
+  maintenance_active: boolean;
+}
+
+/** POST /api/_admin/backups/{name}/restore-dry-run response. The admin
+ *  UI renders this preview inside the confirm drawer so the operator
+ *  sees exactly which tables and how many rows would be TRUNCATEd
+ *  before they type the confirm token. */
+export interface BackupsRestoreDryRunResponse {
+  archive: string;
+  archive_schema_head: string;
+  current_schema_head: string;
+  /** archive_schema_head === current_schema_head. When false, restore
+   *  requires `force: true` to proceed. */
+  schema_head_matches: boolean;
+  format_version: number;
+  /** Archive format version is one the running binary recognises. When
+   *  false, the archive was created by a newer Railbase and restore is
+   *  blocked even with force. */
+  format_version_ok: boolean;
+  created_at: string;
+  railbase_version: string;
+  postgres_version: string;
+  tables_count: number;
+  rows_count: number;
+  tables: Array<{ schema: string; name: string; rows: number }>;
+}
+
+/** POST /api/_admin/backups/{name}/restore request body. `confirm` MUST
+ *  equal the archive filename — the operator types it manually into
+ *  the confirm drawer. `force` lets restore proceed across a migration
+ *  head mismatch (after the operator ticks the "I understand" box). */
+export interface BackupsRestoreBody {
+  confirm: string;
+  force?: boolean;
+}
+
+/** POST /api/_admin/backups/{name}/restore success response. Drives
+ *  the post-restore banner: "Restored 12 tables / 4321 rows from
+ *  backup-2026-01-12.tar.gz". */
+export interface BackupsRestoreResponse {
+  archive: string;
+  tables_count: number;
+  rows_count: number;
+  schema_head: string;
+  forced: boolean;
 }
 
 /** One row of `_notifications`, shaped for the admin Notifications
@@ -866,4 +1017,130 @@ export interface AuthMethodsStatus {
 export interface AuthSaveResult {
   ok?: boolean;
   note?: string;
+}
+
+// ===== RBAC management (v1.x) =====
+
+/**
+ * One role from /api/_admin/rbac/roles. The `scope` is "site" or
+ * "tenant" — the admin-management UI cares only about site roles
+ * (the admins-with-roles join filters by scope='site'), but the type
+ * is general so a future tenant-role UI can reuse it.
+ *
+ * `is_system` marks the seeded roles (system_admin, system_readonly,
+ * admin, user, guest, owner, …). The UI uses it to disable delete
+ * and to render a small "system" badge.
+ */
+export interface RBACRole {
+  id: string;
+  name: string;
+  scope: "site" | "tenant";
+  description: string;
+  is_system: boolean;
+}
+
+export interface RBACRolesListResponse {
+  roles: RBACRole[];
+}
+
+/**
+ * Result of /api/_admin/rbac/roles/{id}/actions. When the role is a
+ * bypass role (site:system_admin or tenant:owner) the `actions` list
+ * is empty and `bypass` is true — the SPA renders "Full bypass — all
+ * actions" instead of "No actions granted".
+ */
+export interface RBACRoleActionsResponse {
+  actions: string[];
+  bypass: boolean;
+}
+
+/**
+ * One row of the admins-with-roles grid. `roles` is the list of SITE
+ * role names currently assigned. An empty list means the admin holds
+ * zero site roles — gated handlers will deny them, but the
+ * AdminAuthMiddleware still recognises them as authenticated, so they
+ * can sign in and see the (empty) admin home page.
+ */
+export interface AdminWithRoles {
+  id: string;
+  email: string;
+  roles: string[];
+}
+
+export interface AdminsWithRolesResponse {
+  admins: AdminWithRoles[];
+}
+
+// ===== Settings catalog (v1.x) =====
+
+/**
+ * The shape each form control should render. Stable wire values; the
+ * SPA's `switch` on this string MUST stay in sync with the backend's
+ * SettingType constants in settings_catalog.go.
+ */
+export type SettingType =
+  | "string"
+  | "bool"
+  | "int"
+  | "csv"
+  | "duration"
+  | "json";
+
+/**
+ * Whether changing this setting takes effect immediately or needs
+ * a server restart. The SPA renders a "restart required" badge for
+ * "restart" so operators don't expect Save to do anything visible
+ * until they bounce the process.
+ *
+ * Mixed-reload settings (one consumer live, another boot-only — e.g.
+ * `site.name` re-renders the admin UI live but the mailer holds the
+ * old value) are marked "restart"; the Description carries the
+ * nuance.
+ */
+export type SettingReload = "live" | "restart";
+
+/**
+ * One curated catalog entry. The backend declares this in
+ * settings_catalog.go; the SPA renders a typed form control from
+ * `type` + `label` + `description` and PATCH-es the value through
+ * the existing /settings/{key} endpoint.
+ */
+export interface SettingDef {
+  key: string;
+  type: SettingType;
+  group: string;
+  label: string;
+  description: string;
+  default?: unknown;
+  placeholder?: string;
+  /** Whether changing this requires a server restart to take effect. */
+  reload: SettingReload;
+  secret?: boolean;
+  env_var?: string;
+}
+
+/** GET /api/_admin/site-info — public-readable site identity. */
+export interface SiteInfo {
+  name: string;
+  url: string;
+}
+
+/** A catalog entry paired with the current persisted value. */
+export interface SettingsCatalogEntry {
+  def: SettingDef;
+  value?: unknown;
+  is_set: boolean;
+}
+
+/**
+ * GET /api/_admin/settings/catalog response. `groups` is the ordered
+ * list of group labels; `entries` carries every cataloged setting
+ * with its current value; `unknown_keys` is the list of persisted
+ * keys that don't appear in the catalog and aren't owned by another
+ * dedicated screen (the General > Advanced fallback edits those).
+ */
+export interface SettingsCatalogResponse {
+  groups: string[];
+  entries: SettingsCatalogEntry[];
+  unknown_keys: string[];
 }

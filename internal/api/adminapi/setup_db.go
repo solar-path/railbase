@@ -43,6 +43,7 @@ import (
 	"github.com/railbase/railbase/internal/config"
 	"github.com/railbase/railbase/internal/db/embedded"
 	rerr "github.com/railbase/railbase/internal/errors"
+	"github.com/railbase/railbase/internal/security"
 )
 
 // setupProbeTimeout bounds the connect+SELECT-version round-trip on
@@ -128,6 +129,20 @@ type setupProbeResponse struct {
 	Hint               string `json:"hint,omitempty"`
 }
 
+// MarshalJSON redacts the DSN before serialising. The wizard UI only
+// uses this field to echo "Connection OK — DSN: ..." back to the
+// operator; the raw password adds nothing there but creates a leak
+// surface (server access logs, browser history, screen recordings,
+// shared screenshots). All construction sites populate `DSN: dsn`
+// with the verbatim user input — this boundary fix means a new site
+// can't reopen the leak by accident.
+func (r setupProbeResponse) MarshalJSON() ([]byte, error) {
+	type alias setupProbeResponse
+	a := alias(r)
+	a.DSN = security.RedactDSN(a.DSN)
+	return json.Marshal(a)
+}
+
 // setupSaveResponse is the envelope for /save-db on success. We do
 // NOT auto-restart — restarting the Go process mid-request is fragile
 // and the operator's terminal is the right place to Ctrl-C; restart.
@@ -136,6 +151,17 @@ type setupSaveResponse struct {
 	DSN             string `json:"dsn"`
 	RestartRequired bool   `json:"restart_required"`
 	Note            string `json:"note"`
+}
+
+// MarshalJSON redacts the DSN before serialising. Same rationale as
+// setupProbeResponse.MarshalJSON — the wizard only displays the
+// echoed DSN as "Configuration saved (DSN: ...)" and never re-uses
+// it as input, so showing the password serves no purpose.
+func (r setupSaveResponse) MarshalJSON() ([]byte, error) {
+	type alias setupSaveResponse
+	a := alias(r)
+	a.DSN = security.RedactDSN(a.DSN)
+	return json.Marshal(a)
 }
 
 // mountSetupDB wires the three setup endpoints onto r. PUBLIC: no

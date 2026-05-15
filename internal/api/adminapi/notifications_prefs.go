@@ -409,28 +409,22 @@ func (d *Deps) notificationsPrefsPutHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Audit. Nil-guarded — tests bypass.
-	if d.Audit != nil {
-		p := AdminPrincipalFrom(r.Context())
-		_, _ = d.Audit.Write(r.Context(), audit.Event{
-			UserID:         p.AdminID,
-			UserCollection: "_admins",
-			Event:          "notifications.admin_prefs_changed",
-			Outcome:        audit.OutcomeSuccess,
-			Before: map[string]any{
-				"target_user_id": userID.String(),
-				"prefs":          beforePrefs,
-				"settings":       settingsFromStore(beforeSettings),
-			},
-			After: map[string]any{
-				"target_user_id": userID.String(),
-				"prefs":          body.Prefs,
-				"settings":       body.Settings,
-			},
-			IP:        clientIP(r),
-			UserAgent: r.Header.Get("User-Agent"),
-		})
-	}
+	// v3.x — entity_type="user_pref", entity_id=<target user_id>. Timeline
+	// «всё, что админы делали с настройками этого юзера» хитит индекс.
+	writeAuditEntity(r.Context(), d, EntityAuditInput{
+		Event:      "notifications.admin_prefs_changed",
+		EntityType: "user_pref",
+		EntityID:   userID.String(),
+		Outcome:    audit.OutcomeSuccess,
+		Before: map[string]any{
+			"prefs":    beforePrefs,
+			"settings": settingsFromStore(beforeSettings),
+		},
+		After: map[string]any{
+			"prefs":    body.Prefs,
+			"settings": body.Settings,
+		},
+	}, r)
 
 	// Re-read so the response carries the canonical post-update state.
 	out := prefsEnvelope{
@@ -778,24 +772,19 @@ func (d *Deps) notificationsDigestPreviewHandler(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Audit. Nil-guarded — tests bypass.
-	if d.Audit != nil {
-		p := AdminPrincipalFrom(r.Context())
-		_, _ = d.Audit.Write(r.Context(), audit.Event{
-			UserID:         p.AdminID,
-			UserCollection: "_admins",
-			Event:          "notifications.admin_digest_preview_sent",
-			Outcome:        audit.OutcomeSuccess,
-			After: map[string]any{
-				"target_user_id": userID.String(),
-				"recipient":      recipient,
-				"kind_count":     len(items),
-				"mode":           mode,
-			},
-			IP:        clientIP(r),
-			UserAgent: r.Header.Get("User-Agent"),
-		})
-	}
+	// v3.x — entity_type="user_pref" (the digest preview is keyed on the
+	// target user's prefs/settings posture). entity_id=<target user_id>.
+	writeAuditEntity(r.Context(), d, EntityAuditInput{
+		Event:      "notifications.admin_digest_preview_sent",
+		EntityType: "user_pref",
+		EntityID:   userID.String(),
+		Outcome:    audit.OutcomeSuccess,
+		After: map[string]any{
+			"recipient":  recipient,
+			"kind_count": len(items),
+			"mode":       mode,
+		},
+	}, r)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -895,25 +884,19 @@ func (d *Deps) notificationsPrefsDeleteHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Audit. Nil-guarded — tests bypass.
-	if d.Audit != nil {
-		p := AdminPrincipalFrom(r.Context())
-		_, _ = d.Audit.Write(r.Context(), audit.Event{
-			UserID:         p.AdminID,
-			UserCollection: "_admins",
-			Event:          "notifications.admin_prefs_reset",
-			Outcome:        audit.OutcomeSuccess,
-			Before: map[string]any{
-				"target_user_id":   userID.String(),
-				"prefs":            beforePrefs,
-				"settings":         settingsFromStore(beforeSettings),
-				"prefs_deleted":    prefsDeleted,
-				"settings_deleted": settingsDeleted,
-			},
-			IP:        clientIP(r),
-			UserAgent: r.Header.Get("User-Agent"),
-		})
-	}
+	// v3.x — entity_type="user_pref", entity_id=<target user_id>.
+	writeAuditEntity(r.Context(), d, EntityAuditInput{
+		Event:      "notifications.admin_prefs_reset",
+		EntityType: "user_pref",
+		EntityID:   userID.String(),
+		Outcome:    audit.OutcomeSuccess,
+		Before: map[string]any{
+			"prefs":            beforePrefs,
+			"settings":         settingsFromStore(beforeSettings),
+			"prefs_deleted":    prefsDeleted,
+			"settings_deleted": settingsDeleted,
+		},
+	}, r)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

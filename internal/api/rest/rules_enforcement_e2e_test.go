@@ -189,8 +189,8 @@ func TestRulesEnforcement_E2E(t *testing.T) {
 			map[string]any{"title": "updated"}); status != http.StatusOK {
 			t.Errorf("update: got %d, want 200", status)
 		}
-		if status, _ := do("DELETE", "/api/collections/open_items/records/"+id, nil); status != http.StatusOK {
-			t.Errorf("delete: got %d, want 200", status)
+		if status, _ := do("DELETE", "/api/collections/open_items/records/"+id, nil); status != http.StatusNoContent {
+			t.Errorf("delete: got %d, want 204", status)
 		}
 	})
 

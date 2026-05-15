@@ -58,6 +58,7 @@ const PAGE_DEFS: Array<{ key: string; path: string }> = [
   { key: "palette.page.mailer",            path: "/settings/mailer" },
   { key: "palette.page.mailerTemplates",   path: "/settings/mailer/templates" },
   { key: "palette.page.authMethods",       path: "/settings/auth" },
+  { key: "palette.page.adminsRoles",       path: "/settings/admins" },
   { key: "palette.page.notificationPrefs", path: "/settings/notifications" },
   { key: "palette.page.webhooks",          path: "/settings/webhooks" },
   { key: "palette.page.stripe",            path: "/settings/stripe" },

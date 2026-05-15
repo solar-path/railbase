@@ -25,6 +25,7 @@
   "nav.viewRecords": "Просмотр записей",
   "nav.copyName": "Скопировать имя",
 
+  "nav.logs.timeline": "Хронология",
   "nav.logs.audit": "Аудит",
   "nav.logs.app": "Логи приложения",
   "nav.logs.realtime": "Realtime",
@@ -37,6 +38,7 @@
   "nav.settings.mailer": "Почта",
   "nav.settings.templates": "Шаблоны",
   "nav.settings.auth": "Методы входа",
+  "nav.settings.admins": "Админы и роли",
   "nav.settings.notifications": "Уведомления",
   "nav.settings.webhooks": "Вебхуки",
   "nav.settings.stripe": "Stripe",
@@ -82,6 +84,7 @@
   "palette.page.mailer": "Почта",
   "palette.page.mailerTemplates": "Шаблоны почты",
   "palette.page.authMethods": "Методы входа",
+  "palette.page.adminsRoles": "Админы и роли",
   "palette.page.notificationPrefs": "Настройки уведомлений",
   "palette.page.webhooks": "Вебхуки",
   "palette.page.stripe": "Stripe",

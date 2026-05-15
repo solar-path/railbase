@@ -114,12 +114,12 @@ type Options struct {
 // `_settings` (operator config) and `_files` metadata.
 func defaultExcludes() []string {
 	return []string{
-		"public._jobs",            // queue state — start fresh on restore
-		"public._sessions",        // active sessions — force re-login
-		"public._admin_sessions",  // ditto for admins
-		"public._mfa_challenges",  // short-lived state machines
-		"public._record_tokens",   // email-link tokens — operator should re-issue
-		"public._exports",         // async-export state — start fresh
+		"public._jobs",           // queue state — start fresh on restore
+		"public._sessions",       // active sessions — force re-login
+		"public._admin_sessions", // ditto for admins
+		"public._mfa_challenges", // short-lived state machines
+		"public._record_tokens",  // email-link tokens — operator should re-issue
+		"public._exports",        // async-export state — start fresh
 	}
 }
 
@@ -336,6 +336,58 @@ type RestoreOptions struct {
 	// Default true — restoring INTO a non-empty DB without this would
 	// violate PK uniqueness on the first row.
 	TruncateBefore bool
+}
+
+// Inspect reads ONLY the archive's manifest.json without applying any
+// data. Used by the admin UI's dry-run path so the operator can see
+// what a Restore() would touch (table count, row totals, migration
+// head match) before committing to the irreversible TRUNCATE CASCADE.
+//
+// Errors mirror Restore(): ErrManifestMissing when the tar carries no
+// manifest, ErrFormatVersion when the archive is newer than the
+// binary understands. We deliberately do NOT consult the DB here — a
+// dry-run is a pure archive read; the handler is expected to compare
+// the returned MigrationHead against readMigrationHeadPool itself.
+func Inspect(r io.Reader) (*Manifest, error) {
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("inspect: gzip: %w", err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect: tar next: %w", err)
+		}
+		if hdr.Name != "manifest.json" {
+			continue
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, fmt.Errorf("inspect: read manifest: %w", err)
+		}
+		var m Manifest
+		if err := json.Unmarshal(body, &m); err != nil {
+			return nil, fmt.Errorf("inspect: parse manifest: %w", err)
+		}
+		if m.FormatVersion > CurrentFormatVersion {
+			return &m, fmt.Errorf("%w: archive has v%d, binary supports v%d",
+				ErrFormatVersion, m.FormatVersion, CurrentFormatVersion)
+		}
+		return &m, nil
+	}
+	return nil, ErrManifestMissing
+}
+
+// CurrentMigrationHead exposes the live `_migrations` head so the
+// admin restore handler can render the compat report without
+// importing the unexported helper.
+func CurrentMigrationHead(ctx context.Context, pool *pgxpool.Pool) (string, error) {
+	return readMigrationHeadPool(ctx, pool)
 }
 
 // Restore reads a backup archive from r and applies it to pool. The

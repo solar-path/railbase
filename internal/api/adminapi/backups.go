@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/railbase/railbase/internal/audit"
 	"github.com/railbase/railbase/internal/backup"
 	"github.com/railbase/railbase/internal/buildinfo"
 	rerr "github.com/railbase/railbase/internal/errors"
@@ -256,6 +257,33 @@ func (d *Deps) backupsCreateHandler(w http.ResponseWriter, r *http.Request) {
 			"rows", summary.RowsCount,
 			"schema_head", summary.SchemaHead,
 		)
+	}
+
+	// v3.x — entity-shaped audit row. Backup creation is
+	// security-sensitive (it materialises a snapshot of every row in
+	// every table), so the Timeline entity filter «show me
+	// everything about backup-X» should hit a real entity_id column,
+	// not JSONB grep.
+	if d.AuditStore != nil {
+		p := AdminPrincipalFrom(r.Context())
+		_, _ = d.AuditStore.WriteSiteEntity(r.Context(), audit.SiteEvent{
+			ActorType:       audit.ActorAdmin,
+			ActorID:         p.AdminID,
+			ActorCollection: "_admins",
+			Event:           "admin.backup.create",
+			EntityType:      "backup",
+			EntityID:        item.Name,
+			Outcome:         audit.OutcomeSuccess,
+			After: map[string]any{
+				"size_bytes":   item.SizeBytes,
+				"tables_count": summary.TablesCount,
+				"rows_count":   summary.RowsCount,
+				"schema_head":  summary.SchemaHead,
+			},
+			IP:        clientIP(r),
+			UserAgent: r.Header.Get("User-Agent"),
+			RequestID: r.Header.Get("X-Request-ID"),
+		})
 	}
 }
 

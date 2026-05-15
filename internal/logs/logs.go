@@ -65,6 +65,19 @@ type Config struct {
 	// is slog.LevelInfo (set by NewSink when zero-valued — caller
 	// can opt into Debug for full firehose during incidents).
 	MinLevel slog.Level
+	// Enabled is the LIVE gate over `logs.persist`. The Sink consults
+	// this on every Enabled/Handle call so the unified runtimeconfig
+	// dispatcher can flip persistence on/off without restart and
+	// without re-wiring the slog.Handler chain. Nil = always on (test
+	// ergonomics — existing fixtures pass Config{...} without a gate).
+	//
+	// When the gate returns false:
+	//   - Enabled() short-circuits before any allocation.
+	//   - Handle() drops the record silently.
+	//   - The flusher goroutine keeps running so any records already
+	//     in the buffer (queued before the operator flipped it off)
+	//     still get drained — operators don't lose in-flight data.
+	Enabled func() bool
 }
 
 // Stats exposes Sink counters for the admin UI / metrics tab. All
@@ -141,9 +154,15 @@ func NewSink(pool *pgxpool.Pool, cfg Config) *Sink {
 }
 
 // Enabled implements slog.Handler. Records below MinLevel are
-// short-circuited — no JSON marshal, no buffer growth.
+// short-circuited — no JSON marshal, no buffer growth. The live
+// `logs.persist` gate (Config.Enabled) runs first so an operator
+// who has flipped persistence off pays only one atomic.Load per
+// log line, not a JSON marshal + buffer append.
 func (s *Sink) Enabled(_ context.Context, level slog.Level) bool {
 	if s.stopped.Load() {
+		return false
+	}
+	if s.cfg.Enabled != nil && !s.cfg.Enabled() {
 		return false
 	}
 	return level >= s.cfg.MinLevel

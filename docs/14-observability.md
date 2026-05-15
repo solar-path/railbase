@@ -127,6 +127,22 @@ updated_at, updated_by
 - Subscribers (auth, mailer, storage, и т.д.) подписаны → reload свой config
 - Heavy changes (DB driver, port) — требуют рестарта; UI предупреждает
 
+### Settings catalog (v1.x)
+
+До v1.x: страница `/_/settings` была голой key/value таблицей — оператор должен был знать ключи типа `security.cors.allowed_origins` наизусть, никакого hint'а о типе / default / какому subsystem'у ключ принадлежит.
+
+С v1.x:
+- Backend объявляет каталог известных настроек в `internal/api/adminapi/settings_catalog.go` — каждая запись: `key`, `type` (string/bool/int/csv/duration/json), `group`, `label`, `description`, `default`, `env_var`.
+- Endpoint `GET /api/_admin/settings/catalog` (gated by `settings.read`) возвращает каталог + текущие значения + список keys вне каталога (для Advanced fallback).
+- SPA `/_/settings` рендерит **типизированные форм-контролы**, сгруппированные по subsystem'у: Application / Storage / Network access / CORS / Rate limiting / Anti-bot & logs / Compatibility. Per-row Save + "Reset to default" (DELETE → fallback на implicit default).
+- "Advanced (raw)" collapsible внизу — старый бэкдор key/value для произвольных ключей вне каталога. Ключи владелных screen'ов (`mailer.*`, `oauth.*`, `webauthn.*`, `auth.*`, `notifications.*`, `stripe.*`) filtered server-side — оператор управляет ими через свои screen'ы, не через Advanced.
+- Drift между каталогом и consumer'ом (readSetting): unit тесты (`settings_catalog_test.go`) проверяют что каждая запись имеет валидный group / non-empty description / known type / уникальный key. Drift "consumer reads key not in catalog" — операционная проблема: оператор не увидит UI control'а, и должен пройти через Advanced.
+
+Adding a new setting:
+1. Объявить entry в `settingsCatalog` (alphabetical в group'е).
+2. Wire'нуть consumer через `readSetting(ctx, settingsMgr, "key", "RAILBASE_KEY", "default")`.
+3. Если subsystem hot-reloadable — subscribe на `settings.TopicChanged` в app.go.
+
 ### Encryption sensitive values
 
 OAuth secrets, SMTP passwords и т.д. encrypted (AES-256) с key из `_railbase_meta.secret_key` перед stored.
@@ -201,63 +217,193 @@ throw new RailbaseError({ code: "validation", details: {...} })  // native
 
 ## Logging — три параллельных канала
 
+Сначала концептуально. Railbase делит наблюдаемые события на **три канала** с разными SLA, целевыми потребителями и retention. UI (admin `/_/logs`) собирает их в **единую хронологию** (Timeline) поверх двух канонических таблиц — см. ниже «Unified Timeline».
+
+| Канал | Цель | Куда пишется | Retention | Tamper-evident |
+|---|---|---|---|---|
+| **Application logs** (slog) | Debug, runtime diagnostics | stdout + `_logs` table (gated) | 14 дней (rotate) | нет |
+| **Audit log** | «Кто / что сделал / когда» — security & compliance | `_audit_log_site` + `_audit_log_tenant` | вечно (Phase 1) | SHA-256 chain + Ed25519 seals |
+| **Telemetry** (OTel) | Performance, latency, throughput | OTLP/HTTP, Prometheus | по политике backend'а | n/a |
+
 ### 1. Application logs (slog)
 
 Что: операционные события для отладки.
-Куда: stdout (JSON в prod, text в dev) + `_logs` table (PB-style, queryable через admin UI).
+Куда: stdout (JSON в prod, text в dev) + `_logs` table (settings-gated `logs.persist`, default false в dev / true в prod).
 Уровни: debug/info/warn/error. Default `info`.
 Формат: `{ time, level, msg, trace_id, span_id, request_id, actor_id, tenant_id, ... }`
 Trace context: каждый log line carries `trace_id` если внутри trace.
 
-#### Logs as records (PB feature)
-
-`internal/logs/` имплементирует PB pattern: structured logs хранятся в `_logs` table:
-
-```
-_logs(id, level, message, data JSON, created_at, request_id, trace_id, ...)
-```
+`_logs` — debug surface, НЕ замена audit log. Перенесён из старой `/logs/app` вкладки в **Health → Process logs** (`/_/health/process-logs`) — операторы Phase 1 IA reorg отделяют debug telemetry от business audit. Старый URL `/logs/app` редиректит автоматически.
 
 Используется для:
-- Logs viewer в admin UI с filtering
-- Retention policy (default 30 days, configurable)
+- Process diagnostics viewer в admin UI с filtering
+- Retention policy 14 дней (`logs.retention_days`, configurable)
 - Export для analysis
 
-Не заменяет stdout slog — оба работают параллельно.
+### 2. Unified Audit log (v3.x, две таблицы)
 
-### 2. Audit log (БД)
+Что: security/compliance события — actor / action / when / before / after / outcome.
 
-Что: security/compliance события — кто, что, когда, с каким результатом.
-Куда: `_audit_log` table, append-only, hash-chain optional.
+**Архитектурное решение** (`docs/19-unified-audit.md`): split на две таблицы вместо одной с RLS. Каждая со своим SHA-256 chain:
 
-Что **всегда** логируется:
+- **`_audit_log_site`** — system + admin + api_token + job actions. Single process-wide chain. Не RLS — только operator с `audit.read` видит.
+- **`_audit_log_tenant`** — per-tenant actions. ONE CHAIN PER TENANT (`tenant_seq` monotonic внутри tenant'а). RLS-scoped через `railbase.tenant` session var.
+
+Почему split:
+- Tenant offboarding: drop rows for tenant T не ломает чужой verify.
+- Write contention: per-tenant mutex → параллельные writes для разных tenants.
+- Tenant export: native — chain принадлежит tenant'у.
+- Site-level forensics: cross-tenant view («какой admin создал tenant Y») сохраняется через site chain.
+
+Legacy `_audit_log` (chain v1, миграция 0006) — **read-only**, остаётся для backwards-compat verify. Новые writes не идут туда (Phase 1.5 портирует существующие row'ы в archive формат).
+
+#### Schema (миграция `0030_unified_audit.up.sql`)
+
+```sql
+_audit_log_site (
+    id, seq, at,
+    actor_type      audit_actor_type,    -- system|admin|api_token|job
+    actor_id, actor_email, actor_collection,
+    event,                               -- "admin.backup.create", "auth.signin"
+    entity_type, entity_id,              -- "vendor", "v-42" (CRUD events)
+    outcome         audit_outcome,       -- success|denied|error
+    before, after, meta  JSONB,
+    error_code, error_data,
+    ip, user_agent, request_id,
+    prev_hash, hash, chain_version=2
+) PARTITION BY RANGE (at);
+
+_audit_log_tenant (   -- same + tenant_id NOT NULL, tenant_seq, RLS scope, actor_type adds 'user'
+    ...
+) PARTITION BY RANGE (at);
+```
+
+Partitioning by month с первого дня — `DROP PARTITION` для archive flow O(1).
+
+#### Writer API (`internal/audit/store.go`)
+
+```go
+store := audit.NewStore(ctx, pool)
+auditWriter.AttachStore(store)   // transparent dual-write для legacy callsite'ов
+
+// Прямые v3 writes:
+store.WriteSiteEntity(ctx, audit.SiteEvent{
+    ActorType:  audit.ActorAdmin,
+    ActorID:    adminID,
+    Event:      "admin.backup.create",
+    EntityType: "backup",
+    EntityID:   archiveName,
+    After:      manifestSummary,
+})
+
+store.WriteTenantEntity(ctx, audit.TenantEvent{
+    TenantID:   tenantID,
+    ActorType:  audit.ActorUser,
+    ActorID:    userID,
+    Event:      "vendor.update",
+    EntityType: "vendor", EntityID: vendorID,
+    Before: pre, After: post,
+})
+```
+
+Safety wrappers: `*Entity` требуют `entity_type+entity_id`, `*ActorOnly` отказываются их принимать — misuse trips compile-time at call-site error.
+
+#### Что **всегда** логируется
 
 - Все аутентифицированные mutations (success + failure)
-- RBAC denies (`rbac.deny`)
+- RBAC denies (`outcome=denied`)
 - Auth events: signin, signup, signout, password change, 2FA enable/disable, device add, impersonation start/stop
-- System admin actions: create admin, plugin install, schema migration applied
+- System admin actions: create admin, plugin install, schema migration applied, backup create/restore
 - Configuration changes (через admin UI)
 - API token issue/revoke
 - Document upload/version/archive/access (granular в `_document_access_log`)
 - Authority decisions (с plugin)
+- **REST CRUD на коллекциях с `CollectionSpec.Audit: true`** — auto-эмитятся `<collection>.{created,updated,deleted}` с `entity_type=<collection>` и `entity_id=<record.id>`. Off by default — audit-heavy коллекции (sessions, ephemerals) не платят chain-cost.
 
-Что **не** логируется (политика):
+Что **не** логируется:
 
-- Read-операции application users (слишком noise; включается флагом `--audit-reads`)
+- Read-операции application users (noise; будет per-collection флаг в Phase 2)
 - Hook execution успехи (только failures)
+- Application logs (`_logs` — отдельный канал)
 - Telemetry samples
 
-#### Hash chain (opt-in `--audit-seal`)
+#### Hash chain + sealing (миграция 0022)
 
-Каждая запись:
-```
-hash = sha256(prev_hash || canonical_json(row_minus_hash))
-```
+Каждая запись: `hash = sha256(prev_hash || canonical_json(row_minus_hash))`. Tampering с любой row ломает verify.
 
-Sealer-job раз в сутки проверяет цепочку и подписывает хвост Ed25519-ключом. CLI: `railbase audit verify`.
+`_audit_seals` — Ed25519 подписи над chain heads. Раз в сутки `audit_seal` builtin job берёт хвост, считает root_hash, подписывает приватным ключом из `<dataDir>/.audit_seal_key`. Verify через `railbase audit verify` (см. §13 CLI) проверяет SHA-256 chain + Ed25519 signature каждого seal'а.
+
+В v3.x extended schema: `_audit_seals` имеет `target` column (`'legacy'|'site'|'tenant'`) и `tenant_id` — одна seal table покрывает все три chain'а.
+
+#### Transparent dual-write
+
+Legacy `audit.Writer.Write(ctx, audit.Event{...})` после `AttachStore(store)` автоматически зеркалит каждое событие в v3 site/tenant table (см. `forwardToStore` в `internal/audit/audit.go`). Routing: `TenantID != nil → _audit_log_tenant`, иначе `_audit_log_site`. Actor: `UserCollection` маппится в `audit_actor_type` (`_admins → admin`, `_api_tokens → api_token`, `"" + UserID=Nil → system`, иначе → `user`).
+
+Это даёт миграцию **без правки 30+ существующих callsite'ов** — legacy `Audit.Write` уже работает по всему коду, dual-write делает Timeline сразу заполненным.
 
 #### Critical правило (из rail)
 
-Audit пишется через **bare pool**, не через request-tx. Иначе rollback бизнес-транзакции стирает запись о денае.
+Audit пишется через **bare pool**, не через request-tx. Иначе rollback бизнес-транзакции стирает запись о денае. И `Writer`, и `Store` оба соблюдают этот invariant.
+
+#### Unified Timeline UI
+
+`/_/logs` — единый Timeline экран поверх обоих chain'ов. Endpoint `GET /api/_admin/audit/timeline` UNION'ит `_audit_log_site + _audit_log_tenant` с фильтрами:
+
+```
+?actor_type=admin
+&event=auth.       # ILIKE substring
+&entity_type=vendor
+&entity_id=v-42
+&outcome=denied
+&tenant_id=<uuid>
+&request_id=<id>   # cross-row correlation
+&since=...&until=...
+&source=all|site|tenant
+&page=&perPage=
+```
+
+Каждая row клик → drawer с raw before/after JSON diff + actor breakdown + entity + meta. Старые tabs (`/logs/audit`, `/logs/app`, `/logs/email-events`, `/logs/notifications`) удалены — deep-dive views переехали в Health → Process logs и Settings → Mailer/Notifications соответственно (см. `12-admin-ui.md`).
+
+#### Phase 2 / 3 / 4 ✅
+
+**Archive + retention (Phase 2):** `audit_archive` cron (06:00 default) выгребает sealed-and-old monthly partition'ы в gzipped JSONL под `<dataDir>/audit/<target>/YYYY-MM/audit-<YYYY-MM>.jsonl.gz` + sidecar `audit-<YYYY-MM>.seal.json` manifest. После durable upload — `DROP PARTITION` (O(1)). Retention default 14 дней. Parallel cron `audit_partition` (23:55) пред-создаёт next month's partition.
+
+**Verify archive (Phase 2.1):** `railbase audit verify --include-archive` rehydrate'ит canonical JSON из gzipped JSONL построчно, пересчитывает SHA-256 chain (site/tenant форма), и для каждого seal'а в manifest'е делает `ed25519.Verify(public_key, chain_head, signature)` — полная криптографическая verify на disk без обращения к DB.
+
+**Pluggable archive target (Phase 3):** `ArchiveTarget` interface в `internal/audit/archive_target.go`. Default — LocalFSTarget. S3Target (build tag `aws`) — uploads под `s3://bucket/<prefix><target>/YYYY-MM/...` с опциональным SSE-KMS. Object Lock retention (Compliance mode) настраивается **на bucket'е operator'ом** до того как Railbase на него смотрит — мы только uploads, lock policy enforced AWS-side.
+
+Env-driven opt-in:
+
+```bash
+RAILBASE_AUDIT_ARCHIVE_TARGET=s3
+RAILBASE_AUDIT_S3_BUCKET=my-audit-vault
+RAILBASE_AUDIT_S3_REGION=us-east-1
+RAILBASE_AUDIT_S3_PREFIX=audit/                    # optional
+RAILBASE_AUDIT_S3_SSE_KMS_KEY=alias/audit-cmk      # optional
+RAILBASE_AUDIT_S3_ENDPOINT=https://minio.local:9000 # optional (MinIO/R2)
+```
+
+Default binary не зависит от AWS SDK; для S3 нужно пересобрать `go build -tags aws`. Если env'а просит s3 а build без tag — graceful fallback на LocalFS с warning'ом в log.
+
+**KMS-signed seals (Phase 4):** `Signer` interface в `internal/audit/signer.go`. Default — LocalSigner (читает `<dataDir>/.audit_seal_key`). KMSSigner (build tag `aws`) — Ed25519 ключ в AWS KMS, private side **никогда** не покидает HSM. На construct: `GetPublicKey` → cache the 32-byte raw pubkey (распаковывается из SPKI DER). На каждый seal: `kms:Sign` с algorithm `EDDSA` (KMS Ed25519 поддерживает с 2024).
+
+```bash
+RAILBASE_AUDIT_SEAL_SIGNER=aws-kms
+RAILBASE_AUDIT_KMS_KEY_ID=arn:aws:kms:us-east-1:111:key/...
+RAILBASE_AUDIT_KMS_REGION=us-east-1
+RAILBASE_AUDIT_KMS_ENDPOINT=https://kms.local:4566  # optional (LocalStack)
+```
+
+Verify side ничего не знает про KMS: ed25519.Verify(public_key, chain_head, signature) — public_key хранится в каждой `_audit_seals` row, signature тоже. Чисто публичная арифметика, любой может воспроизвести без AWS креденций.
+
+#### Audit archive targets (matrix)
+
+| Target  | Build | Use case |
+|---------|-------|----------|
+| LocalFS | default | Self-hosted, single-host, оператор контролирует хост |
+| S3 | `-tags aws` | Regulated deployments, Object Lock Compliance retention, off-host immutability |
+| GCS Bucket Lock | (planned) | GCP-only deployments — потребует gcp build tag + GCS SDK |
+| Azure Immutable Blob | (planned) | Azure-only deployments — потребует azure build tag |
 
 ### 3. Telemetry (OpenTelemetry)
 
@@ -659,6 +805,68 @@ RAILBASE_TRUSTED_PROXIES=10.0.0.0/8,192.168.0.0/16
 ### Origin header validation
 
 Для state-changing requests с cookie-auth: `Origin` matches site.url или allowed origins (CORS). Дополнительная защита в дополнение к CSRF token.
+
+### Admin RBAC (system_admin / system_readonly)
+
+До v1.x: каждый аутентифицированный admin имел полный доступ к `/api/_admin/*` — middleware `AdminAuthMiddleware` проверяла session token, но никакой `rbac.Require(...)` на endpoint'ах не вызывался. Roles были seeded в `_roles` (миграция 0013), но dead-code до admin surface.
+
+С v1.x:
+- Миграция `0029_rbac_admin_bridge` добавляет роль `system_readonly` (read-only admin: holds *.read + audit.verify) и backfill'ит каждый существующий ряд `_admins` присвоением `system_admin`. Поведение для уже задеплоенных систем не меняется (все admin'ы остаются полнодоступными), но теперь это явно и downgradable через role UI.
+- `adminapi.Deps.RBAC` plumbed из app.go; `rbac.Middleware` mounted в группе `RequireAdmin`. Principal extractor: `(_admins, AdminPrincipal.ID)` — site-scoped, no tenant.
+- Helper `requireAction(actionkey)` обворачивает handler. Gated endpoints на v1.x старте:
+  - `GET  /api/_admin/settings`           → `settings.read`
+  - `PATCH/DELETE /api/_admin/settings/*` → `settings.write`
+  - `GET  /api/_admin/audit*`             → `audit.read`
+- Bootstrap path (POST `/_bootstrap`) и CLI `railbase admin create` авто-assign `system_admin` новому admin'у, чтобы фреш deploy сразу видел gated endpoint'ы.
+- Fall-open: если `Deps.RBAC == nil` (тесты без RBAC), `requireAction` пропускает request — сохраняет pre-v1.x контракт.
+
+Roles catalog (seed):
+- **site:system_admin** — bypass; never denied any action.
+- **site:system_readonly** (new in v1.x) — read-only: holds `*.read` + `audit.verify`. Cannot write settings / mutate admins / grant roles.
+- **site:admin** — site-wide administrator (no `system_*` actions).
+- **site:user** — default authenticated user.
+- **site:guest** — unauthenticated.
+- **tenant:owner** — bypass within tenant.
+- **tenant:admin / member / viewer** — narrowing tenant scopes.
+
+Admin UI для управления ролями (v1.x):
+- Settings → **Admins & roles** (`/_/settings/admins`). Grid со всеми админами + их site-role'ами. Клик "Edit roles" открывает sheet с multi-select checkbox'ами — sent роль-сет атомарно swap'ается через `PUT /api/_admin/admins/{id}/roles`. Клик на role badge → инспектор: scope + description + список action_key, которые роль выдаёт.
+- Backend endpoints (v1.x):
+  - `GET  /api/_admin/rbac/roles`             — список ролей (gated by `rbac.read`)
+  - `GET  /api/_admin/rbac/roles/{id}/actions` — action_keys конкретной роли (`rbac.read`)
+  - `GET  /api/_admin/admins-with-roles`       — admins + их роли в одном round-trip (`rbac.read`)
+  - `PUT  /api/_admin/admins/{adminID}/roles`  — атомарный swap site role-set (`rbac.write`)
+- Safety guard: PUT отказывается выполнить swap, если результат оставит deployment с нулём `system_admin` админов — 409 + hint "Promote another admin first, then downgrade this one." Audit-row `admin.rbac.assign` записывает before / after.
+
+Что НЕ реализовано на v1.x (deferred):
+- Большинство admin endpoint'ов всё ещё не gated (jobs, backups, webhooks, hooks, cron, stripe, …) — handlers могут добавляться итерационно через `r.With(requireAction(...))`. Текущая защита: они работают как pre-v1.x — любой аутентифицированный admin.
+- Role CRUD (создание custom-роли, grant/revoke action_key). Seeded ролей хватает на common case; custom-роли минтятся через Go API.
+- Cache flush на role swap. После PUT кэш resolved-actions держит старое разрешение до 5 минут (TTL); operator может выполнить logout+login, чтобы получить новую роль немедленно.
+- Tenant role assignments в UI. Тот же backend store, но это отдельный surface — не на этом screen'е.
+
+### CORS (cross-origin middleware)
+
+Default deployment serves admin SPA и API из одного origin (`https://yourapp.com/_/` + `https://yourapp.com/api/*`) — CORS не нужен и middleware **inert** (zero `Access-Control-*` headers emitted).
+
+Когда нужен:
+- Mobile-web SPA из другого origin вызывает API
+- Split-deploy (admin отдельный домен)
+
+Настройка:
+
+```
+security.cors.allowed_origins  = https://app.example.com,https://staging.example.com   # exact, no wildcards
+security.cors.allow_credentials = true                                                 # cookie auth across origins
+```
+
+Env-vars: `RAILBASE_CORS_ALLOWED_ORIGINS`, `RAILBASE_CORS_ALLOW_CREDENTIALS`.
+
+Правила:
+- Allow-list EXACT match (`https://app.example.com` ≠ `https://APP.example.com` ≠ `https://app.example.com.attacker.example`).
+- `*` + credentials → middleware silently отключается (browser refuses combination — fail-closed).
+- Не-matched origin → zero CORS headers (browser blocks JS, server handler ещё выполняется — это OK, потому что CSRF + Bearer-auth остаются единственными путями к state).
+- Изменения через settings применяются на следующий restart (CORS middleware boot-time configured).
+- CSRF middleware всё равно gate'ит state-changing requests с cookie-auth — даже если CORS allow attacker's origin (misconfig), CSRF token + SameSite=Lax закрывают эксплуатацию.
 
 ---
 

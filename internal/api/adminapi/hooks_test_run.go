@@ -303,22 +303,20 @@ func writeHookTestRunJSON(w http.ResponseWriter, resp hookTestRunResponse) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// writeHookTestRunAudit records the test-run action. Mirrors the
-// cache.cleared pattern: nil-guarded so test Deps without an Audit
-// writer stay functional.
+// writeHookTestRunAudit records the test-run action.
+//
+// v3.x — entity_type="hook_test", entity_id=<collection>.<event>
+// (e.g. "posts.record_after_create"). Operator hunting flaky hooks
+// filters by entity_id to see only that hook's test history.
 func (d *Deps) writeHookTestRunAudit(r *http.Request, req hookTestRunRequest, outcome, errMsg string) {
-	if d == nil || d.Audit == nil {
-		return
-	}
-	p := AdminPrincipalFrom(r.Context())
-	before := map[string]any{
+	payload := map[string]any{
 		"event":      req.Event,
 		"collection": req.Collection,
 		"outcome":    outcome,
 	}
 	if req.Principal != nil {
-		before["principal_id"] = req.Principal.ID
-		before["principal_collection"] = req.Principal.Collection
+		payload["principal_id"] = req.Principal.ID
+		payload["principal_collection"] = req.Principal.Collection
 	}
 	var au audit.Outcome
 	switch outcome {
@@ -329,16 +327,18 @@ func (d *Deps) writeHookTestRunAudit(r *http.Request, req hookTestRunRequest, ou
 	default:
 		au = audit.OutcomeError
 	}
-	_, _ = d.Audit.Write(r.Context(), audit.Event{
-		UserID:         p.AdminID,
-		UserCollection: "_admins",
-		Event:          "hooks.test_run",
-		Outcome:        au,
-		Before:         before,
-		ErrorCode:      errMsg,
-		IP:             clientIP(r),
-		UserAgent:      r.Header.Get("User-Agent"),
-	})
+	entityID := req.Collection
+	if req.Event != "" {
+		entityID = req.Collection + "." + req.Event
+	}
+	writeAuditEntity(r.Context(), d, EntityAuditInput{
+		Event:      "hooks.test_run",
+		EntityType: "hook_test",
+		EntityID:   entityID,
+		Outcome:    au,
+		Before:     payload,
+		ErrorCode:  errMsg,
+	}, r)
 }
 
 // cloneRecord returns a shallow copy of m. The dispatcher swaps map

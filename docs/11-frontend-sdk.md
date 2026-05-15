@@ -106,6 +106,26 @@ JSDoc на каждом методе, явные параметры (не `Parti
 
 `pocketbase` npm package работает в `strict` mode без изменений. Native клиент даёт типы поверх.
 
+### 7. Admin surface — намеренно вне SDK
+
+`/api/_admin/*` endpoints (admin UI бэкенд) **не входят** в
+generated client SDK и в OpenAPI spec. Это сознательное разделение:
+
+- **Public SDK** (`generate sdk` + `generate openapi`) — для downstream
+  приложений-потребителей. Покрывает `/api/collections/*`, `/api/auth/*`,
+  `/api/realtime`, `/api/notifications/*`, `/api/exports/*`.
+- **Admin client** (`admin/src/api/admin.ts` + `types.ts`) — внутренняя
+  тип-обёртка для embedded SPA. Покрывает audit timeline, backups,
+  cron CRUD, RBAC, system tables, etc. Если downstream строит свой
+  кастомный admin-панель — он копирует нужные shapes локально или
+  импортирует через UI-kit registry (`/api/_ui/*`).
+
+Audit timeline endpoint (`GET /api/_admin/audit/timeline`) НЕ shippит'ся
+в SDK по этой причине — он admin-only. Приложения, которым нужен
+in-app audit поток для своих сущностей, делают свой read-endpoint
+поверх `_audit_log_tenant` (RLS-scoped через `railbase.tenant`) — это
+часть public collection API, не admin API.
+
 ## Auth API surface
 
 ```ts

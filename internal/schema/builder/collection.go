@@ -98,6 +98,16 @@ func (b *CollectionBuilder) SoftDelete() *CollectionBuilder {
 	return b
 }
 
+// Audit flips on automatic v3 timeline emission for every C/U/D on
+// a record of this collection. See CollectionSpec.Audit for the full
+// shape contract — event = "<collection>.{created,updated,deleted}",
+// entity_type = <collection>, entity_id = <record.id>, actor pulled
+// from ctx, before/after = the record diff.
+func (b *CollectionBuilder) Audit() *CollectionBuilder {
+	b.spec.Audit = true
+	return b
+}
+
 // AdjacencyList adds a self-referential `parent UUID NULL` column
 // with `ON DELETE SET NULL` plus an index for fast child lookups.
 // Each row has at most one parent (single-parent tree). Cycle

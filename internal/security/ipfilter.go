@@ -84,15 +84,20 @@ func (r *IPFilterRules) IsEmpty() bool {
 	return r == nil || (len(r.allow) == 0 && len(r.deny) == 0)
 }
 
-// IPFilter is the live, settings-driven filter middleware. Hold an
-// atomic.Value of *IPFilterRules so settings subscribers can swap
-// the rules without locking the request path.
+// IPFilter is the live, settings-driven filter middleware. Holds
+// atomic.Pointers to the parsed rule set AND the trusted-proxy list
+// so settings subscribers can swap either without locking the request
+// path. The mutex serialises writers; readers (Middleware /
+// clientIP) only do atomic loads.
 type IPFilter struct {
 	rules atomic.Pointer[IPFilterRules]
-	// trustedProxies bounds how far back we walk X-Forwarded-For. Without
-	// it, attackers can spoof origin by prepending a header chain.
-	trustedProxies []*net.IPNet
-	mu             sync.Mutex // serialises Update; not held on request path
+	// trustedProxies bounds how far back we walk X-Forwarded-For.
+	// Without it, attackers can spoof origin by prepending a header
+	// chain. Live-updatable via UpdateTrustedProxies so the
+	// runtimeconfig dispatcher can flip this on Settings save with
+	// no restart (Phase 2c — `security.trusted_proxies` → live).
+	trustedProxies atomic.Pointer[[]*net.IPNet]
+	mu             sync.Mutex // serialises Update*; not held on request path
 }
 
 // NewIPFilter constructs a filter with no rules. Use Update() (typically
@@ -105,12 +110,12 @@ func NewIPFilter(trustedProxies []string) (*IPFilter, error) {
 	f := &IPFilter{}
 	empty := &IPFilterRules{}
 	f.rules.Store(empty)
-	for _, s := range trustedProxies {
-		nets, err := parseCIDR(s)
-		if err != nil {
-			return nil, fmt.Errorf("trusted proxy %q: %w", s, err)
+	emptyProxies := []*net.IPNet{}
+	f.trustedProxies.Store(&emptyProxies)
+	if len(trustedProxies) > 0 {
+		if err := f.UpdateTrustedProxies(trustedProxies); err != nil {
+			return nil, err
 		}
-		f.trustedProxies = append(f.trustedProxies, nets)
 	}
 	return f, nil
 }
@@ -125,6 +130,27 @@ func (f *IPFilter) Update(allow, deny []string) error {
 		return err
 	}
 	f.rules.Store(r)
+	return nil
+}
+
+// UpdateTrustedProxies atomically swaps the live trusted-proxy list.
+// Phase 2c — `security.trusted_proxies` is now live: the
+// runtimeconfig dispatcher calls this from its OnChange callback so
+// flipping the setting in the admin UI immediately changes which
+// hops are trusted for X-Forwarded-For walking. Failure (invalid
+// CIDR) leaves the previous list in place — the caller logs.
+func (f *IPFilter) UpdateTrustedProxies(proxies []string) error {
+	parsed := make([]*net.IPNet, 0, len(proxies))
+	for _, s := range proxies {
+		nets, err := parseCIDR(s)
+		if err != nil {
+			return fmt.Errorf("trusted proxy %q: %w", s, err)
+		}
+		parsed = append(parsed, nets)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.trustedProxies.Store(&parsed)
 	return nil
 }
 
@@ -191,7 +217,11 @@ func (f *IPFilter) isTrustedProxy(ip net.IP) bool {
 	if ip == nil {
 		return false
 	}
-	for _, n := range f.trustedProxies {
+	proxies := f.trustedProxies.Load()
+	if proxies == nil {
+		return false
+	}
+	for _, n := range *proxies {
 		if n.Contains(ip) {
 			return true
 		}

@@ -307,21 +307,16 @@ func writeSystemTableEnvelope(w http.ResponseWriter, page, perPage int, total in
 }
 
 // writeSystemTableAudit records the read against the sensitive table.
-// Nil-guarded against d.Audit so tests with a bare Deps stay happy.
+//
+// v3.x — entity_type=<table name> (e.g. "_admins", "_sessions"),
+// entity_id="" because this is a list read, not a per-row access.
+// Filter «show all reads of _admins» hits the entity_type index.
 func writeSystemTableAudit(ctx context.Context, d *Deps, r *http.Request, table string) {
-	if d == nil || d.Audit == nil {
-		return
-	}
-	p := AdminPrincipalFrom(ctx)
-	_, _ = d.Audit.Write(ctx, audit.Event{
-		UserID:         p.AdminID,
-		UserCollection: "_admins",
-		Event:          "admin.system_table.read",
-		Outcome:        audit.OutcomeSuccess,
-		Before:         map[string]any{"table": table},
-		IP:             clientIP(r),
-		UserAgent:      r.Header.Get("User-Agent"),
-	})
+	writeAuditEntity(ctx, d, EntityAuditInput{
+		Event:      "admin.system_table.read",
+		EntityType: table,
+		Outcome:    audit.OutcomeSuccess,
+	}, r)
 }
 
 // truncateUA caps the User-Agent string at 60 chars (single-byte

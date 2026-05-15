@@ -229,11 +229,30 @@ func buildInsert(spec builder.CollectionSpec, fields map[string]any) (string, []
 	return sql, args, nil
 }
 
+// stripServerOwnedUpdateFields removes columns a PATCH is never allowed
+// to touch — currently sequential_code values, which are server-
+// generated, so an UPDATE attempt is silently dropped. Mutates `fields`
+// in place; safe to call more than once (delete-of-absent is a no-op).
+//
+// updateHandler MUST call this BEFORE it sizes the access rule's
+// placeholder offset off len(fields): buildUpdate strips these columns
+// too, so measuring len(fields) without stripping first would number
+// the rule's $N placeholders for columns that never reach the SET
+// clause — desyncing the final argument list.
+func stripServerOwnedUpdateFields(spec builder.CollectionSpec, fields map[string]any) {
+	for _, f := range spec.Fields {
+		if f.Type == builder.TypeSequentialCode {
+			delete(fields, f.Name)
+		}
+	}
+}
+
 // buildUpdate returns the UPDATE statement. The WHERE clause is by
 // id, optionally AND'd with the rule expression compiled by the
 // caller. extraWhere args MUST already use placeholders starting at
 // $(setCount+2) — buildUpdate appends them straight after the SET
-// args + id arg.
+// args + id arg. setCount is measured AFTER stripServerOwnedUpdateFields,
+// so callers must strip first (see updateHandler).
 //
 // If fields is empty we still touch the row so the `updated` trigger
 // bumps — the API promise is "PATCH always returns the current row".
@@ -241,11 +260,7 @@ func buildUpdate(spec builder.CollectionSpec, id string, fields map[string]any, 
 	// v1.4.4: strip server-owned sequential_code fields (UPDATE attempts
 	// are silently ignored). Slug is NOT auto-re-derived on UPDATE —
 	// stable URLs trump auto-update.
-	for _, f := range spec.Fields {
-		if f.Type == builder.TypeSequentialCode {
-			delete(fields, f.Name)
-		}
-	}
+	stripServerOwnedUpdateFields(spec, fields)
 
 	// Soft-delete: UPDATE on a tombstoned row is refused. Caller sees
 	// 404 (same as if the row never existed). Restore via the dedicated

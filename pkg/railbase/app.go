@@ -17,24 +17,24 @@ import (
 	"github.com/railbase/railbase/internal/api/adminapi"
 	authapi "github.com/railbase/railbase/internal/api/auth"
 	notifapi "github.com/railbase/railbase/internal/api/notifications"
+	"github.com/railbase/railbase/internal/api/rest"
 	scimapi "github.com/railbase/railbase/internal/api/scim"
 	stripeapi "github.com/railbase/railbase/internal/api/stripeapi"
 	"github.com/railbase/railbase/internal/api/uiapi"
-	"github.com/railbase/railbase/internal/api/rest"
 	"github.com/railbase/railbase/internal/audit"
-	"github.com/railbase/railbase/internal/compat"
 	"github.com/railbase/railbase/internal/auth/apitoken"
-	scimauth "github.com/railbase/railbase/internal/auth/scim"
 	"github.com/railbase/railbase/internal/auth/externalauths"
 	"github.com/railbase/railbase/internal/auth/lockout"
 	"github.com/railbase/railbase/internal/auth/mfa"
 	authmw "github.com/railbase/railbase/internal/auth/middleware"
 	"github.com/railbase/railbase/internal/auth/origins"
 	"github.com/railbase/railbase/internal/auth/recordtoken"
+	scimauth "github.com/railbase/railbase/internal/auth/scim"
 	"github.com/railbase/railbase/internal/auth/secret"
 	"github.com/railbase/railbase/internal/auth/session"
 	"github.com/railbase/railbase/internal/auth/webauthn"
 	"github.com/railbase/railbase/internal/buildinfo"
+	"github.com/railbase/railbase/internal/compat"
 	"github.com/railbase/railbase/internal/config"
 	"github.com/railbase/railbase/internal/db/embedded"
 	"github.com/railbase/railbase/internal/db/migrate"
@@ -48,10 +48,12 @@ import (
 	"github.com/railbase/railbase/internal/jobs"
 	"github.com/railbase/railbase/internal/logger"
 	"github.com/railbase/railbase/internal/logs"
+	"github.com/railbase/railbase/internal/maintenance"
 	"github.com/railbase/railbase/internal/metrics"
 	"github.com/railbase/railbase/internal/notifications"
 	"github.com/railbase/railbase/internal/rbac"
 	"github.com/railbase/railbase/internal/realtime"
+	"github.com/railbase/railbase/internal/runtimeconfig"
 	"github.com/railbase/railbase/internal/schema/live"
 	"github.com/railbase/railbase/internal/security"
 	"github.com/railbase/railbase/internal/server"
@@ -63,7 +65,6 @@ import (
 	"github.com/google/uuid"
 
 	"net/http"
-	neturl "net/url"
 	"os/exec"
 	"runtime"
 	"time"
@@ -281,7 +282,7 @@ func (a *App) Run(ctx context.Context) error {
 		a.cfg.SetupMode = false
 		a.cfg.DSN = newDSN
 		a.log.Info("setup wizard complete; entering normal boot",
-			"dsn_redacted", redactDSN(newDSN))
+			"dsn_redacted", security.RedactDSN(newDSN))
 		// Re-run preflight in case the OS held the listener briefly.
 		if err := preflightBindCheck(a.cfg.HTTPAddr); err != nil {
 			return err
@@ -405,6 +406,27 @@ func (a *App) Run(ctx context.Context) error {
 		// inserted via the admin API or `railbase config set`.
 	})
 
+	// v1.x — process-wide live config handle. Every UI-mutable setting
+	// in the admin catalog goes through here. The dispatcher below
+	// subscribes ONCE to settings.TopicChanged and routes every change
+	// to runtimeCfg.Notify, which (a) re-pulls the atomic slot for the
+	// changed key, and (b) fires OnChange callbacks registered by
+	// stateful services. Consumers — middleware, handlers, services —
+	// read the live value through runtimeCfg.X() instead of capturing
+	// a boot-time snapshot.
+	// envMap threads the catalog's `RAILBASE_*` mapping into
+	// runtimeconfig so pre-boot operator overrides keep working when
+	// the setting hasn't been persisted yet (precedence: Manager →
+	// env → typed default).
+	runtimeCfg := runtimeconfig.New(settingsMgr, adminapi.SettingsEnvMap())
+	bus.Subscribe(settings.TopicChanged, 16, func(ctx context.Context, e eventbus.Event) {
+		change, ok := e.Payload.(settings.Change)
+		if !ok {
+			return
+		}
+		runtimeCfg.Notify(ctx, change.Key)
+	})
+
 	// v0.6 audit writer: bare-pool writer (NOT request-tx) so denial
 	// rows survive request rollback. Bootstrap loads the most-recent
 	// hash so the chain links across process restarts.
@@ -413,32 +435,52 @@ func (a *App) Run(ctx context.Context) error {
 		return fmt.Errorf("audit bootstrap: %w", err)
 	}
 
-	// v1.7.6 — logs-as-records: optional admin-UI-browseable persistence
-	// of slog.Records into `_logs`. Settings-gated (`logs.persist`,
-	// env RAILBASE_LOGS_PERSIST). Default false in dev (stdout-only is
-	// usually what an operator wants when staring at the terminal);
-	// production deployments flip it on so admins can read past the
-	// log-aggregator's retention. When enabled, the slog dispatcher
-	// becomes a Multi fan-out: stdout AND DB. Buffered + flushed every
-	// 2s; overflow drops oldest with a counter (Sink never blocks).
-	var logSink *logs.Sink
-	if logsPersistEnabled(ctx, settingsMgr, a.cfg.ProductionMode) {
-		logSink = logs.NewSink(p.Pool, logs.Config{})
-		// Preserve the existing handler chain (terminal + date-rotated
-		// file from buildLogOptions) and add the DB sink as a sibling.
-		// Reusing a.log.Handler() instead of NewHandler() avoids
-		// double-creating the file handler — which would re-open the
-		// daily log file twice and produce duplicate lines.
-		a.log = slog.New(logs.NewMulti(a.log.Handler(), logSink))
-		defer func() {
-			// Bounded final-drain so a slow DB on shutdown doesn't stall
-			// the whole graceful-shutdown grace window. Independent ctx
-			// because the request ctx is already cancelled by this point.
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = logSink.Close(shutdownCtx)
-		}()
+	// v3.x unified audit Store. AttachStore wires it as a TRANSPARENT
+	// dual-write sink on the legacy Writer — every existing
+	// Audit.Write() across the codebase now ALSO lands in the v3
+	// tables without changing the call-site (see
+	// internal/audit/audit.go forwardToStore). New call-sites are
+	// free to use auditStore directly for richer Entity / before-
+	// after shapes the legacy Event struct doesn't carry.
+	auditStore, err := audit.NewStore(ctx, p.Pool)
+	if err != nil {
+		return fmt.Errorf("audit store: %w", err)
 	}
+	auditWriter.AttachStore(auditStore)
+
+	// v1.7.6 — logs-as-records: admin-UI-browseable persistence of
+	// slog.Records into `_logs`. Buffered + flushed every 2s; overflow
+	// drops oldest with a counter (Sink never blocks).
+	//
+	// v2.x (unified-runtime-config): the Sink is now ALWAYS wired into
+	// the slog dispatcher; the `logs.persist` toggle is consulted as a
+	// LIVE gate via Config.Enabled. The atomic.Bool inside runtimeCfg
+	// flips on Settings UI save with no restart — previously this knob
+	// was the last `Reload: restart` holdout in the catalog. The cost
+	// of the always-on flusher when persistence is disabled is one
+	// idle goroutine + a 2s ticker; negligible against the operational
+	// payoff of "no UI knobs require a restart".
+	//
+	// The DEFAULT (when the setting is absent) is production-on /
+	// dev-off — encoded in runtimeconfig.defaultLogsPersist and
+	// respected by Config.LogsPersist().
+	logSink := logs.NewSink(p.Pool, logs.Config{
+		Enabled: runtimeCfg.LogsPersist,
+	})
+	// Preserve the existing handler chain (terminal + date-rotated
+	// file from buildLogOptions) and add the DB sink as a sibling.
+	// Reusing a.log.Handler() instead of NewHandler() avoids double-
+	// creating the file handler — which would re-open the daily log
+	// file twice and produce duplicate lines.
+	a.log = slog.New(logs.NewMulti(a.log.Handler(), logSink))
+	defer func() {
+		// Bounded final-drain so a slow DB on shutdown doesn't stall
+		// the whole graceful-shutdown grace window. Independent ctx
+		// because the request ctx is already cancelled by this point.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = logSink.Close(shutdownCtx)
+	}()
 
 	// v0.6 cross-process eventbus bridge. LISTEN/NOTIFY on
 	// `railbase_events` lets multi-replica deployments share local
@@ -463,6 +505,7 @@ func (a *App) Run(ctx context.Context) error {
 		Sessions:   adminSessions,
 		Settings:   settingsMgr,
 		Audit:      auditWriter,
+		AuditStore: auditStore,
 		Log:        a.log,
 		Production: a.cfg.ProductionMode,
 		// v1.7.9 — expose the API-token store on the admin surface so
@@ -554,6 +597,13 @@ func (a *App) Run(ctx context.Context) error {
 		Log:  a.log,
 	})
 	rbac.SubscribeInvalidation(bus)
+	// Plumb the same store into the admin surface so /api/_admin/*
+	// handlers can call rbac.Require(...) through the admin-aware
+	// principal extractor wired in adminapi.Mount. Mirrors the same
+	// "Deps was constructed earlier; patch the field now that the
+	// dependency exists" pattern as the Realtime/Webhooks/Stripe
+	// fields just above.
+	adminDeps.RBAC = rbacStore
 
 	// v1.3.0 realtime broker. Subscribes to "record.*" on the bus and
 	// fans events out to SSE clients connected to /api/realtime.
@@ -585,7 +635,7 @@ func (a *App) Run(ctx context.Context) error {
 	// RAILBASE_STORAGE_DIR env. The Store persists metadata in `_files`.
 	// MasterKey signs download URLs (5-min TTL by default; the inline
 	// record JSON refreshes them on every read).
-	filesDeps, filesDir, err := buildFilesDeps(ctx, settingsMgr, a.cfg.DataDir, masterKey, p.Pool, a.log)
+	filesDeps, filesDir, err := buildFilesDeps(ctx, settingsMgr, runtimeCfg, a.cfg.DataDir, masterKey, p.Pool, a.log)
 	if err != nil {
 		return fmt.Errorf("files: %w", err)
 	}
@@ -617,6 +667,13 @@ func (a *App) Run(ctx context.Context) error {
 	// after verifying the destination is writable and tuning retention.
 	jobs.RegisterBackupBuiltins(jobsReg, backupRunnerAdapter{pool: p.Pool},
 		filepath.Join(a.cfg.DataDir, "backups"), a.log)
+	// Wire the cron store + registry into the admin API so the
+	// /api/_admin/cron surface (list / upsert / enable / disable /
+	// run-now / delete) operates on the same `_cron` rows the ticker
+	// materialises and the same handler registry. Both fields are
+	// optional on the Deps; populating them here unlocks the routes.
+	adminDeps.CronJobs = cronStore
+	adminDeps.JobRegistry = jobsReg
 	// v1.x — `audit_seal` builtin. Loads (or, in dev, generates) the
 	// Ed25519 keypair at `<dataDir>/.audit_seal_key`. Production refuses
 	// auto-create: operators must run `railbase audit seal-keygen` or
@@ -625,16 +682,35 @@ func (a *App) Run(ctx context.Context) error {
 	// writing rows, so denials/failures still get recorded; only the
 	// Ed25519 anchor for the chain stops accumulating until the
 	// operator provides a key.
+	// v4.x — opt-in KMS-backed seal signer. Default (nil) keeps the
+	// local-keyfile behaviour; RAILBASE_AUDIT_SEAL_SIGNER=aws-kms
+	// switches to AWS KMS (requires `-tags aws` build).
+	sealSigner := resolveSealSigner(a.log)
 	auditSealer, sealerErr := audit.NewSealer(audit.SealerOptions{
 		Pool:       p.Pool,
 		KeyPath:    filepath.Join(a.cfg.DataDir, ".audit_seal_key"),
 		Production: a.cfg.ProductionMode,
+		Signer:     sealSigner,
 	})
 	if sealerErr != nil {
 		a.log.Warn("audit: sealer disabled", "err", sealerErr)
 		auditSealer = nil
 	}
 	jobs.RegisterAuditSealBuiltins(jobsReg, auditSealer, a.log)
+
+	// v3.x Phase 2 — audit_partition + audit_archive builtins.
+	// Partition pre-creation is always wired (cheap, idempotent,
+	// every deployment benefits). Archive is wired with LocalFS by
+	// default; RAILBASE_AUDIT_ARCHIVE_TARGET=s3 swaps in the S3
+	// Object Lock target (requires `-tags aws` build).
+	archiveTarget := resolveArchiveTarget(a.log)
+	jobs.RegisterAuditPartitionBuiltin(jobsReg, auditPartitionerAdapter{p.Pool}, a.log)
+	jobs.RegisterAuditArchiveBuiltin(jobsReg, auditArchiverAdapter{
+		pool:    p.Pool,
+		dataDir: a.cfg.DataDir,
+		target:  archiveTarget,
+	}, a.log)
+
 	// §3.6.13 — `orphan_reaper` builtin. Sweeps both directions of
 	// orphans against the inline files subsystem: `_files` rows whose
 	// owner record is gone (hard-delete bypassed CASCADE), and
@@ -781,70 +857,81 @@ func (a *App) Run(ctx context.Context) error {
 		secHeaders = &opts
 	}
 
+	// CORS — fully live via runtimeconfig. The middleware reads the
+	// origin allow-list + credentials flag from runtimeCfg on EVERY
+	// request, so an operator edit through the admin Settings UI takes
+	// effect on the next call with no restart. Static knobs (allowed
+	// methods / headers / preflight max-age) stay baked-in here.
+	// Default deployment is same-origin (admin SPA served from this
+	// binary at /_/) so the allow-list is empty and the middleware is
+	// inert. The CSRF middleware downstream still has the final say
+	// on state-changing requests regardless of CORS posture.
+	corsOpts := &security.CORSOptions{}
+
 	// v1.4.14 IP allow/deny filter — settings-driven, live-updatable.
 	// Rules sourced from `security.allow_ips` / `security.deny_ips`
 	// settings (CSV of CIDRs). Empty rules = pass-through (no perf hit
 	// beyond a single atomic.Load).
-	ipFilter, err := security.NewIPFilter(splitCSV(readSetting(ctx, settingsMgr, "security.trusted_proxies", "RAILBASE_TRUSTED_PROXIES", "")))
+	//
+	// v2.x (Phase 2c/2d — unified runtime config): all three knobs
+	// (`security.allow_ips`, `security.deny_ips`, `security.trusted_
+	// proxies`) are now live via runtimeCfg.OnChange. The boot wiring
+	// here just seeds the initial state from runtimeCfg; the dispatcher
+	// keeps it fresh.
+	ipFilter, err := security.NewIPFilter(runtimeCfg.TrustedProxies())
 	if err != nil {
 		return fmt.Errorf("ip filter: %w", err)
 	}
 	// Apply current settings on boot.
-	allowCSV := readSetting(ctx, settingsMgr, "security.allow_ips", "RAILBASE_ALLOW_IPS", "")
-	denyCSV := readSetting(ctx, settingsMgr, "security.deny_ips", "RAILBASE_DENY_IPS", "")
-	if err := ipFilter.Update(splitCSV(allowCSV), splitCSV(denyCSV)); err != nil {
+	if err := ipFilter.Update(runtimeCfg.AllowedIPs(), runtimeCfg.DeniedIPs()); err != nil {
 		// Log + carry on — operator may have invalid CIDR in settings; we
 		// don't want a typo to brick the server. Filter remains in its
 		// previous (empty) state, so all traffic passes until they fix.
 		a.log.Warn("ip filter: settings have invalid CIDR; pass-through", "err", err)
 	}
-	// Live-update on settings change. (settings.Manager fires
-	// settings.TopicChanged with a settings.Change payload on every
-	// Set/Delete; we filter to the two CIDR keys and re-read.)
-	bus.Subscribe(settings.TopicChanged, 16, func(_ context.Context, e eventbus.Event) {
-		change, ok := e.Payload.(settings.Change)
-		if !ok {
-			return
-		}
-		if change.Key != "security.allow_ips" && change.Key != "security.deny_ips" {
-			return
-		}
-		allowNow := readSetting(ctx, settingsMgr, "security.allow_ips", "RAILBASE_ALLOW_IPS", "")
-		denyNow := readSetting(ctx, settingsMgr, "security.deny_ips", "RAILBASE_DENY_IPS", "")
-		if err := ipFilter.Update(splitCSV(allowNow), splitCSV(denyNow)); err != nil {
-			// Same fail-open behaviour as boot.
+	// Live-update on settings change. Single OnChange registration
+	// covers allow / deny / trusted-proxies — the dispatcher already
+	// re-pulled the atomic slot before firing this callback, so the
+	// getters return the new value.
+	runtimeCfg.OnChange([]string{
+		"security.allow_ips",
+		"security.deny_ips",
+	}, func() {
+		if err := ipFilter.Update(runtimeCfg.AllowedIPs(), runtimeCfg.DeniedIPs()); err != nil {
 			a.log.Warn("ip filter: live update rejected; keeping previous rules", "err", err)
+		}
+	})
+	runtimeCfg.OnChange([]string{"security.trusted_proxies"}, func() {
+		if err := ipFilter.UpdateTrustedProxies(runtimeCfg.TrustedProxies()); err != nil {
+			a.log.Warn("ip filter: trusted proxies update rejected; keeping previous list", "err", err)
 		}
 	})
 
 	// v1.7.2 — three-axis rate limiter (IP / user / tenant). Each axis
 	// reads from `security.rate_limit.{per_ip,per_user,per_tenant}` in
 	// settings (or RAILBASE_RATE_LIMIT_* env). Empty / unset = axis
-	// disabled. Live-updated via the same settings.changed pattern as
-	// the IP filter.
-	rateLimiter := security.NewLimiter(security.Config{
-		PerIP:     mustParseRule(a.log, readSetting(ctx, settingsMgr, "security.rate_limit.per_ip", "RAILBASE_RATE_LIMIT_PER_IP", "")),
-		PerUser:   mustParseRule(a.log, readSetting(ctx, settingsMgr, "security.rate_limit.per_user", "RAILBASE_RATE_LIMIT_PER_USER", "")),
-		PerTenant: mustParseRule(a.log, readSetting(ctx, settingsMgr, "security.rate_limit.per_tenant", "RAILBASE_RATE_LIMIT_PER_TENANT", "")),
-	})
+	// disabled.
+	//
+	// v2.x (Phase 2d): unified runtimeCfg.OnChange callback replaces
+	// the ad-hoc bus subscriber. The dispatcher already routes the
+	// single TopicChanged stream into runtimeCfg.Notify and re-pulls
+	// the atomic slot BEFORE firing the callback, so the getters
+	// below return the new value.
+	buildLimiterCfg := func() security.Config {
+		return security.Config{
+			PerIP:     mustParseRule(a.log, runtimeCfg.RateLimitPerIP()),
+			PerUser:   mustParseRule(a.log, runtimeCfg.RateLimitPerUser()),
+			PerTenant: mustParseRule(a.log, runtimeCfg.RateLimitPerTenant()),
+		}
+	}
+	rateLimiter := security.NewLimiter(buildLimiterCfg())
 	defer rateLimiter.Stop()
-	bus.Subscribe(settings.TopicChanged, 16, func(_ context.Context, e eventbus.Event) {
-		change, ok := e.Payload.(settings.Change)
-		if !ok {
-			return
-		}
-		switch change.Key {
-		case "security.rate_limit.per_ip",
-			"security.rate_limit.per_user",
-			"security.rate_limit.per_tenant":
-		default:
-			return
-		}
-		rateLimiter.Update(security.Config{
-			PerIP:     mustParseRule(a.log, readSetting(ctx, settingsMgr, "security.rate_limit.per_ip", "RAILBASE_RATE_LIMIT_PER_IP", "")),
-			PerUser:   mustParseRule(a.log, readSetting(ctx, settingsMgr, "security.rate_limit.per_user", "RAILBASE_RATE_LIMIT_PER_USER", "")),
-			PerTenant: mustParseRule(a.log, readSetting(ctx, settingsMgr, "security.rate_limit.per_tenant", "RAILBASE_RATE_LIMIT_PER_TENANT", "")),
-		})
+	runtimeCfg.OnChange([]string{
+		"security.rate_limit.per_ip",
+		"security.rate_limit.per_user",
+		"security.rate_limit.per_tenant",
+	}, func() {
+		rateLimiter.Update(buildLimiterCfg())
 	})
 
 	// v1.x — anti-bot defense (honeypot + UA sanity). Closes the
@@ -860,36 +947,32 @@ func (a *App) Run(ctx context.Context) error {
 	// List-shaped settings accept either JSON arrays (preferred when
 	// set via the admin API) or comma-separated strings (CLI / env
 	// friendly). Empty / unset → defaults from DefaultAntiBotConfig.
+	// v2.x (Phase 2d) — anti-bot subscriber consolidated onto
+	// runtimeCfg.OnChange. The four list-shaped antibot keys
+	// (honeypot_fields / reject_uas / ua_enforce_paths) aren't (yet)
+	// in runtimeconfig's typed surface — they're still read by
+	// buildAntiBotConfig which goes through readSetting → manager + env.
+	// That's intentional: anti-bot owns a richer parse step
+	// (security.ParseStringList) than runtimeconfig's CSV helper.
+	// runtimeCfg.OnChange still gives us the unified bus shape; the
+	// callback delegates to buildAntiBotConfig for parsing.
 	antiBot := security.NewAntiBot(buildAntiBotConfig(ctx, settingsMgr, a.cfg.ProductionMode, a.log), a.log)
-	bus.Subscribe(settings.TopicChanged, 16, func(_ context.Context, e eventbus.Event) {
-		change, ok := e.Payload.(settings.Change)
-		if !ok {
-			return
-		}
-		switch change.Key {
-		case "security.antibot.enabled",
-			"security.antibot.honeypot_fields",
-			"security.antibot.reject_uas",
-			"security.antibot.ua_enforce_paths":
-		default:
-			return
-		}
+	runtimeCfg.OnChange([]string{
+		"security.antibot.enabled",
+		"security.antibot.honeypot_fields",
+		"security.antibot.reject_uas",
+		"security.antibot.ua_enforce_paths",
+	}, func() {
 		antiBot.UpdateConfig(buildAntiBotConfig(ctx, settingsMgr, a.cfg.ProductionMode, a.log))
 	})
 
 	// v1.7.4 — compat-mode resolver. Reads `compat.mode` from settings
 	// (env fallback RAILBASE_COMPAT_MODE), default "strict" (PB-shape
-	// only — v1 SHIP target for PB-SDK drop-in). Live-updated via
-	// settings.changed.
-	compatResolver := compat.NewResolver(compat.Parse(
-		readSetting(ctx, settingsMgr, "compat.mode", "RAILBASE_COMPAT_MODE", string(compat.ModeStrict))))
-	bus.Subscribe(settings.TopicChanged, 4, func(_ context.Context, e eventbus.Event) {
-		change, ok := e.Payload.(settings.Change)
-		if !ok || change.Key != "compat.mode" {
-			return
-		}
-		compatResolver.Set(compat.Parse(
-			readSetting(ctx, settingsMgr, "compat.mode", "RAILBASE_COMPAT_MODE", string(compat.ModeStrict))))
+	// only — v1 SHIP target for PB-SDK drop-in). Live via
+	// runtimeCfg.OnChange (Phase 2d).
+	compatResolver := compat.NewResolver(compat.Parse(runtimeCfg.CompatMode()))
+	runtimeCfg.OnChange([]string{"compat.mode"}, func() {
+		compatResolver.Set(compat.Parse(runtimeCfg.CompatMode()))
 	})
 
 	// v1.7.x §3.11 — in-process metric registry. Single instance shared
@@ -909,6 +992,8 @@ func (a *App) Run(ctx context.Context) error {
 			Ready: a.readinessProbe,
 		},
 		SecurityHeaders: secHeaders,
+		CORS:            corsOpts,
+		CORSLive:        runtimeCfg,
 		IPFilter:        ipFilter,
 		RateLimiter:     rateLimiter,
 		AntiBot:         antiBot,
@@ -970,6 +1055,19 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	a.server.Router().Group(func(r chi.Router) {
+		// v3.x — maintenance fence. During a UI-triggered database
+		// restore, maintenance.Begin() flips a process-local atomic
+		// flag; this middleware 503s every user-facing request with a
+		// Retry-After header until the restore commits and End()
+		// flips it back. Mounted FIRST in the user-API group so a
+		// blocked request never reaches JS hooks / auth / RBAC / CRUD
+		// (no half-applied side effects against a half-restored DB).
+		// /healthz, /readyz, and /api/_admin/* mount on the root
+		// router OUTSIDE this group, so admin monitoring keeps
+		// working — the middleware's own allow-list is defensive
+		// belt-and-suspenders in case mounting changes.
+		r.Use(maintenance.Middleware())
+
 		// v1.7.17 — `$app.routerAdd(...)` JS-hook routes get the FIRST
 		// crack at every request. The middleware looks up the runtime's
 		// route table (atomically swapped on hot-reload); a match
@@ -1296,7 +1394,7 @@ func (a *App) Run(ctx context.Context) error {
 		// to the chan); 300 ms covers any TCP-send async lag on slow
 		// links so the browser sees the JSON before the listener dies.
 		a.log.Info("DSN changed via wizard; reloading in-place",
-			"dsn", redactDSN(newDSN))
+			"dsn", security.RedactDSN(newDSN))
 		time.Sleep(300 * time.Millisecond)
 
 		// Hard-close (NOT graceful Shutdown). Reasoning: the admin SPA
@@ -1364,8 +1462,8 @@ func (a *App) readinessProbe(ctx context.Context) error {
 //
 //   - ("", nil)        operator hit Ctrl-C / ctx cancelled — exit normally
 //   - (dsn, nil)       wizard finished, DSN persisted to `<DataDir>/.dsn`;
-//                      caller is expected to re-enter the regular boot
-//                      path on the new DSN
+//     caller is expected to re-enter the regular boot
+//     path on the new DSN
 //   - ("", err)        listener / shutdown error
 //
 // Mounted endpoints:
@@ -1376,7 +1474,7 @@ func (a *App) readinessProbe(ctx context.Context) error {
 //   - GET  /api/_admin/_setup/detect      — wizard probe (env + sockets)
 //   - POST /api/_admin/_setup/probe-db    — DSN dry-run via pgx.Connect
 //   - POST /api/_admin/_setup/save-db     — write `<DataDir>/.dsn` AND
-//                                           signal the reload channel
+//     signal the reload channel
 //   - GET  /_/...                         — admin SPA static files
 //   - everything else                     — 503 + JSON pointer to the wizard
 //
@@ -1549,20 +1647,6 @@ func (a *App) maybeOpenBrowser() {
 	a.browserOpened = true
 }
 
-// redactDSN strips the password from a postgres:// DSN for logging.
-// Best-effort — falls back to the raw string when the URL parser
-// can't make sense of it. Never panics.
-func redactDSN(dsn string) string {
-	u, err := neturl.Parse(dsn)
-	if err != nil || u.User == nil {
-		return dsn
-	}
-	if _, hasPw := u.User.Password(); hasPw {
-		u.User = neturl.UserPassword(u.User.Username(), "***")
-	}
-	return u.String()
-}
-
 // printSetupBanner writes the operator banner shown when the binary
 // boots into setup-mode (no DSN + no embed_pg). Mirrors the regular
 // `printBanner` shape so the visual layout is consistent.
@@ -1696,25 +1780,14 @@ func splitCSV(s string) []string {
 	return out
 }
 
-// logsPersistEnabled decides whether the v1.7.6 logs.Sink should be
-// wired into the slog Multi-handler. Off by default in dev (stdout-only
-// is the standard "I'm watching the terminal" workflow); on by default
-// in production so admins have a browseable past beyond their log
-// aggregator's retention. Operators flip the setting either way via
-// the `logs.persist` config key or the RAILBASE_LOGS_PERSIST env.
-func logsPersistEnabled(ctx context.Context, mgr *settings.Manager, productionMode bool) bool {
-	defaultVal := "false"
-	if productionMode {
-		defaultVal = "true"
-	}
-	raw := readSetting(ctx, mgr, "logs.persist", "RAILBASE_LOGS_PERSIST", defaultVal)
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
+// logsPersistEnabled was the pre-runtimeconfig gate that wrapped
+// readSetting + the dev/prod default split. It is GONE in v2.x: the
+// Sink is always wired into the slog Multi-handler and consults
+// runtimeCfg.LogsPersist on every record so the toggle is live. The
+// previous dev-default-false / prod-default-true split also folded
+// into the catalog default (now `true` everywhere); dev operators who
+// don't want DB persistence flip the switch in the admin UI or
+// export `RAILBASE_LOGS_PERSIST=false`.
 
 // buildAntiBotConfig resolves the four `security.antibot.*` settings
 // keys (with env fallbacks) into a security.AntiBotConfig. List-shaped

@@ -1,348 +1,505 @@
-import { useState } from "react";
+// General settings — typed form layout (v1.x).
+//
+// The backend exposes /api/_admin/settings/catalog which declares
+// every known setting with its type, default, group, and a one-line
+// description. We render one Card per group; inside each card a
+// QEditableForm in mode="edit" hosts the per-field click-to-edit
+// machinery:
+//
+//   - Read-only display by default → compact, no always-visible
+//     Save buttons cluttering the page.
+//   - Click a row → inline editor with the right typed control for
+//     the setting's type (Switch / Input / Textarea via SettingControl).
+//   - QEditableForm's onSaveField fires per-row PATCH /settings/{key};
+//     a rejected promise leaves the row in edit mode and surfaces the
+//     server's error string inline. The last-system_admin guard and
+//     similar 4xx hints land where the operator's eyes already are.
+//
+// "Reset to default" rides in the field's helpText slot — outside the
+// click-to-edit button wrapper so it stays clickable in read mode.
+// Clicking it issues a DELETE on the key (clears the persisted
+// override → consumers fall back to the implicit default).
+//
+// "Advanced (raw)" — collapsible at the bottom. Edits the keys outside
+// the catalog via the v1.7.x flat key/value drawer. Settings owned by
+// dedicated screens (mailer.*, oauth.*, etc.) are filtered server-side,
+// so the UI here only shows truly operator-defined keys.
+
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
 import { adminAPI } from "../api/admin";
 import { isAPIError } from "../api/client";
+import type {
+  SettingDef,
+  SettingsCatalogEntry,
+  SettingsCatalogResponse,
+} from "../api/types";
 import { AdminPage } from "../layout/admin_page";
-import { Button } from "@/lib/ui/button.ui";
-import { Input } from "@/lib/ui/input.ui";
-import { Textarea } from "@/lib/ui/textarea.ui";
+
+import { Badge } from "@/lib/ui/badge.ui";
+import { Card, CardContent } from "@/lib/ui/card.ui";
 import {
-  Drawer,
-  DrawerContent,
-  DrawerDescription,
-  DrawerHeader,
-  DrawerTitle,
-} from "@/lib/ui/drawer.ui";
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/lib/ui/collapsible.ui";
+import { Input } from "@/lib/ui/input.ui";
+import { Switch } from "@/lib/ui/switch.ui";
+import { Textarea } from "@/lib/ui/textarea.ui";
+import { toast } from "@/lib/ui/sonner.ui";
+import { ChevronRight } from "@/lib/ui/icons";
 import {
   QEditableForm,
   type QEditableField,
 } from "@/lib/ui/QEditableForm.ui";
-import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
-import type { SettingItem } from "../api/types";
 
-// Settings panel — QDatatable list of _settings rows; add / update via
-// a right-side Drawer hosting QEditableForm (the Schemas/Collections
-// pattern). The _settings table stores arbitrary JSONB, so the form is
-// generic: key + a type picker + a free-form value textarea that gets
-// coerced per the picked type before submit.
-
-// SETTING_KEY_RE mirrors the server's accepted key shape.
-const SETTING_KEY_RE = /^[a-z][a-z0-9._-]*$/;
-
-// Column defs for the listing. Static — the per-row Edit / Delete
-// affordances are wired via QDatatable's `rowActions` inside the
-// component (they need handler closures).
-const columns: ColumnDef<SettingItem>[] = [
-  {
-    id: "key",
-    header: "key",
-    accessor: "key",
-    sortable: true,
-    cell: (row) => <span class="font-mono">{row.key}</span>,
-  },
-  {
-    id: "value",
-    header: "value",
-    accessor: (row) => JSON.stringify(row.value),
-    cell: (row) => (
-      <pre class="font-mono text-xs whitespace-pre-wrap break-all">
-        {JSON.stringify(row.value)}
-      </pre>
-    ),
-  },
-];
-
-// SettingsTarget — what the drawer is editing. `null` = closed, "new" =
-// add flow, a SettingItem = update that key's value.
-type SettingsTarget = SettingItem | "new" | null;
+import { AdvancedSettingsTable } from "./settings_advanced";
 
 export function SettingsScreen() {
   const qc = useQueryClient();
-  const list = useQuery({
-    queryKey: ["settings"],
-    queryFn: () => adminAPI.settingsList(),
+  const catalogQ = useQuery({
+    queryKey: ["settings", "catalog"],
+    queryFn: () => adminAPI.settingsCatalog(),
   });
 
-  const [target, setTarget] = useState<SettingsTarget>(null);
+  if (catalogQ.isLoading) {
+    return (
+      <AdminPage>
+        <AdminPage.Header
+          title="Settings"
+          description="Configuration values that drive the running server."
+        />
+        <AdminPage.Body>
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        </AdminPage.Body>
+      </AdminPage>
+    );
+  }
+  if (catalogQ.error) {
+    return (
+      <AdminPage>
+        <AdminPage.Header title="Settings" />
+        <AdminPage.Body>
+          <Card>
+            <CardContent className="p-4 text-sm text-destructive">
+              Failed to load settings: {errMessage(catalogQ.error)}
+            </CardContent>
+          </Card>
+        </AdminPage.Body>
+      </AdminPage>
+    );
+  }
 
-  const delMu = useMutation({
-    mutationFn: (key: string) => adminAPI.settingsDelete(key),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
-  });
+  const data = catalogQ.data!;
+  const entriesByGroup = useMemo(() => groupEntries(data), [data]);
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ["settings"] });
+    void qc.invalidateQueries({ queryKey: ["settings", "catalog"] });
+    // Mirror site.name / site.url changes to the shell's brand
+    // immediately. The site-info query has a 30s stale time so
+    // without an explicit invalidation the sidebar would lag until
+    // the next nav.
+    void qc.invalidateQueries({ queryKey: ["site-info"] });
+  };
 
   return (
     <AdminPage className="space-y-6 max-w-3xl">
       <AdminPage.Header
         title="Settings"
-        description={
-          <>
-            Key/value entries persisted in{" "}
-            <code class="font-mono">_settings</code>. Values are arbitrary JSON.
-          </>
-        }
-        actions={<Button onClick={() => setTarget("new")}>+ New setting</Button>}
+        description="Configuration values the running server reads. Click a row to edit; each section maps to a subsystem and unset values fall back to the implicit default."
       />
+      <AdminPage.Body className="space-y-6">
+        {data.groups.map((group) => {
+          const entries = entriesByGroup.get(group) ?? [];
+          if (entries.length === 0) return null;
+          return (
+            <SettingsGroupCard
+              key={group}
+              group={group}
+              entries={entries}
+              onMutated={invalidate}
+            />
+          );
+        })}
 
-      <AdminPage.Body>
-        <QDatatable
-          columns={columns}
-          data={list.data?.items ?? []}
-          loading={list.isLoading}
-          rowKey="key"
-          search
-          searchPlaceholder="Search keys…"
-          emptyMessage="No settings yet. Click “+ New setting” to add one."
-          rowActions={(row) => [
-            {
-              label: "Edit",
-              onSelect: () => setTarget(row),
-            },
-            {
-              label: "Delete",
-              destructive: true,
-              separatorBefore: true,
-              disabled: () => delMu.isPending,
-              onSelect: () => {
-                if (
-                  window.confirm(`Delete setting “${row.key}”?`)
-                ) {
-                  delMu.mutate(row.key);
-                }
-              },
-            },
-          ]}
+        <AdvancedSection
+          unknownKeys={data.unknown_keys}
+          onMutated={invalidate}
         />
       </AdminPage.Body>
-
-      <SettingsEditorDrawer
-        target={target}
-        onClose={() => setTarget(null)}
-        onMutated={() => {
-          void qc.invalidateQueries({ queryKey: ["settings"] });
-        }}
-      />
     </AdminPage>
   );
 }
 
-// SettingsEditorDrawer — right-side Drawer shell. The body remounts on
-// target change (keyed) so the form re-seeds cleanly.
-function SettingsEditorDrawer({
-  target,
-  onClose,
+// SettingsGroupCard wraps one group's worth of fields in a single
+// QEditableForm. The form owns the click-to-edit + per-field save
+// state machine; we provide:
+//
+//   - `values`: persisted-or-default value for every field, so the
+//     read-only display shows the effective value the consumer sees.
+//   - `renderDisplay`: compact "set/default" badge + value rendering.
+//   - `renderInput`: dispatches to the right typed control by key.
+//   - `onSaveField`: PATCH /settings/{key} with the new value;
+//     rejecting the promise pins the row in edit mode and shows the
+//     server's error message under the input.
+function SettingsGroupCard({
+  group,
+  entries,
   onMutated,
 }: {
-  target: SettingsTarget;
-  onClose: () => void;
+  group: string;
+  entries: SettingsCatalogEntry[];
   onMutated: () => void;
 }) {
-  const isEdit = target !== null && target !== "new";
-  return (
-    <Drawer
-      direction="right"
-      open={target !== null}
-      onOpenChange={(o) => {
-        if (!o) onClose();
-      }}
-    >
-      <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-lg">
-        <DrawerHeader>
-          <DrawerTitle>{isEdit ? "Edit setting" : "New setting"}</DrawerTitle>
-          <DrawerDescription>
-            {isEdit
-              ? "Update the stored value. The key is fixed."
-              : "A key/value entry persisted in _settings."}
-          </DrawerDescription>
-        </DrawerHeader>
-        <div className="flex-1 overflow-y-auto px-4 pb-4">
-          {target !== null ? (
-            <SettingsEditorBody
-              key={isEdit ? target.key : "new"}
-              target={target}
-              onClose={onClose}
-              onMutated={onMutated}
-            />
-          ) : null}
-        </div>
-      </DrawerContent>
-    </Drawer>
-  );
-}
+  // Lookup maps so renderInput / renderDisplay can resolve the
+  // SettingDef + is_set state from just the field key.
+  const indexes = useMemo(() => {
+    const byKey = new Map<string, SettingDef>();
+    const isSet = new Map<string, boolean>();
+    for (const e of entries) {
+      byKey.set(e.def.key, e.def);
+      isSet.set(e.def.key, e.is_set);
+    }
+    return { byKey, isSet };
+  }, [entries]);
 
-// SettingsEditorBody — the QEditableForm wiring. `value` stays a
-// free-form string in the draft; it's coerced per the picked `type`
-// at submit. The server stores everything as JSONB regardless.
-function SettingsEditorBody({
-  target,
-  onClose,
-  onMutated,
-}: {
-  target: SettingItem | "new";
-  onClose: () => void;
-  onMutated: () => void;
-}) {
-  const isEdit = target !== "new";
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [formError, setFormError] = useState<string | null>(null);
+  // Effective values for read-mode display: persisted when set, else
+  // the catalog's declared default. QEditableForm's editValue starts
+  // here when the operator clicks to edit.
+  const values = useMemo<Record<string, unknown>>(() => {
+    const out: Record<string, unknown> = {};
+    for (const e of entries) {
+      out[e.def.key] = e.is_set ? e.value : e.def.default;
+    }
+    return out;
+  }, [entries]);
 
-  const setMu = useMutation({
+  const setM = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) =>
       adminAPI.settingsSet(key, value),
-    onSuccess: () => onMutated(),
+    onSuccess: (_data, vars) => {
+      toast.success(`${vars.key} saved.`);
+      onMutated();
+    },
+  });
+  const resetM = useMutation({
+    mutationFn: (key: string) => adminAPI.settingsDelete(key),
+    onSuccess: (_data, key) => {
+      toast.success(`${key} reset to default.`);
+      onMutated();
+    },
+    onError: (err) => toast.error(errMessage(err)),
   });
 
-  const fields: QEditableField[] = [
-    {
-      key: "key",
-      label: "Key",
-      required: !isEdit,
-      readOnly: isEdit,
-      helpText: isEdit
-        ? "The key is fixed — delete + recreate to rename."
-        : "Lowercase letters, digits, dots, dashes, underscores (must start with a letter).",
-    },
-    {
-      key: "type",
-      label: "Type",
-      helpText:
-        "Server stores everything as JSONB; this picker only coerces the value before submit.",
-    },
-    { key: "value", label: "Value" },
-  ];
+  // QEditableForm.onSaveField returns Promise<void>; we throw on
+  // failure so the row stays in edit mode and the form renders the
+  // thrown error inline. The toast is success-only — failures already
+  // surface where the operator was looking.
+  const handleSaveField = async (key: string, value: unknown) => {
+    try {
+      await setM.mutateAsync({ key, value });
+    } catch (err) {
+      throw new Error(errMessage(err));
+    }
+  };
+
+  const fields: QEditableField[] = entries.map((e) => ({
+    key: e.def.key,
+    label: e.def.label,
+    // helpText accepts ComponentChildren, so we pack three things in:
+    // the prose description, the dev-facing identifiers (key + env var),
+    // and the "Reset to default" affordance. The helpText paragraph is
+    // rendered OUTSIDE the click-to-edit button wrapper, so the Reset
+    // button stays clickable without nested-button conflicts.
+    helpText: (
+      <span className="block space-y-1">
+        <span className="block">{e.def.description}</span>
+        <span className="flex flex-wrap items-center gap-2">
+          {e.def.reload === "restart" ? (
+            <Badge
+              variant="outline"
+              className="text-[10px] border-amber-500/40 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
+              title="Save persists the value, but the running server keeps the boot-time copy. Restart railbase to apply."
+            >
+              restart required
+            </Badge>
+          ) : (
+            <Badge
+              variant="outline"
+              className="text-[10px] border-emerald-500/40 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"
+              title="Change takes effect immediately. No restart needed."
+            >
+              live
+            </Badge>
+          )}
+          <code className="font-mono">{e.def.key}</code>
+          {e.def.env_var ? (
+            <code className="font-mono">${e.def.env_var}</code>
+          ) : null}
+          {e.is_set ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Reset "${e.def.key}" to its default? The persisted override will be deleted.`,
+                  )
+                ) {
+                  resetM.mutate(e.def.key);
+                }
+              }}
+              disabled={resetM.isPending}
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              Reset to default
+            </button>
+          ) : null}
+        </span>
+      </span>
+    ),
+  }));
 
   const renderInput = (
     f: QEditableField,
     value: unknown,
     onChange: (v: unknown) => void,
   ) => {
-    switch (f.key) {
-      case "key":
-        return (
-          <Input
-            value={(value as string) ?? ""}
-            onInput={(e) => onChange(e.currentTarget.value)}
-            placeholder="feature.dark_mode"
-            autoComplete="off"
-            spellcheck={false}
-            className="font-mono"
-          />
-        );
-      case "type":
-        return (
-          <select
-            value={(value as string) ?? "json"}
-            onChange={(e) => onChange(e.currentTarget.value)}
-            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-          >
-            <option value="json">json</option>
-            <option value="string">string</option>
-            <option value="int">int</option>
-            <option value="bool">bool</option>
-          </select>
-        );
-      case "value":
-        return (
-          <Textarea
-            rows={4}
-            value={(value as string) ?? ""}
-            onInput={(e) => onChange(e.currentTarget.value)}
-            className="font-mono"
-          />
-        );
-      default:
-        return null;
-    }
+    const def = indexes.byKey.get(f.key);
+    if (!def) return null;
+    return <SettingControl def={def} value={value} onChange={onChange} />;
   };
 
-  const renderDisplay = (f: QEditableField, value: unknown) =>
-    f.key === "key" ? (
-      <span className="font-mono">{(value as string) || "—"}</span>
-    ) : (
-      String(value ?? "")
+  const renderDisplay = (f: QEditableField, value: unknown) => {
+    const def = indexes.byKey.get(f.key);
+    const set = indexes.isSet.get(f.key) ?? false;
+    return (
+      <span className="inline-flex flex-wrap items-center gap-2">
+        <Badge
+          variant="outline"
+          className={
+            set
+              ? "text-[10px]"
+              : "text-[10px] text-muted-foreground"
+          }
+        >
+          {set ? "set" : "default"}
+        </Badge>
+        <span className="font-mono text-xs break-all">
+          {formatDisplayValue(def, value)}
+        </span>
+      </span>
     );
-
-  const handleSubmit = async (vals: Record<string, unknown>) => {
-    setFieldErrors({});
-    setFormError(null);
-    const key = String(vals.key ?? "").trim();
-    const type = String(vals.type ?? "json");
-    const rawValue = String(vals.value ?? "");
-
-    if (!isEdit) {
-      if (!key) {
-        setFieldErrors({ key: "Key required" });
-        return;
-      }
-      if (!SETTING_KEY_RE.test(key)) {
-        setFieldErrors({
-          key: "Lowercase letters, digits, dots, dashes, underscores only (must start with a letter).",
-        });
-        return;
-      }
-    }
-
-    let parsed: unknown;
-    switch (type) {
-      case "string":
-        parsed = rawValue;
-        break;
-      case "int": {
-        const n = Number(rawValue);
-        if (!Number.isFinite(n) || !Number.isInteger(n)) {
-          setFieldErrors({ value: "value must be an integer" });
-          return;
-        }
-        parsed = n;
-        break;
-      }
-      case "bool": {
-        const v = rawValue.trim().toLowerCase();
-        if (v !== "true" && v !== "false") {
-          setFieldErrors({ value: 'value must be "true" or "false"' });
-          return;
-        }
-        parsed = v === "true";
-        break;
-      }
-      case "json":
-      default:
-        try {
-          parsed = JSON.parse(rawValue);
-        } catch {
-          setFieldErrors({
-            value:
-              "value must be valid JSON (string, number, bool, object, etc.)",
-          });
-          return;
-        }
-        break;
-    }
-
-    try {
-      await setMu.mutateAsync({ key, value: parsed });
-      onClose();
-    } catch (e) {
-      setFormError(isAPIError(e) ? e.message : "Failed to save.");
-    }
   };
 
   return (
-    <QEditableForm
-      mode="create"
-      fields={fields}
-      values={{
-        key: isEdit ? target.key : "",
-        type: "json",
-        value: isEdit ? JSON.stringify(target.value) : '""',
-      }}
-      renderInput={renderInput}
-      renderDisplay={renderDisplay}
-      onCreate={handleSubmit}
-      submitLabel="Save"
-      onCancel={onClose}
-      fieldErrors={fieldErrors}
-      formError={formError}
-      disabled={setMu.isPending}
-    />
+    <Card>
+      <CardContent className="p-0">
+        <header className="px-4 py-3 border-b">
+          <h2 className="text-sm font-medium tracking-tight">{group}</h2>
+        </header>
+        <div className="p-4">
+          <QEditableForm
+            mode="edit"
+            fields={fields}
+            values={values}
+            renderInput={renderInput}
+            renderDisplay={renderDisplay}
+            onSaveField={handleSaveField}
+            disabled={resetM.isPending}
+          />
+        </div>
+      </CardContent>
+    </Card>
   );
+}
+
+// SettingControl renders the right form widget for the catalog type.
+// Used by renderInput when QEditableForm enters edit mode on a row.
+function SettingControl({
+  def,
+  value,
+  onChange,
+  disabled,
+}: {
+  def: SettingDef;
+  value: unknown;
+  onChange: (v: unknown) => void;
+  disabled?: boolean;
+}) {
+  switch (def.type) {
+    case "bool":
+      return (
+        <Switch
+          checked={Boolean(value)}
+          onCheckedChange={(c) => onChange(c)}
+          disabled={disabled}
+        />
+      );
+    case "int":
+      return (
+        <Input
+          type="number"
+          value={value == null ? "" : String(value)}
+          onInput={(e: any) => {
+            const raw = e.currentTarget.value;
+            onChange(raw === "" ? null : Number(raw));
+          }}
+          disabled={disabled}
+          className="font-mono max-w-xs"
+        />
+      );
+    case "csv":
+      return (
+        <Input
+          value={typeof value === "string" ? value : ""}
+          onInput={(e: any) => onChange(e.currentTarget.value)}
+          placeholder={def.placeholder ?? "a, b, c"}
+          disabled={disabled}
+          className="font-mono"
+        />
+      );
+    case "duration":
+      return (
+        <Input
+          value={typeof value === "string" ? value : ""}
+          onInput={(e: any) => onChange(e.currentTarget.value)}
+          placeholder={def.placeholder ?? "30s"}
+          disabled={disabled}
+          className="font-mono max-w-xs"
+        />
+      );
+    case "json":
+      return (
+        <Textarea
+          rows={3}
+          value={
+            typeof value === "string"
+              ? value
+              : value == null
+                ? ""
+                : JSON.stringify(value, null, 2)
+          }
+          onInput={(e: any) => {
+            const raw = e.currentTarget.value;
+            try {
+              onChange(JSON.parse(raw));
+            } catch {
+              // Hold the raw text so the operator can keep editing
+              // through a transient parse error; QEditableForm's Save
+              // will then PATCH whatever is in editValue — backend
+              // rejects malformed JSON with a 400 which surfaces inline.
+              onChange(raw);
+            }
+          }}
+          disabled={disabled}
+          className="font-mono text-xs"
+        />
+      );
+    case "string":
+    default:
+      return (
+        <Input
+          type={def.secret ? "password" : "text"}
+          value={typeof value === "string" ? value : ""}
+          onInput={(e: any) => onChange(e.currentTarget.value)}
+          placeholder={def.placeholder}
+          disabled={disabled}
+          className={def.secret ? "font-mono" : ""}
+          autoComplete="off"
+        />
+      );
+  }
+}
+
+// formatDisplayValue renders the read-only summary shown in the
+// QEditableForm row before the operator clicks to edit. The goal is
+// "compact + truthful": bool reads as Yes/No, an empty string reads
+// as the placeholder so the row doesn't look broken, secrets are
+// always masked, JSON collapses to a one-line preview.
+function formatDisplayValue(def: SettingDef | undefined, value: unknown) {
+  if (def?.secret && value) return "•••••••";
+  if (value == null || value === "") {
+    return (
+      <span className="text-muted-foreground italic">
+        {def?.placeholder ? def.placeholder : "—"}
+      </span>
+    );
+  }
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+// AdvancedSection renders a collapsible block hosting the
+// raw key/value editor. It's only shown when there's at least one
+// uncatalogued key OR the operator explicitly opens it (so a brand-
+// new deployment with zero advanced overrides doesn't surface noise).
+function AdvancedSection({
+  unknownKeys,
+  onMutated,
+}: {
+  unknownKeys: string[];
+  onMutated: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const summary =
+    unknownKeys.length === 0
+      ? "Advanced (raw key/value editor — no overrides outside the catalog)"
+      : `Advanced — ${unknownKeys.length} key(s) outside the catalog`;
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <Card>
+        <CardContent className="p-0">
+          <CollapsibleTrigger className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-accent">
+            <div>
+              <h2 className="text-sm font-medium">{summary}</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Add or edit arbitrary keys persisted in <code className="font-mono">_settings</code>. Catalog-known settings are managed in the typed forms above.
+              </p>
+            </div>
+            <ChevronRight
+              className={`h-4 w-4 transition-transform ${open ? "rotate-90" : ""}`}
+            />
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="border-t p-4">
+              <AdvancedSettingsTable
+                unknownKeys={unknownKeys}
+                onMutated={onMutated}
+              />
+            </div>
+          </CollapsibleContent>
+        </CardContent>
+      </Card>
+    </Collapsible>
+  );
+}
+
+// groupEntries buckets catalog entries by their `group` field so the
+// per-group <Card> renderer doesn't filter on every render.
+function groupEntries(
+  cat: SettingsCatalogResponse,
+): Map<string, SettingsCatalogEntry[]> {
+  const m = new Map<string, SettingsCatalogEntry[]>();
+  for (const e of cat.entries) {
+    const arr = m.get(e.def.group) ?? [];
+    arr.push(e);
+    m.set(e.def.group, arr);
+  }
+  return m;
+}
+
+function errMessage(err: unknown): string {
+  if (isAPIError(err)) return err.message;
+  if (err instanceof Error) return err.message;
+  return String(err);
 }

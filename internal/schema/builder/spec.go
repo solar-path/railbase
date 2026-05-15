@@ -491,6 +491,20 @@ type CollectionSpec struct {
 	// would have caught with smaller bound).
 	MaxDepth int `json:"max_depth,omitempty"`
 
+	// Audit, when true, auto-writes a v3 timeline event for every
+	// Create / Update / Delete on a record of this collection. The
+	// event shape: actor=ctx principal, entity_type=<collection>,
+	// entity_id=<record.id>, before/after=record diff,
+	// event=<collection>.{created,updated,deleted}. Off by default —
+	// audit-heavy collections (sessions, ephemerals) shouldn't pay
+	// the per-write hash-chain cost.
+	//
+	// When Tenant=true the event lands in _audit_log_tenant (RLS-
+	// scoped to the request's tenant); otherwise it lands in
+	// _audit_log_site (admin / system actions). See
+	// docs/19-unified-audit.md.
+	Audit bool `json:"audit,omitempty"`
+
 	Fields  []FieldSpec `json:"fields"`
 	Indexes []IndexSpec `json:"indexes,omitempty"`
 	Rules   RuleSet     `json:"rules,omitempty"`

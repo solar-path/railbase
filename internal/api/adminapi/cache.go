@@ -153,20 +153,14 @@ func (d *Deps) cacheClearHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	provider.Clear()
 
-	// Audit the action. Nil-guarded against d.Audit so tests with a
-	// bare Deps don't trip on a nil writer; production always wires it.
-	if d != nil && d.Audit != nil {
-		p := AdminPrincipalFrom(r.Context())
-		_, _ = d.Audit.Write(r.Context(), audit.Event{
-			UserID:         p.AdminID,
-			UserCollection: "_admins",
-			Event:          "cache.cleared",
-			Outcome:        audit.OutcomeSuccess,
-			Before:         map[string]any{"name": name},
-			IP:             clientIP(r),
-			UserAgent:      r.Header.Get("User-Agent"),
-		})
-	}
+	// v3.x — entity_type="cache", entity_id=<name>. Timeline filter
+	// «всё про эту cache namespace» хитит индекс.
+	writeAuditEntity(r.Context(), d, EntityAuditInput{
+		Event:      "cache.cleared",
+		EntityType: "cache",
+		EntityID:   name,
+		Outcome:    audit.OutcomeSuccess,
+	}, r)
 
 	w.WriteHeader(http.StatusNoContent)
 }

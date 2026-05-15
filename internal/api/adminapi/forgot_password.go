@@ -298,12 +298,12 @@ func enqueuePasswordResetEmail(ctx context.Context, d *Deps, adminID uuid.UUID, 
 }
 
 // writeAuditPasswordReset writes a single audit row covering the
-// password-reset lifecycle. Uses the package-wide Writer if present;
-// no-op when audit is unwired (tests).
+// password-reset lifecycle. v3.x — entity_type="admin" when we have
+// the target adminID (post-confirm path), entity_type="admin_email"
+// when we only have an email attempt (anti-enumeration path emits
+// before the admin lookup even happens). After payload still carries
+// the full context.
 func writeAuditPasswordReset(ctx context.Context, d *Deps, event, outcome, email string, adminID uuid.UUID, extra map[string]any) {
-	if d.Audit == nil {
-		return
-	}
 	payload := map[string]any{}
 	if email != "" {
 		payload["email_attempted"] = email
@@ -314,11 +314,17 @@ func writeAuditPasswordReset(ctx context.Context, d *Deps, event, outcome, email
 	for k, v := range extra {
 		payload[k] = v
 	}
-	_, _ = d.Audit.Write(ctx, audit.Event{
-		Event:   "admin." + event,
-		Outcome: audit.Outcome(outcome),
-		After:   payload,
-	})
+	entityType, entityID := "admin_email", email
+	if adminID != uuid.Nil {
+		entityType, entityID = "admin", adminID.String()
+	}
+	writeAuditEntity(ctx, d, EntityAuditInput{
+		Event:      "admin." + event,
+		EntityType: entityType,
+		EntityID:   entityID,
+		Outcome:    audit.Outcome(outcome),
+		After:      payload,
+	}, nil)
 }
 
 // isAdminNotFound is the local sentinel-check for the admin store's

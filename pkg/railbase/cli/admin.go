@@ -17,6 +17,7 @@ import (
 	"github.com/railbase/railbase/internal/auth/secret"
 	"github.com/railbase/railbase/internal/db/migrate"
 	sysmigrations "github.com/railbase/railbase/internal/db/migrate/sys"
+	"github.com/railbase/railbase/internal/rbac"
 )
 
 // newAdminCmd assembles the `railbase admin ...` subtree.
@@ -78,6 +79,17 @@ func newAdminCreateCmd() *cobra.Command {
 				return err
 			}
 			fmt.Printf("created admin %s (id=%s)\n", a.Email, a.ID)
+
+			// v1.x — auto-assign site:system_admin so the new admin
+			// passes the RBAC gates on /api/_admin/*. Mirrors the
+			// bootstrap handler. Best-effort: a missing assignment is
+			// recoverable through the role-management UI, so we log
+			// and continue rather than fail the CLI command.
+			rbacStore := rbac.NewStore(rt.pool.Pool)
+			if err := rbac.AssignSystemAdmin(cmd.Context(), rbacStore, a.ID); err != nil {
+				fmt.Fprintf(os.Stderr,
+					"warning: assign system_admin to %s failed: %v\n", a.Email, err)
+			}
 
 			// v1.7.43 — enqueue welcome + broadcast notice unless the
 			// operator passed --no-email OR the mailer was explicitly

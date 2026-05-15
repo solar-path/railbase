@@ -30,8 +30,14 @@ export interface QEditableField {
   /** Display label for the row. */
   label: string
   required?: boolean
-  /** Help text rendered under the field. */
-  helpText?: string
+  /**
+   * Help text rendered under the field. Accepts ComponentChildren so
+   * callers can embed inline affordances (e.g. a "Reset to default"
+   * link, identifier chips, an env-var hint) alongside the prose.
+   * The host site renders it inside a <p>, which accepts phrasing
+   * content like inline buttons.
+   */
+  helpText?: ComponentChildren
   /**
    * Read-only: rendered via `renderDisplay`, never enters edit state.
    * Use for computed / system fields.

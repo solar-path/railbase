@@ -25,6 +25,7 @@
   "nav.viewRecords": "View records",
   "nav.copyName": "Copy name",
 
+  "nav.logs.timeline": "Timeline",
   "nav.logs.audit": "Audit",
   "nav.logs.app": "App logs",
   "nav.logs.realtime": "Realtime",
@@ -37,6 +38,7 @@
   "nav.settings.mailer": "Mailer",
   "nav.settings.templates": "Templates",
   "nav.settings.auth": "Auth methods",
+  "nav.settings.admins": "Admins & roles",
   "nav.settings.notifications": "Notifications",
   "nav.settings.webhooks": "Webhooks",
   "nav.settings.stripe": "Stripe",
@@ -82,6 +84,7 @@
   "palette.page.mailer": "Mailer",
   "palette.page.mailerTemplates": "Mailer templates",
   "palette.page.authMethods": "Auth methods",
+  "palette.page.adminsRoles": "Admins & roles",
   "palette.page.notificationPrefs": "Notification preferences",
   "palette.page.webhooks": "Webhooks",
   "palette.page.stripe": "Stripe",

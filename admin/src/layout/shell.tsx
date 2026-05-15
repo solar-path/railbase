@@ -112,6 +112,18 @@ export function Shell({ children }: { children: ReactNode }) {
     staleTime: 60_000,
   });
 
+  // v1.x — pull `site.name` + `site.url` from the public site-info
+  // endpoint so the brand reflects what the operator set in Settings.
+  // Stale time matches the server's Cache-Control: 30s. Invalidated
+  // by the General settings screen after every PATCH so the change
+  // is visible immediately.
+  const siteQ = useQuery({
+    queryKey: ["site-info"],
+    queryFn: () => adminAPI.siteInfo(),
+    staleTime: 30_000,
+  });
+  const siteName = siteQ.data?.name?.trim() || "Railbase";
+
   const activeTab = activeTopTab(loc);
   const collections = schemaQ.data?.collections ?? [];
   // Names of admin-created collections — the only ones the UI lets you
@@ -126,7 +138,7 @@ export function Shell({ children }: { children: ReactNode }) {
             href="/"
             className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-sidebar-accent"
           >
-            <span className="font-semibold tracking-tight">Railbase</span>
+            <span className="font-semibold tracking-tight">{siteName}</span>
             <span className="text-xs text-muted-foreground">
               {t("shell.admin")}
             </span>
@@ -477,6 +489,10 @@ function SettingsSidebar({ loc }: { loc: string }) {
           {[
             { href: "/settings/auth", label: t("nav.settings.auth") },
             {
+              href: "/settings/admins",
+              label: t("nav.settings.admins"),
+            },
+            {
               href: "/settings/notifications",
               label: t("nav.settings.notifications"),
             },
@@ -522,6 +538,7 @@ const LOGS_LABEL_KEYS: Record<string, string> = {
 const SETTINGS_LABEL_KEYS: Record<string, string> = {
   mailer: "nav.settings.mailer",
   auth: "nav.settings.auth",
+  admins: "nav.settings.admins",
   notifications: "nav.settings.notifications",
   webhooks: "nav.settings.webhooks",
   stripe: "nav.settings.stripe",

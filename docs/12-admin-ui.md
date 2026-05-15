@@ -360,14 +360,14 @@ All pre-v0.9 URLs continue to work via redirects registered in
 
 | Old | New |
 |---|---|
-| `/audit` | `/logs/audit` |
-| `/logs` | `/logs/app` |
+| `/audit` | `/logs/timeline` |
+| `/logs` | `/logs/timeline` |
 | `/realtime` | `/logs/realtime` |
 | `/health` | `/logs/health` |
 | `/cache` | `/logs/cache` |
-| `/notifications` | `/logs/notifications` |
+| `/notifications` | `/settings/notifications/log` |
 | `/notifications/prefs` | `/settings/notifications` |
-| `/email-events`, `/mailer/events` | `/logs/email-events` |
+| `/email-events`, `/mailer/events` | `/settings/mailer/deliveries` |
 | `/mailer-templates`, `/mailer/templates` | `/settings/mailer/templates` |
 | `/mailer` | `/settings/mailer` |
 | `/webhooks` | `/settings/webhooks` |
@@ -380,6 +380,41 @@ All pre-v0.9 URLs continue to work via redirects registered in
 | `/system/admin-sessions` | `/data/_admin_sessions` |
 | `/system/sessions` | `/data/_sessions` |
 | `/jobs` | `/data/_jobs` |
+
+### ADR (v3.x) — unified audit Timeline & log surface reorg
+
+**Logs tab collapsed to a single Timeline view.** Pre-v3 the Logs
+header was a four-tab strip — Audit / App logs / Email events /
+Notifications. v3.x replaces it with **one** screen at `/_/logs`
+backed by the unified audit log (see `19-unified-audit.md` for the
+design and `14-observability.md` §«Unified Audit log» for the data
+model). Rationale: operators want «what happened with user X»,
+which is cross-tab by definition; the four-tab split forced them to
+stitch timestamps and user IDs by hand.
+
+Deep-dive views moved to their natural homes:
+
+| Old location | New location | Why |
+|---|---|---|
+| `/logs/app` | `/health/process-logs` | slog stream is debug telemetry, not business audit — лежит рядом с Health dashboard и Realtime monitor |
+| `/logs/email-events` | `/settings/mailer/deliveries` | Per-recipient delivery state machine (sent → delivered → bounced) — естественно живёт под Settings → Mailer |
+| `/logs/notifications` | `/settings/notifications/log` | Cross-user notifications log — sibling Notifications preferences editor |
+| `/logs/audit` (legacy chain v1) | folded into `/logs/timeline` | Old `_audit_log` rows still verify via `railbase audit verify`; new rows go into `_audit_log_site` / `_audit_log_tenant` |
+
+Все старые URL'ы редиректят SPA-side (App.tsx) — bookmark + external
+link continuity сохраняется.
+
+**Timeline endpoint**: `GET /api/_admin/audit/timeline`. Filters
+`actor_type / event / entity_type / entity_id / outcome / tenant_id /
+request_id / since / until / source`. Row drawer открывает full
+before/after JSON diff + actor breakdown + meta. См.
+`19-unified-audit.md` §6 для wire shape.
+
+**Per-collection CRUD auto-audit**: коллекции с
+`CollectionSpec.Audit: true` (`schema.NewCollection("vendors").Audit()`)
+auto-эмитят `<collection>.{created,updated,deleted}` events с
+`entity_type=<collection>` и `entity_id=<record.id>`. Off by default;
+sessions/ephemerals не должны платить chain cost.
 
 ### ADR (v0.9) — runtime collection management
 
