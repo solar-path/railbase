@@ -63,9 +63,12 @@ func recordOutFields(spec builder.CollectionSpec) []builder.FieldSpec {
 // rendered as `{name, url}` (single) or `[{name, url}, ...]` (multi)
 // when a URL builder is plumbed through marshalRecord; otherwise the
 // raw filename string passes through.
+//
+// v3.x: TypeRelations is now read-surfaced — the column comes from a
+// junction table via array_agg subquery (see selectExpr in handlers).
 func isReadableField(f builder.FieldSpec) bool {
 	switch f.Type {
-	case builder.TypePassword, builder.TypeRelations:
+	case builder.TypePassword:
 		return false
 	}
 	return true
@@ -76,9 +79,18 @@ func isReadableField(f builder.FieldSpec) bool {
 // dedicated upload endpoint (v1.3.1) — accepting them in the JSON
 // body would let callers point a record at any filename, bypassing
 // MIME / size validation.
+//
+// v3.x: TypeRelations accepts a `[uuid, uuid, ...]` array on
+// create/update; the handler replaces junction rows after the main
+// row INSERT / UPDATE. Computed (generated-stored) fields are NOT
+// writable — Postgres rejects writes to GENERATED columns, so we
+// strip them client-side too for a friendly 400 instead of a 500.
 func isWritableField(f builder.FieldSpec) bool {
+	if f.Computed != "" {
+		return false
+	}
 	switch f.Type {
-	case builder.TypePassword, builder.TypeRelations,
+	case builder.TypePassword,
 		builder.TypeFile, builder.TypeFiles:
 		return false
 	}

@@ -52,6 +52,17 @@ func CreateCollectionSQL(spec builder.CollectionSpec) string {
 		b.WriteString(idx)
 		b.WriteString("\n")
 	}
+	// v3.x — M2M junction tables. Every TypeRelations field gets a
+	// dedicated junction `<owner>_<field>` so the generic CRUD layer
+	// can read/write it through a normal pgx round-trip. Sentinel had
+	// to use JSONB for `predecessors` because v0.3 didn't ship this —
+	// see schema/tasks.go:13-15 comment.
+	for _, f := range spec.Fields {
+		if f.Type == builder.TypeRelations {
+			b.WriteString(createJunction(spec.Name, f))
+			b.WriteString("\n")
+		}
+	}
 	if spec.Tenant {
 		b.WriteString(tenantRLS(spec))
 		b.WriteString("\n")
@@ -61,6 +72,42 @@ func CreateCollectionSQL(spec builder.CollectionSpec) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// createJunction emits the M2M junction table for one TypeRelations
+// field. Pattern: `<owner>_<field>(owner_id, ref_id, sort_index)`.
+// Both FKs cascade-delete so removing either side cleans up the row.
+// PRIMARY KEY (owner_id, ref_id) prevents duplicate edges; sort_index
+// lets clients preserve ordering when needed (e.g. ordered tag list).
+func createJunction(owner string, f builder.FieldSpec) string {
+	junction := junctionTableName(owner, f.Name)
+	target := f.RelatedCollection
+	ownerCol := "owner_id"
+	refCol := "ref_id"
+	return fmt.Sprintf(`CREATE TABLE %s (
+    %s        UUID NOT NULL REFERENCES %s(id) ON DELETE CASCADE,
+    %s        UUID NOT NULL REFERENCES %s(id) ON DELETE CASCADE,
+    sort_index INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (%s, %s)
+);
+CREATE INDEX %s_ref_idx ON %s (%s);
+`,
+		quoteIdent(junction),
+		ownerCol, quoteIdent(owner),
+		refCol, quoteIdent(target),
+		ownerCol, refCol,
+		junction, quoteIdent(junction), refCol)
+}
+
+// JunctionTableName is the public helper for the M2M table name
+// pattern. Exported for the REST CRUD layer to query without
+// duplicating the convention.
+func JunctionTableName(owner, field string) string {
+	return junctionTableName(owner, field)
+}
+
+func junctionTableName(owner, field string) string {
+	return owner + "_" + field
 }
 
 // DropCollectionSQL is the inverse of CreateCollectionSQL. Tables
@@ -171,12 +218,22 @@ func createTable(spec builder.CollectionSpec) string {
 	}
 
 	for _, f := range spec.Fields {
+		// TypeRelations is M2M — it lives in a junction table created
+		// by createJunction, not as a column on this row. Skipping
+		// here keeps the CREATE TABLE clean (no orphan UUID[]
+		// placeholder column nobody reads/writes).
+		if f.Type == builder.TypeRelations {
+			continue
+		}
 		lines = append(lines, "    "+columnDef(spec.Name, f, true))
 	}
 
 	// CHECK constraints inline (they live inside the CREATE TABLE
 	// parentheses so they get the table-creation atomicity for free).
 	for _, f := range spec.Fields {
+		if f.Type == builder.TypeRelations {
+			continue
+		}
 		for _, c := range checkClauses(f) {
 			lines = append(lines, "    "+c)
 		}
@@ -204,6 +261,24 @@ func createTable(spec builder.CollectionSpec) string {
 // regular columns it's unused.
 func columnDef(coll string, f builder.FieldSpec, inCreate bool) string {
 	parts := []string{quoteIdent(f.Name), pgType(f)}
+
+	// v3.x — Computed (generated-stored) columns shortcut the rest of
+	// the column-modifier chain: NOT NULL is inherited from the
+	// expression, DEFAULT is incompatible (Postgres rejects), and
+	// UNIQUE / Required are still permitted. Emit the GENERATED form
+	// inline so the column lands on first migration.
+	if f.Computed != "" {
+		// Required → NOT NULL is fine; UNIQUE → inline UNIQUE is fine.
+		if f.Required {
+			parts = append(parts, "NOT NULL")
+		}
+		if f.Unique {
+			parts = append(parts, "UNIQUE")
+		}
+		parts = append(parts, fmt.Sprintf("GENERATED ALWAYS AS (%s) STORED", f.Computed))
+		_ = inCreate
+		return strings.Join(parts, " ")
+	}
 
 	if f.Required {
 		parts = append(parts, "NOT NULL")
@@ -775,10 +850,21 @@ func collectIndexes(spec builder.CollectionSpec) []string {
 //   - .Indexed → btree
 //   - .FTS → GIN on tsvector(generated col)
 //   - relation FK → btree (FKs don't auto-index in Postgres)
+//
+// Redundancy rule: a TypeRelation column gets ONE btree index, named
+// `<coll>_<field>_fk_idx`. When the user also calls `.Index()` on a
+// relation field (a common idiom — Sentinel's `Field("owner",
+// Relation("users").Required().Index())` did exactly this), we used
+// to emit BOTH `_idx` and `_fk_idx` on the same column. That doubles
+// write overhead with zero query benefit. v3.x emits only the FK
+// index for relation columns regardless of the `.Index()` toggle.
+// Same applies to `.Unique` — the unique index already covers reads.
 func fieldIndexes(coll string, f builder.FieldSpec) []string {
 	var out []string
-	if f.Indexed && !f.Unique {
-		// Unique already provides a btree index, so skip.
+	// btree for .Indexed — but only when no more specific index will
+	// already cover the column (FK index for relations, Unique for
+	// .Unique fields).
+	if f.Indexed && !f.Unique && f.Type != builder.TypeRelation {
 		out = append(out, fmt.Sprintf(
 			"CREATE INDEX %s_%s_idx ON %s (%s);",
 			coll, f.Name, quoteIdent(coll), quoteIdent(f.Name)))

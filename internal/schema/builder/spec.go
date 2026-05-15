@@ -334,6 +334,59 @@ type FieldSpec struct {
 	HasDefault bool `json:"has_default,omitempty"`
 	Default    any  `json:"default,omitempty"`
 
+	// Computed, when non-empty, makes this field a Postgres
+	// generated-stored column whose value is `Computed` evaluated
+	// against the row at INSERT / UPDATE time. Read-only: REST CRUD
+	// strips it from create / update bodies (clients can't set it),
+	// and the SQL generator emits `GENERATED ALWAYS AS (<expr>) STORED`
+	// instead of a regular column.
+	//
+	// Use cases:
+	//
+	//   - Full-name fields: `Computed("first_name || ' ' || last_name")`
+	//   - Aggregated counts: `Computed("jsonb_array_length(predecessors)")`
+	//   - Slug derivation server-side: `Computed("lower(replace(title, ' ', '-'))")`
+	//
+	// Constraints (validated by Validate()):
+	//
+	//   - Required/Unique/Indexed are honoured (the generated column
+	//     can have indexes and unique constraints normally).
+	//   - HasDefault is mutually exclusive — generated columns can't
+	//     have DEFAULTs (Postgres rejects this combo).
+	//   - The expression is NOT parsed for safety — operators MUST
+	//     audit it manually. A Bad Idea is `Computed("delete from
+	//     other_table where id=...")`, but Postgres rejects DML in
+	//     generated expressions, so the worst case is a CREATE TABLE
+	//     that fails loudly at migrate-apply time.
+	Computed string `json:"computed,omitempty"`
+
+	// DefaultRequest, when non-empty, instructs the REST CRUD layer to
+	// substitute a value derived from the request context whenever the
+	// caller omits this field on INSERT. Closes the «owner copied on
+	// the client» pattern Sentinel had to live with
+	// (`tasks.go: owner: authState.value.me.id` at every create call).
+	//
+	// Supported expressions (more land in later patches as needs surface):
+	//
+	//   - "auth.id"          → authenticated principal's user/admin id
+	//   - "auth.email"       → principal's email (if applicable)
+	//   - "auth.collection"  → "_admins" | "<users>" | "_api_tokens"
+	//   - "tenant.id"        → resolved tenant id (errors if no tenant)
+	//
+	// Override posture: the value is applied ONLY when the field is
+	// missing from the request body — clients that explicitly pass a
+	// value get that value (then the CreateRule decides whether to
+	// allow it). Combined with `.CreateRule("@request.auth.id = owner")`
+	// you get «server-injected default + RBAC guard» as a single line:
+	//
+	//   Field("owner", Relation("users").Required().
+	//        DefaultRequest("auth.id")).
+	//   CreateRule("@request.auth.id = owner")
+	//
+	// Empty string ⇒ no request-default behaviour (current default).
+	// Must be one of the supported expressions or Validate() rejects.
+	DefaultRequest string `json:"default_request,omitempty"`
+
 	// --- text-family modifiers (Text, Email, URL, RichText) ---
 	MinLen  *int   `json:"min_len,omitempty"`
 	MaxLen  *int   `json:"max_len,omitempty"`
@@ -362,6 +415,18 @@ type FieldSpec struct {
 	RelatedCollection string `json:"related_collection,omitempty"`
 	CascadeDelete     bool   `json:"cascade_delete,omitempty"`
 	SetNullOnDelete   bool   `json:"set_null_on_delete,omitempty"`
+
+	// --- JSON-array validation modifiers (TypeJSON only) ---
+	// JSONElementRefCollection, when non-empty, instructs the REST
+	// CRUD layer to validate every UUID-shaped string element of a
+	// JSONB array against `<collection>.id`. See JSONField
+	// .ArrayOfUUIDReferences for the operator-facing builder.
+	JSONElementRefCollection string `json:"json_element_ref_collection,omitempty"`
+	// JSONElementPeerEqual names a column that must match (same value)
+	// between this row and every JSONB-element-referenced row. Used
+	// for Sentinel-style "predecessor must be in same project"
+	// invariants. See JSONField.SameValueAs.
+	JSONElementPeerEqual string `json:"json_element_peer_equal,omitempty"`
 
 	// --- password modifiers ---
 	PasswordMinLen *int `json:"password_min_len,omitempty"`

@@ -221,7 +221,25 @@ func (p *parser) parsePrimary() (Node, error) {
 		return n, nil
 	case tkIdent:
 		p.advance()
-		return Ident{Name: t.val}, nil
+		// Dotted path: consume `.<ident>` greedily so `project.owner`
+		// becomes Ident{Name: "owner", DottedPath: "project.owner"}.
+		// Stop at the first non-dot or non-ident — the parser's
+		// recursive descent picks up the comparison operator that
+		// follows.
+		if p.peek().kind != tkDot {
+			return Ident{Name: t.val}, nil
+		}
+		path := []string{t.val}
+		for p.peek().kind == tkDot {
+			p.advance() // consume dot
+			seg := p.peek()
+			if seg.kind != tkIdent {
+				return nil, p.errAt(seg.pos, "expected identifier after '.'")
+			}
+			p.advance()
+			path = append(path, seg.val)
+		}
+		return Ident{Name: path[len(path)-1], DottedPath: strings.Join(path, ".")}, nil
 	case tkMagic:
 		p.advance()
 		return MagicVar{Name: t.val}, nil

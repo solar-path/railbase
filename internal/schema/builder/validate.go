@@ -234,6 +234,34 @@ func validateField(coll string, f FieldSpec) error {
 				coll, f.Name)
 		}
 	}
+	// Computed (Postgres generated-stored) is mutually exclusive with
+	// HasDefault — Postgres rejects DEFAULT + GENERATED on the same
+	// column. Reject early so the operator gets a clear DSL error.
+	if f.Computed != "" {
+		if f.HasDefault {
+			return fmt.Errorf("collection %q field %q: Computed() and Default() are mutually exclusive (generated columns can't have DEFAULT)",
+				coll, f.Name)
+		}
+		if f.AutoCreate || f.AutoUpdate {
+			return fmt.Errorf("collection %q field %q: Computed() conflicts with AutoCreate/AutoUpdate — pick one strategy",
+				coll, f.Name)
+		}
+	}
+
+	// DefaultRequest is gated on a small whitelist — keeps the surface
+	// tight while still covering the dominant use cases (owner from
+	// auth.id, tenant.id auto-injection). Adding a new expression
+	// requires explicit handling in REST CRUD too — see
+	// `internal/api/rest/defaults.go::ResolveRequestDefault`.
+	if f.DefaultRequest != "" {
+		switch f.DefaultRequest {
+		case "auth.id", "auth.email", "auth.collection", "tenant.id":
+			// recognised
+		default:
+			return fmt.Errorf("collection %q field %q: DefaultRequest=%q is not one of the supported expressions (auth.id, auth.email, auth.collection, tenant.id)",
+				coll, f.Name, f.DefaultRequest)
+		}
+	}
 	return nil
 }
 

@@ -23,14 +23,27 @@ func EmitRealtime() string {
 
 import type { HTTPClient } from "./index.js";
 
-/** One realtime event delivered over the SSE stream. */
-export interface RealtimeEvent {
+/** One realtime event delivered over the SSE stream.
+ *
+ *  Generic so call sites can narrow the payload type to a specific
+ *  collection without ` + "`as any`" + ` casts at every iteration:
+ *
+ *      for await (const ev of rb.realtime.subscribe<Tasks>({...})) {
+ *        // ev.data is typed as Tasks (when the broker emits a record
+ *        // snapshot) — narrow with a runtime check if you also
+ *        // subscribe to non-record topics.
+ *      }
+ *
+ *  Default T = unknown preserves the v0.7 behaviour for callers that
+ *  don't care or subscribe to mixed topics.
+ */
+export interface RealtimeEvent<T = unknown> {
   /** Monotonic broker event id. Pass the last one seen as ` + "`since`" + ` to resume. */
   id: number;
   /** The matched topic, e.g. "posts/<uuid>" for a "posts/*" subscription. */
   topic: string;
   /** Decoded event payload (record snapshot etc); raw string if not JSON. */
-  data: unknown;
+  data: T;
 }
 
 export interface RealtimeOptions {
@@ -58,8 +71,12 @@ export function realtimeClient(http: HTTPClient) {
   return {
     /** Open an SSE subscription. Returns an async iterator of events —
      *  iterate with ` + "`for await`" + `. The iterator ends when ` + "`signal`" + ` aborts
-     *  or the connection drops. */
-    async *subscribe(opts: RealtimeOptions): AsyncGenerator<RealtimeEvent> {
+     *  or the connection drops.
+     *
+     *  T is the expected payload type. Default ` + "`unknown`" + ` keeps
+     *  backward-compat with v0.7 untyped callers; passing a concrete
+     *  type narrows ` + "`ev.data`" + ` at the for-await site. */
+    async *subscribe<T = unknown>(opts: RealtimeOptions): AsyncGenerator<RealtimeEvent<T>> {
       const q = new URLSearchParams({ topics: opts.topics.join(",") });
       if (opts.since != null) q.set("since", String(opts.since));
       const res = await http.stream("/api/realtime?" + q.toString(), {
@@ -98,7 +115,7 @@ export function realtimeClient(http: HTTPClient) {
 // comment/heartbeat frames and the internal railbase.* control events
 // (railbase.subscribed, railbase.replay-truncated) — callers iterate
 // real topic events only.
-function parseFrame(frame: string): RealtimeEvent | null {
+function parseFrame(frame: string): RealtimeEvent<unknown> | null {
   let id = 0;
   let event = "";
   let data = "";

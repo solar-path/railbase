@@ -108,9 +108,22 @@ func Compute(prev, curr Snapshot) Diff {
 	}
 
 	// Determinism for testing / human review.
-	sort.Slice(d.NewCollections, func(i, j int) bool {
-		return d.NewCollections[i].Name < d.NewCollections[j].Name
-	})
+	//
+	// NewCollections: topological order by FK dependency, so the
+	// generated migration's CREATE TABLE statements resolve FKs at
+	// emit time. Alphabetical order (the v0.3 behaviour) regularly
+	// produced broken migrations — Sentinel had to manually swap
+	// users → projects → tasks (its `1000_initial_schema.up.sql:1-3`
+	// carries an explicit "reviewed: reordered from alphabetical"
+	// comment). Topo-sort eliminates that papercut.
+	//
+	// Cycle case: if collections form a cycle (FK A→B, B→A), we
+	// fall back to alphabetical with the cycle members trailing,
+	// because Postgres can't CREATE the cycle in one shot anyway —
+	// the operator must split into multi-step migration (CREATE
+	// without FK, ALTER ADD FK afterwards). We surface the cycle as
+	// an IncompatibleChange so the human notices.
+	d.NewCollections = topoSortCollections(d.NewCollections, &d)
 	sort.Strings(d.DroppedCollections)
 	sort.Slice(d.FieldChanges, func(i, j int) bool {
 		return d.FieldChanges[i].Collection < d.FieldChanges[j].Collection
@@ -176,6 +189,107 @@ func (d Diff) SQL() string {
 	}
 
 	return b.String()
+}
+
+// topoSortCollections returns collections in FK-dependency order:
+// a collection that has FKs to others is emitted AFTER its targets.
+// The FK graph is built from each FieldSpec's RelatedCollection
+// (covers TypeRelation; TypeRelations is M2M via a junction table
+// and doesn't impose a CREATE-time ordering on the parent).
+//
+// Self-references and FKs to collections NOT in the new-set (e.g.
+// referencing a pre-existing table) are ignored — neither blocks
+// CREATE order.
+//
+// Tie-break: alphabetical at each topological level, so the output
+// is deterministic for tests + human review.
+//
+// Cycle handling: Kahn's algorithm leaves nodes with non-zero
+// in-degree after the queue drains; we append them alphabetically
+// and record an IncompatibleChange so the operator splits the
+// migration manually (one-shot CREATE of an FK cycle is impossible
+// in plain Postgres).
+func topoSortCollections(in []builder.CollectionSpec, d *Diff) []builder.CollectionSpec {
+	if len(in) <= 1 {
+		return in
+	}
+	// Index for O(1) "is this collection in the new-set?"
+	inNew := make(map[string]struct{}, len(in))
+	for _, c := range in {
+		inNew[c.Name] = struct{}{}
+	}
+	// Build the FK graph: edge target → source (so we sort sources
+	// AFTER targets). Self-references and external refs are ignored.
+	indegree := make(map[string]int, len(in))
+	adj := make(map[string][]string, len(in)) // target → []source
+	for _, c := range in {
+		indegree[c.Name] = 0 // initialise so nodes without FKs participate
+	}
+	for _, c := range in {
+		for _, f := range c.Fields {
+			if f.Type != builder.TypeRelation {
+				continue
+			}
+			target := f.RelatedCollection
+			if target == "" || target == c.Name {
+				continue // self-FK doesn't constrain CREATE order
+			}
+			if _, ok := inNew[target]; !ok {
+				continue // external FK — target already exists
+			}
+			adj[target] = append(adj[target], c.Name)
+			indegree[c.Name]++
+		}
+	}
+	// Initial queue: nodes with no incoming edges, alphabetical.
+	var ready []string
+	for name, deg := range indegree {
+		if deg == 0 {
+			ready = append(ready, name)
+		}
+	}
+	sort.Strings(ready)
+
+	byName := indexByName(in)
+	var out []builder.CollectionSpec
+	emitted := make(map[string]struct{}, len(in))
+	for len(ready) > 0 {
+		n := ready[0]
+		ready = ready[1:]
+		out = append(out, byName[n])
+		emitted[n] = struct{}{}
+		// Relax outgoing edges; collect new zero-indegree nodes,
+		// re-sort alphabetically each round so cross-level ties
+		// stay deterministic.
+		var newReady []string
+		for _, dep := range adj[n] {
+			indegree[dep]--
+			if indegree[dep] == 0 {
+				newReady = append(newReady, dep)
+			}
+		}
+		sort.Strings(newReady)
+		ready = append(ready, newReady...)
+	}
+	if len(out) == len(in) {
+		return out
+	}
+	// Cycle: append unsorted remainder alphabetically + flag.
+	var remainder []builder.CollectionSpec
+	var cycleNames []string
+	for _, c := range in {
+		if _, done := emitted[c.Name]; done {
+			continue
+		}
+		remainder = append(remainder, c)
+		cycleNames = append(cycleNames, c.Name)
+	}
+	sort.Slice(remainder, func(i, j int) bool { return remainder[i].Name < remainder[j].Name })
+	sort.Strings(cycleNames)
+	d.IncompatibleChanges = append(d.IncompatibleChanges,
+		fmt.Sprintf("collections %v form an FK cycle; one-shot CREATE TABLE can't satisfy a circular FK in Postgres. Split into two steps: CREATE without the FK, then ALTER ADD FOREIGN KEY in a follow-up migration.",
+			cycleNames))
+	return append(out, remainder...)
 }
 
 // --- internal helpers ---

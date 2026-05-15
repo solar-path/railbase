@@ -86,9 +86,36 @@ type Between struct {
 type IsNull struct{ Target Node }
 type IsNotNull struct{ Target Node }
 
-// Ident references a column on the current collection. v0.3.3 keeps
-// the column name flat; dotted paths arrive in v0.4.
-type Ident struct{ Name string }
+// Ident references a column on the current collection — or, since
+// v3.x, a column on a related collection reached via FK navigation.
+//
+// DottedPath is the dot-joined dotted form for multi-segment idents
+// (`project.owner`). Single-segment idents (the common case: `name`,
+// `created`, `tenant_id`) leave DottedPath empty and read the column
+// via Name. Why a single string instead of `[]string`: keeping Ident
+// comparable lets it be a map key in AST caches without a custom
+// hash/equality codec (the cache_test.go ast-equality check would
+// have to handle slices specially otherwise).
+//
+// SQL emission:
+//
+//   - DottedPath == "": emit the column name directly via Name.
+//   - DottedPath has 2 segments: emit a scalar subquery walking ONE
+//     FK hop — `(SELECT <related>.<seg1> FROM <related> WHERE
+//     <related>.id = <current>.<seg0>)`. The first segment must be a
+//     TypeRelation field on the current collection.
+//   - 3+ segments: rejected today; closes the dominant Sentinel use
+//     case (project.owner) without committing to recursive walk
+//     semantics that need cycle protection.
+//
+// Why scalar subquery instead of JOIN: filters compose with WHERE,
+// not FROM; emitting a scalar subquery keeps the surrounding clause
+// shape unchanged and avoids ambiguous-column problems when the
+// related collection has a same-named column as the base.
+type Ident struct {
+	Name       string
+	DottedPath string // empty for flat names; e.g. "project.owner" for FK walk
+}
 
 // MagicVar refers to a request-context variable: @request.auth.id,
 // @me, @request.auth.collectionName.

@@ -63,7 +63,9 @@ import (
 	"github.com/railbase/railbase/internal/webhooks"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"io/fs"
 	"net/http"
 	"os/exec"
 	"runtime"
@@ -108,6 +110,17 @@ type App struct {
 	// the admin endpoint without a re-init race. Pure-Go, no Prometheus
 	// dep — see internal/metrics/metrics.go for the design rationale.
 	metricsReg *metrics.Registry
+
+	// routerHooks holds user-registered `OnBeforeServe` callbacks. Each
+	// receives the live chi.Router AFTER all built-in mounts (REST CRUD,
+	// admin, realtime, hooks) and BEFORE ListenAndServe. This is the
+	// official escape hatch for custom HTTP routes that the schema-only
+	// model can't express — e.g. domain-specific compute endpoints, file
+	// streaming, webhook receivers. Sentinel's `cpm/compute` would live
+	// here. The hook list is append-only and runs in registration order,
+	// so multiple registrations compose (a plugin can mount its own
+	// subtree without knowing about the user's).
+	routerHooks []func(r chi.Router)
 }
 
 // GoHooks returns the embedder-facing Go hook registry. Safe to call
@@ -125,6 +138,142 @@ func (a *App) GoHooks() *hooks.GoHooks {
 		a.goHooks = hooks.NewGoHooks()
 	}
 	return a.goHooks
+}
+
+// OnBeforeServe registers a callback that receives the live HTTP
+// router AFTER Railbase has mounted every built-in route (REST CRUD,
+// /api/_admin/*, realtime, OpenAPI, healthz, admin SPA) and BEFORE
+// the listener accepts traffic.
+//
+// This is the supported way to add custom HTTP endpoints that aren't
+// expressible through the schema/builder DSL. Typical uses:
+//
+//	app, _ := railbase.New(cfg)
+//	app.OnBeforeServe(func(r chi.Router) {
+//	    r.Get("/api/cpm/{projectId}", computeCPM(app.Pool()))
+//	    r.Post("/api/import/csv", csvImport(app.Pool()))
+//	})
+//	app.Run(ctx)
+//
+// Pass App.Pool() into your handler to share the same connection
+// pool as Railbase's own routes. The router is the standard
+// github.com/go-chi/chi/v5 Router — full chi feature set (Mount,
+// Route, Group, middleware chains) is available.
+//
+// Calling order: hooks run in the order registered. A hook called
+// twice registers twice (no de-duplication). Hooks registered AFTER
+// Run() returns or during shutdown are silently ignored — the router
+// is sealed at that point.
+//
+// Safety: do NOT mount routes under /api/_admin/* — that subtree is
+// guarded by RequireAdmin middleware applied at Mount time. To
+// expose admin-only routes, attach them to your own prefix and run
+// admin auth checks via app.AdminAuth() (planned helper) or just
+// inspect the bearer token via your own middleware.
+//
+// Why this isn't a constructor argument: routes often need access
+// to things constructed during App boot (cfg, pool, hooks registry,
+// audit store). Late binding via callback lets the embedder reference
+// `app.X()` getters that return populated values.
+func (a *App) OnBeforeServe(fn func(r chi.Router)) {
+	if fn == nil {
+		return
+	}
+	a.routerHooks = append(a.routerHooks, fn)
+}
+
+// ServeStaticFS mounts a read-only filesystem at the given URL path.
+// Use this to serve an SPA (or static assets) embedded into the
+// binary via `//go:embed`:
+//
+//	//go:embed web/dist
+//	var webFS embed.FS
+//	subFS, _ := fs.Sub(webFS, "web/dist")
+//
+//	app, _ := railbase.New(cfg)
+//	app.ServeStaticFS("/", subFS)
+//	app.Run(ctx)
+//
+// SPA semantics: requests for files NOT in fsys fall through to
+// `index.html` so client-side routers (history-API based) keep
+// working on deep-link reload. Set `spa=false` to get strict 404
+// behaviour for asset-only mounts.
+//
+// Path collision: routes mounted via ServeStaticFS are added through
+// the OnBeforeServe hook chain, so they go up AFTER all built-in
+// routes. This guarantees `/api/*`, `/_/*`, `/healthz` etc. can never
+// be shadowed by a misplaced SPA file. Mounting at "/" is therefore
+// safe even when the SPA happens to ship an `api/` directory.
+//
+// Closes the Sentinel deployment gap: today operators run `vite
+// build` separately and serve the result through nginx; this lets
+// them bundle the SPA into the same binary, killing the second
+// artefact.
+func (a *App) ServeStaticFS(mountPath string, fsys fs.FS) {
+	a.serveStaticFSWithMode(mountPath, fsys, true)
+}
+
+// ServeStaticAssets is the strict variant — 404 on missing files
+// instead of SPA-style index.html fallback. Use for /assets/*-style
+// mounts where falling through to a doc isn't desirable.
+func (a *App) ServeStaticAssets(mountPath string, fsys fs.FS) {
+	a.serveStaticFSWithMode(mountPath, fsys, false)
+}
+
+func (a *App) serveStaticFSWithMode(mountPath string, fsys fs.FS, spa bool) {
+	if fsys == nil {
+		return
+	}
+	if mountPath == "" {
+		mountPath = "/"
+	}
+	a.OnBeforeServe(func(r chi.Router) {
+		fileServer := http.FileServer(http.FS(fsys))
+		if spa {
+			// SPA mode: try the requested path; on 404 swap to
+			// index.html. Implementation pattern uses a small
+			// wrapper that captures the FileServer's response.
+			r.Handle(mountPath+"*", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				// Probe the file via fs.Stat — cheap, avoids a
+				// faux-404 ResponseWriter wrapper for the common
+				// case.
+				p := strings.TrimPrefix(req.URL.Path, "/")
+				if p == "" || strings.HasSuffix(p, "/") {
+					p = "index.html"
+				}
+				if _, err := fs.Stat(fsys, p); err == nil {
+					fileServer.ServeHTTP(w, req)
+					return
+				}
+				// Miss → serve index.html for client-side routing.
+				req2 := *req
+				req2.URL.Path = "/"
+				fileServer.ServeHTTP(w, &req2)
+			}))
+			return
+		}
+		r.Handle(mountPath+"*", fileServer)
+	})
+}
+
+// Pool returns the live pgx connection pool used by every internal
+// Railbase subsystem. Available AFTER Run() has reached the
+// "pool open" milestone (post-config, post-migration). Before that
+// returns nil; calling Pool() during OnBeforeServe is the canonical
+// safe moment.
+//
+// Use this when wiring custom routes that need DB access — sharing
+// the pool with Railbase avoids two connection-pool footprints + two
+// sets of per-connection RLS state. The returned *pgxpool.Pool is
+// the same instance Railbase itself uses, so SET LOCAL / SET ROLE
+// inside a transaction is fully supported.
+//
+// Goroutine-safe — pgxpool.Pool is its own connection broker.
+func (a *App) Pool() *pgxpool.Pool {
+	if a.pool == nil {
+		return nil
+	}
+	return a.pool.Pool
 }
 
 // MetricsRegistry returns the process-wide in-process metric registry.
@@ -1371,6 +1520,16 @@ func (a *App) Run(ctx context.Context) error {
 		// prefer.
 		r.Get("/api/realtime/ws", realtime.WSHandler(realtimeBroker, realtimeClients, principalFn, tenantFn))
 	})
+
+	// OnBeforeServe hooks — embedders' custom routes go up AFTER every
+	// built-in mount has settled (so a user route can't shadow
+	// /api/_admin/* by mistake) and BEFORE the listener opens. Hook
+	// order is registration order; a panic in a hook brings down boot
+	// (same posture as a panic in any other init path). See
+	// App.OnBeforeServe for the contract.
+	for _, fn := range a.routerHooks {
+		fn(a.server.Router())
+	}
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- a.server.ListenAndServe() }()

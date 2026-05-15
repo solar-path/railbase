@@ -152,6 +152,16 @@ func Load() (Config, error) {
 
 	c := Default()
 
+	// railbase.yaml — lower precedence than env vars below. Looked up
+	// in CWD first, then <DataDir>/railbase.yaml. Missing file is a
+	// no-op; closes the "yaml is documentation-only" surprise from
+	// pre-v3 (Sentinel's `railbase.yaml:4` had an explicit "this
+	// file is here as documentation; setting values is a no-op"
+	// disclaimer).
+	if _, err := loadYAMLConfig(&c, yamlLookupPaths(dataDir)); err != nil {
+		return c, fmt.Errorf("yaml config: %w", err)
+	}
+
 	if v := os.Getenv("RAILBASE_HTTP_ADDR"); v != "" {
 		c.HTTPAddr = v
 	}

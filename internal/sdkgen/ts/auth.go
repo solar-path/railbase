@@ -93,12 +93,16 @@ func writeAuthBuilder(b *strings.Builder, spec builder.CollectionSpec) {
 	fmt.Fprintf(b, "export function %sAuth(http: HTTPClient) {\n", lowerFirst(tName))
 	b.WriteString("  return {\n")
 
-	// signup
+	// signup — accept user-defined fields alongside email/password, so
+	// the auth collection's extra columns (e.g. `name`) are typed at
+	// the call site rather than requiring `as any`. Sentinel's
+	// `signup({ ..., name } as any)` papercut is closed by this.
+	signupExtra := signupExtraFieldsTS(spec)
 	fmt.Fprintf(b, `    /** POST /api/collections/%s/auth-signup */
-    signup(input: { email: string; password: string }): Promise<AuthResponse<%s>> {
+    signup(input: { email: string; password: string; passwordConfirm?: string%s }): Promise<AuthResponse<%s>> {
       return http.request("POST", "/api/collections/%s/auth-signup", { body: input });
     },
-`, cName, tName, cName)
+`, cName, signupExtra, tName, cName)
 
 	// signin
 	fmt.Fprintf(b, `    /** POST /api/collections/%s/auth-with-password */
@@ -106,6 +110,40 @@ func writeAuthBuilder(b *strings.Builder, spec builder.CollectionSpec) {
       return http.request("POST", "/api/collections/%s/auth-with-password", { body: input });
     },
 `, cName, tName, cName)
+
+	// v3.x password reset + email verification — previously the SDK
+	// only exposed signup/signin/refresh/logout, leaving operators to
+	// `http.request("POST", "/api/collections/.../request-password-reset")`
+	// by hand. Both endpoints are first-class on the backend (auth
+	// flows package); generating wrappers eliminates the raw-HTTP
+	// escape hatch for the common "forgot password" + "verify email"
+	// UX. Server returns 204 No Content on success.
+	fmt.Fprintf(b, `    /** POST /api/collections/%s/request-password-reset
+     *  Sends a reset-link email. Always returns 204 even when the
+     *  identity does not exist — the anti-enumeration posture is
+     *  enforced server-side. */
+    requestPasswordReset(input: { email: string }): Promise<void> {
+      return http.request("POST", "/api/collections/%s/request-password-reset", { body: input });
+    },
+    /** POST /api/collections/%s/confirm-password-reset
+     *  token comes from the email body. New password (+ confirm)
+     *  replaces the old hash and revokes every existing session. */
+    confirmPasswordReset(input: { token: string; password: string; passwordConfirm?: string }): Promise<void> {
+      return http.request("POST", "/api/collections/%s/confirm-password-reset", { body: input });
+    },
+    /** POST /api/collections/%s/request-verification
+     *  Re-sends the email-verification link. 204 even when the
+     *  account is already verified (anti-enumeration). */
+    requestVerification(input: { email: string }): Promise<void> {
+      return http.request("POST", "/api/collections/%s/request-verification", { body: input });
+    },
+    /** POST /api/collections/%s/confirm-verification
+     *  token comes from the email body. Flips verified=true and is
+     *  idempotent: replaying the same token after success is a 204. */
+    confirmVerification(input: { token: string }): Promise<void> {
+      return http.request("POST", "/api/collections/%s/confirm-verification", { body: input });
+    },
+`, cName, cName, cName, cName, cName, cName, cName, cName)
 
 	// refresh
 	fmt.Fprintf(b, `    /** POST /api/collections/%s/auth-refresh — rotates the session token. */
@@ -144,4 +182,37 @@ func lowerFirst(s string) string {
 		return s
 	}
 	return strings.ToLower(s[:1]) + s[1:]
+}
+
+// signupExtraFieldsTS builds the additional `; field: type; ...`
+// suffix appended to the signup body type. Walks the auth collection's
+// user-defined fields (skipping the built-in email/password_hash/
+// verified/token_key/last_login_at) and renders each as a TS
+// property. Required fields are emitted without `?`, optional with
+// `?`. JSON / Files / Relations work too — same tsType() the read
+// interface uses, so signup input + read shape stay aligned.
+//
+// Returns an empty string when the collection has no user-defined
+// fields beyond the built-ins (the common case before Sentinel-like
+// projects start adding `name`, `display_name`, etc.).
+func signupExtraFieldsTS(spec builder.CollectionSpec) string {
+	var b strings.Builder
+	for _, f := range spec.Fields {
+		if isAuthSystemField(f.Name) {
+			continue
+		}
+		// Password fields belong in the email/password/passwordConfirm
+		// triad already; user-declared TypePassword would collide.
+		if f.Type == builder.TypePassword {
+			continue
+		}
+		b.WriteString("; ")
+		b.WriteString(f.Name)
+		if !f.Required {
+			b.WriteString("?")
+		}
+		b.WriteString(": ")
+		b.WriteString(tsType(f))
+	}
+	return b.String()
 }

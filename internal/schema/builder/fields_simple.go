@@ -48,7 +48,15 @@ func (f *TextField) FTS() *TextField              { f.s.FTS = true; return f }
 // Pattern / MinLen / MaxLen / FTS are NOT applied per-value when
 // Translatable is set — those validators are scalar-only in v1.
 func (f *TextField) Translatable() *TextField { f.s.Translatable = true; return f }
-func (f *TextField) Spec() FieldSpec          { return f.s }
+
+// Computed makes this text field a Postgres generated-stored column
+// whose value is `expr` evaluated against the row. Read-only on the
+// CRUD API. See FieldSpec.Computed for the full contract.
+//
+//	Field("full_name", Text().Computed("first || ' ' || last"))
+func (f *TextField) Computed(expr string) *TextField { f.s.Computed = expr; return f }
+
+func (f *TextField) Spec() FieldSpec { return f.s }
 
 // ---- Number ----
 
@@ -69,7 +77,15 @@ func (f *NumberField) Max(v float64) *NumberField { f.s.Max = &v; return f }
 // counters, IDs of related external systems, anything where you'd
 // reach for `int64` rather than `float64`.
 func (f *NumberField) Int() *NumberField  { f.s.IsInt = true; return f }
-func (f *NumberField) Spec() FieldSpec    { return f.s }
+
+// Computed marks this number field as a Postgres generated-stored
+// column. Same contract as TextField.Computed — see
+// FieldSpec.Computed.
+//
+//	Field("total", Number().Computed("price * quantity"))
+func (f *NumberField) Computed(expr string) *NumberField { f.s.Computed = expr; return f }
+
+func (f *NumberField) Spec() FieldSpec { return f.s }
 
 // ---- Bool ----
 
@@ -83,6 +99,12 @@ func (f *BoolField) Default(v bool) *BoolField {
 	f.s.HasDefault, f.s.Default = true, v
 	return f
 }
+// Computed marks this bool field as a Postgres generated-stored
+// column. Same contract as TextField.Computed.
+//
+//	Field("is_overdue", Bool().Computed("due_date < now()"))
+func (f *BoolField) Computed(expr string) *BoolField { f.s.Computed = expr; return f }
+
 func (f *BoolField) Spec() FieldSpec { return f.s }
 
 // ---- Date (TIMESTAMPTZ) ----
@@ -157,6 +179,39 @@ func (f *JSONField) Default(v any) *JSONField {
 	f.s.HasDefault, f.s.Default = true, v
 	return f
 }
+
+// ArrayOfUUIDReferences declares the field as a JSONB array whose
+// elements MUST be string UUIDs referencing `target`'s id column.
+// REST CRUD enforces this on every create/update: each element gets
+// looked up, missing references → 422. Closes Sentinel's
+// `predecessors JSONB` papercut where FK validity was client-side-
+// only ("FK validity (predecessor exists, same project) is enforced
+// client-side" — tasks.go:15).
+//
+// Migration aid, not the recommended target shape: for proper M2M
+// see TypeRelations / .Relations() with the v3 junction-table CRUD.
+// ArrayOfUUIDReferences exists for JSON arrays that aren't
+// edges-with-attributes (no per-edge sort_index or metadata) where a
+// real M2M would be overkill.
+func (f *JSONField) ArrayOfUUIDReferences(target string) *JSONField {
+	f.s.JSONElementRefCollection = target
+	return f
+}
+
+// SameValueAs declares that for each element of this JSON array (which
+// must have been declared as `ArrayOfUUIDReferences`), the referenced
+// row's `peerColumn` must equal THIS row's `peerColumn`. The
+// canonical use: "predecessors must live in the same project as
+// this task" — `SameValueAs("project")`.
+//
+// Caller's responsibility: `peerColumn` must exist on both this
+// collection AND the referenced collection. Mismatch surfaces as a
+// 500 at write time (we don't cross-validate the schema graph here).
+func (f *JSONField) SameValueAs(peerColumn string) *JSONField {
+	f.s.JSONElementPeerEqual = peerColumn
+	return f
+}
+
 func (f *JSONField) Spec() FieldSpec { return f.s }
 
 // ---- Password ----

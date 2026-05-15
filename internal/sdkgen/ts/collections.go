@@ -28,13 +28,19 @@ func EmitCollection(spec builder.CollectionSpec) string {
 	fmt.Fprintf(&b, `// collections/%s.ts — typed CRUD for the "%s" collection.
 
 import type { HTTPClient } from "../index.js";
+import { encodeFilterLiteral } from "../index.js";
 import type { %s, ListResponse } from "../types.js";
 
 /** Query options for list(). */
 export interface %sListOptions {
   page?: number;
   perPage?: number;
-  /** PB-style filter expression (parsed server-side). */
+  /** PB-style filter expression (parsed server-side). Use the
+   *  ` + "`filter`" + ` builder below to avoid hand-quoting strings — closes
+   *  Sentinel's ` + "`filter: ${'project = \\'${id}\\''}`" + ` papercut, where
+   *  a missing escape would silently inject characters into the
+   *  server-side parser.
+   */
   filter?: string;
   /** Comma-separated signed field list, e.g. "-created,name". */
   sort?: string;
@@ -43,7 +49,53 @@ export interface %sListOptions {
 /** Input shape accepted by create()/update() — system fields stripped. */
 export type %sInput = Partial<Omit<%s, "id" | "created" | "updated">>;
 
-`, spec.Name, spec.Name, tName, tName, tName, tName)
+/** Typed filter builder for the "%s" collection.
+ *
+ * Each helper returns a filter-DSL string suitable for the
+ * ` + "`filter`" + ` option. Values pass through ` + "`encodeFilterLiteral`" + `
+ * (see index.ts) which handles single-quote escaping and type
+ * coercion, so passing a raw user input does not leak into the
+ * parser:
+ *
+ *     rb.%s.list({ filter: %sFilter.eq("project", projectId) })
+ *     rb.%s.list({ filter: %sFilter.and(
+ *       %sFilter.eq("status", "open"),
+ *       %sFilter.gte("created", "2026-01-01"),
+ *     ) })
+ *
+ * Field names are typed against the collection — a typo on a field
+ * name fails at compile time. Comparison values are typed
+ * permissively (string | number | boolean | Date) to accommodate
+ * the various column types Railbase supports.
+ */
+export const %sFilter = {
+  eq:  (field: keyof %s, value: string | number | boolean | Date) =>
+    field.toString() + " = " + encodeFilterLiteral(value),
+  ne:  (field: keyof %s, value: string | number | boolean | Date) =>
+    field.toString() + " != " + encodeFilterLiteral(value),
+  gt:  (field: keyof %s, value: string | number | Date) =>
+    field.toString() + " > " + encodeFilterLiteral(value),
+  gte: (field: keyof %s, value: string | number | Date) =>
+    field.toString() + " >= " + encodeFilterLiteral(value),
+  lt:  (field: keyof %s, value: string | number | Date) =>
+    field.toString() + " < " + encodeFilterLiteral(value),
+  lte: (field: keyof %s, value: string | number | Date) =>
+    field.toString() + " <= " + encodeFilterLiteral(value),
+  like: (field: keyof %s, pattern: string) =>
+    field.toString() + " ~ " + encodeFilterLiteral(pattern),
+  isNull:    (field: keyof %s) => field.toString() + " = null",
+  isNotNull: (field: keyof %s) => field.toString() + " != null",
+  and: (...parts: string[]) => parts.length === 0 ? "" : "(" + parts.join(" && ") + ")",
+  or:  (...parts: string[]) => parts.length === 0 ? "" : "(" + parts.join(" || ") + ")",
+};
+
+`, spec.Name, spec.Name, tName, tName, tName, tName,
+		spec.Name, // builder doc comment
+		spec.Name, lowerFirst(tName)+"Filter",
+		spec.Name, lowerFirst(tName)+"Filter",
+		lowerFirst(tName)+"Filter", lowerFirst(tName)+"Filter",
+		lowerFirst(tName)+"Filter",
+		tName, tName, tName, tName, tName, tName, tName, tName, tName)
 
 	fmt.Fprintf(&b, "/** CRUD wrapper for the `%s` collection. */\n", spec.Name)
 	fmt.Fprintf(&b, "export function %sCollection(http: HTTPClient) {\n", lowerFirst(tName))

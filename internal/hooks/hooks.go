@@ -382,6 +382,17 @@ func (r *Runtime) GoHooks() *GoHooks {
 //
 // Non-error panics inside goja are recovered. After-hook throws are
 // logged but DO NOT propagate (the DB write already happened).
+//
+// Reentry guard (v3.x): Dispatch carries a context-attached depth
+// counter. When a hook handler issues a write that re-fires another
+// hook (e.g. an AfterCreate on `tasks` that updates a counter on
+// `projects` triggering AfterUpdate), the depth grows; past
+// MaxHookDepth, Dispatch refuses with ErrHookDepthExceeded. This
+// closes Sentinel's documented "recursive hook reentry guards" gap
+// (see schema/tasks.go:21) — without it, a careless rollup hook can
+// loop forever before Postgres rejects a deadlock or the request
+// times out. Each handler gets ctx with the incremented depth so
+// nested writes don't have to thread the counter manually.
 func (r *Runtime) Dispatch(ctx context.Context, collection string, event Event, record map[string]any) (*RecordEvent, error) {
 	if r == nil {
 		return &RecordEvent{Collection: collection, record: record}, nil
@@ -389,6 +400,17 @@ func (r *Runtime) Dispatch(ctx context.Context, collection string, event Event, 
 	if !r.HasHandlers(collection, event) {
 		return &RecordEvent{Collection: collection, record: record}, nil
 	}
+
+	// Reentry depth check. Bail BEFORE any handler logic so a
+	// runaway-recursion path doesn't even hit the registry walk.
+	if d := hookDepthFromCtx(ctx); d >= MaxHookDepth {
+		return &RecordEvent{Collection: collection, record: record},
+			fmt.Errorf("%w (collection=%s event=%s depth=%d)",
+				ErrHookDepthExceeded, collection, event, d)
+	}
+	// Increment for any handler we're about to call — sets the
+	// ceiling for nested Dispatch calls one level deeper.
+	ctx = withHookDepth(ctx, hookDepthFromCtx(ctx)+1)
 	// Publish "we dispatched something" exactly once per Dispatch call
 	// that has handlers. The interface is nil-safe via the explicit
 	// guard so the runtime works without a registry wired.

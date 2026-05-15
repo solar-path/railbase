@@ -92,6 +92,22 @@ func (f *RelationField) SetNullOnDelete() *RelationField {
 	f.s.SetNullOnDelete, f.s.CascadeDelete = true, false
 	return f
 }
+
+// DefaultRequest sets a request-context-derived default value for
+// this relation. The most common use is binding the FK to the
+// authenticated principal:
+//
+//	Field("owner", Relation("users").Required().DefaultRequest("auth.id"))
+//
+// On create with no `owner` in the body, REST CRUD substitutes the
+// auth.id of the caller. Override is allowed; combine with a CreateRule
+// to forbid passing somebody else's id. See FieldSpec.DefaultRequest
+// for the full list of supported expressions.
+func (f *RelationField) DefaultRequest(expr string) *RelationField {
+	f.s.DefaultRequest = expr
+	return f
+}
+
 func (f *RelationField) Spec() FieldSpec { return f.s }
 
 // ---- Relations (multi via junction table) ----

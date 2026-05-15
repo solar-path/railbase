@@ -72,6 +72,10 @@ func newRoot(includeInit bool) *cobra.Command {
 	}
 	root.AddCommand(
 		newServeCmd(),
+		// v3.x — unified dev command (backend + frontend in one
+		// ^C lifecycle). Closes the Sentinel-style dev.sh
+		// orchestration papercut. See cli/dev.go.
+		newDevCmd(),
 		newVersionCmd(),
 		newMigrateCmd(),
 		newAdminCmd(),

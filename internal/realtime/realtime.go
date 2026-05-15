@@ -635,6 +635,35 @@ func topicMatch(pattern, topic string) bool {
 	return true
 }
 
+// Phase 3.x roadmap — server-side topic filtering (Sentinel B4).
+//
+// Sentinel's `project-screen.tsx:93-104` subscribes to `tasks/*`
+// (every task event in the system) and refetches the full list on
+// any event because there's no way to scope by project. The proper
+// fix needs three pieces:
+//
+//   1. Topic-filter syntax extension. Reserve `?` in pattern strings
+//      to introduce filter predicates:
+//          tasks/*?project=<uuid>
+//          tasks/update?owner=<uuid>&priority=high
+//      Multiple predicates AND together.
+//
+//   2. Pre-publish predicate evaluation. The broker now needs to
+//      look at the RecordEvent's `Payload` map and confirm every
+//      predicate matches BEFORE adding the subscriber to the fan-
+//      out set. Touch site: matchesWithPayload(sub, topic, payload).
+//
+//   3. SSE / WS handler validation. Reject patterns with predicates
+//      pointing at non-existent columns (early error, not silent
+//      no-match), and reject predicates referencing private columns
+//      (password_hash, token_key).
+//
+// Punt rationale: shipping this requires a broker-wide invariant
+// change (`matches(topic)` becomes `matches(topic, payload)`) plus
+// new SSE/POST API surface for filter syntax. Not done in this
+// patch; tracked here so the next person picking it up doesn't have
+// to re-derive the design.
+
 // cleanTopics strips whitespace + drops empties so a stray comma in
 // the query string doesn't widen the subscription unexpectedly.
 func cleanTopics(in []string) []string {

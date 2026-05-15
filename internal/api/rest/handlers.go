@@ -432,6 +432,23 @@ func (d *handlerDeps) createHandler(w http.ResponseWriter, r *http.Request) {
 		fields[k] = v
 	}
 
+	// v3.x — request-context defaults. Any FieldSpec.DefaultRequest
+	// substitution lands here, AFTER parseInput / tenant injection but
+	// BEFORE the BeforeCreate hook runs (so a hook still sees the
+	// resolved owner / tenant / etc. value). Client overrides are
+	// preserved — see defaults.go.
+	applyRequestDefaults(r.Context(), spec, fields)
+
+	// v3.x — pull out M2M Relations payload BEFORE the row INSERT.
+	// buildInsert (called below) strips Relations fields from the
+	// main table column list; we apply them to the junction table
+	// after the row lands, INSIDE the same tx.
+	relPayload, relErr := extractRelationsPayload(spec, fields)
+	if relErr != nil {
+		rerr.WriteJSON(w, rerr.Wrap(relErr, rerr.CodeValidation, "%s", relErr.Error()))
+		return
+	}
+
 	// v1.2.0 hook dispatch: BeforeCreate handlers can mutate `fields`
 	// before we build the INSERT. A throw aborts the request with 400.
 	if d.hooks != nil && d.hooks.HasHandlers(spec.Name, hooks.EventRecordBeforeCreate) {
@@ -467,6 +484,17 @@ func (d *handlerDeps) createHandler(w http.ResponseWriter, r *http.Request) {
 			rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeValidation, "%s", err.Error()))
 			return
 		}
+	}
+
+	// v3.x — JSONB array-of-references validation. Runs server-side
+	// so curl-from-the-shell writes can't bypass the FK invariant
+	// (`predecessors JSONB` style fields). Inside the tx so a failed
+	// check rolls back any preceding hook-injected state. Runs
+	// BEFORE the INSERT so a bad reference is rejected before we
+	// spend a row insert.
+	if err := validateJSONArrayRefs(r.Context(), tx, spec, fields); err != nil {
+		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeValidation, "%s", err.Error()))
+		return
 	}
 
 	sql, args, err := buildInsert(spec, fields)
@@ -540,6 +568,42 @@ func (d *handlerDeps) createHandler(w http.ResponseWriter, r *http.Request) {
 		rerr.WriteJSON(w, rerr.New(rerr.CodeForbidden,
 			"create not permitted by the collection's create rule"))
 		return
+	}
+
+	// v3.x M2M — write junction rows for every Relations field the
+	// client supplied. Same tx as the main INSERT, so a junction
+	// failure rolls everything back. Then re-query the row so the
+	// response carries the newly-written array (the original
+	// INSERT...RETURNING ran before junction rows existed).
+	if len(relPayload) > 0 {
+		ownerID, ok := row["id"].(string)
+		if !ok {
+			rerr.WriteJSON(w, rerr.New(rerr.CodeInternal, "internal: row id not string"))
+			return
+		}
+		if err := applyRelationsAfterWrite(r.Context(), tx, spec.Name, ownerID, relPayload); err != nil {
+			d.log.Error("rest: m2m apply failed", "collection", spec.Name, "err", err)
+			rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "m2m write failed"))
+			return
+		}
+		viewSQL, viewArgs := buildView(spec, ownerID, "", nil)
+		freshRows, err := tx.Query(r.Context(), viewSQL, viewArgs...)
+		if err != nil {
+			rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "m2m re-fetch failed"))
+			return
+		}
+		if !freshRows.Next() {
+			freshRows.Close()
+			rerr.WriteJSON(w, rerr.New(rerr.CodeInternal, "m2m re-fetch returned no row"))
+			return
+		}
+		fresh, err := scanRow(freshRows, spec)
+		freshRows.Close()
+		if err != nil {
+			rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "m2m re-scan failed"))
+			return
+		}
+		row = fresh
 	}
 
 	if err := tx.Commit(r.Context()); err != nil {

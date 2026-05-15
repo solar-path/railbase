@@ -20,6 +20,20 @@ type Context struct {
 	// AuthCollection is the auth collection the principal belongs to,
 	// e.g. "users". Empty for anonymous.
 	AuthCollection string
+
+	// Schema resolves a collection name to its spec. Required only
+	// when filters use dotted paths (`project.owner`); nil is fine
+	// for flat-field filters. The resolver lets the SQL compiler
+	// walk a relation FK chain without the filter package importing
+	// the global schema registry (preserves the inward-pointing
+	// dependency arrow).
+	//
+	// Typical wiring: pass `schema.ResolveCollection` from the
+	// schema registry package. Returns (spec, true) on hit, (zero,
+	// false) on unknown name — the compiler turns the latter into
+	// an explicit "unknown collection" filter error rather than
+	// SQL drift.
+	Schema func(name string) (builder.CollectionSpec, bool)
 }
 
 // Compile turns an AST into a parameterized SQL fragment plus the
@@ -226,13 +240,67 @@ func (c *compiler) emitIn(v In) error {
 }
 
 func (c *compiler) emitIdent(v Ident) error {
-	// Validate the column belongs to the collection: either a user
-	// field or one of the system fields (id/created/updated, plus
-	// tenant_id / auth fields where applicable).
-	if !columnAllowed(c.spec, v.Name) {
-		return fmt.Errorf("unknown field %q on collection %q", v.Name, c.spec.Name)
+	// Single-segment ident — fast path, validates against current
+	// collection's columns.
+	if v.DottedPath == "" {
+		if !columnAllowed(c.spec, v.Name) {
+			return fmt.Errorf("unknown field %q on collection %q", v.Name, c.spec.Name)
+		}
+		c.b.WriteString(v.Name)
+		return nil
 	}
-	c.b.WriteString(v.Name)
+	// Dotted-path ident — one FK hop. Sentinel's "project.owner"
+	// shape: `project` is a relation FK on `tasks`, we want
+	// `projects.owner`. Emit as a scalar subquery so the surrounding
+	// comparison clause stays well-formed:
+	//
+	//   (SELECT projects.owner FROM projects WHERE projects.id = tasks.project)
+	//
+	// FK semantics guarantee at most one matching row, so the
+	// subquery is single-valued. Returns NULL if `tasks.project` is
+	// NULL — comparisons against NULL evaluate to UNKNOWN, which is
+	// the correct posture (the rule shouldn't accidentally match).
+	path := strings.Split(v.DottedPath, ".")
+	if len(path) > 2 {
+		return fmt.Errorf("dotted path %q: only one FK hop is supported (v3.x); split into multiple filters or denormalise",
+			v.DottedPath)
+	}
+	relName := path[0]
+	targetCol := path[1]
+
+	// First segment must be a Relation field on the current spec.
+	var relField builder.FieldSpec
+	found := false
+	for _, f := range c.spec.Fields {
+		if f.Name == relName && f.Type == builder.TypeRelation {
+			relField = f
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("dotted path %q: %q is not a relation field on %q",
+			v.DottedPath, relName, c.spec.Name)
+	}
+	if c.ctx.Schema == nil {
+		return fmt.Errorf("dotted path %q: filter Context.Schema resolver not wired — cannot resolve related collection %q",
+			v.DottedPath, relField.RelatedCollection)
+	}
+	relSpec, ok := c.ctx.Schema(relField.RelatedCollection)
+	if !ok {
+		return fmt.Errorf("dotted path %q: related collection %q not in schema registry",
+			v.DottedPath, relField.RelatedCollection)
+	}
+	// Validate the second segment against the related collection's
+	// columns — same column-allowed posture as flat idents.
+	if !columnAllowed(relSpec, targetCol) {
+		return fmt.Errorf("dotted path %q: unknown field %q on related collection %q",
+			v.DottedPath, targetCol, relSpec.Name)
+	}
+	fmt.Fprintf(&c.b, "(SELECT %s.%s FROM %s WHERE %s.id = %s.%s)",
+		relSpec.Name, targetCol,
+		relSpec.Name,
+		relSpec.Name, c.spec.Name, relName)
 	return nil
 }
 

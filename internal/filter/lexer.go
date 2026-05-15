@@ -25,6 +25,8 @@ const (
 	tkLParen   // (
 	tkRParen   // )
 	tkComma    // ,
+	tkDot      // . — only between two identifiers (dotted paths v3.x);
+	//        // a leading dot would have been lexed as part of a float.
 	tkAnd      // &&
 	tkOr       // ||
 	tkOp       // = != > < >= <= ~ !~
@@ -55,6 +57,14 @@ func lex(src string) ([]token, error) {
 			i++
 		case ch == ',':
 			out = append(out, token{kind: tkComma, val: ",", pos: i})
+			i++
+		case ch == '.':
+			// Dotted-path connector. Only emitted as a separator
+			// between identifiers; floats (1.5) are caught by lexNumber
+			// before we get here. A leading '.' here would be an error
+			// — `.foo` is not a legal filter primary — but we still
+			// emit the token and let the parser report it positionally.
+			out = append(out, token{kind: tkDot, val: ".", pos: i})
 			i++
 		case ch == '&':
 			if i+1 < len(src) && src[i+1] == '&' {

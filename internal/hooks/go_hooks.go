@@ -126,6 +126,39 @@ type RecordHook func(*HookContext, *GoRecordEvent) error
 // Tested via errors.Is so wrapped values still match.
 var ErrReject = errors.New("hook rejected the operation")
 
+// ErrHookDepthExceeded is returned by Dispatch when a hook chain
+// (handler → triggers write → fires another hook → ...) exceeds
+// MaxHookDepth. v3.x — closes the "recursive hook reentry guards"
+// gap documented in Sentinel's schema/tasks.go:21.
+var ErrHookDepthExceeded = errors.New("hook dispatch depth exceeded")
+
+// MaxHookDepth caps the recursive hook chain at 5 frames. Real
+// rollup patterns rarely exceed 2 (`A → AfterCreate → B → AfterUpdate`),
+// and anything past 5 is almost always a loop bug. Operators who
+// genuinely need deeper chains can use `EnterHookContext(ctx)`
+// directly with a fresh counter (escape hatch for legitimate batch
+// recomputes — undocumented for now, surface kept tight).
+const MaxHookDepth = 5
+
+// hookDepthCtxKey is the per-process unique context key for the
+// depth counter. Unexported so external packages can't poke at it
+// directly — they must use the Dispatch surface, which manages
+// increment + ceiling-check atomically.
+type hookDepthCtxKey struct{}
+
+// withHookDepth attaches an updated depth counter to ctx.
+func withHookDepth(ctx context.Context, depth int) context.Context {
+	return context.WithValue(ctx, hookDepthCtxKey{}, depth)
+}
+
+// hookDepthFromCtx reads the depth counter; 0 when never set.
+func hookDepthFromCtx(ctx context.Context) int {
+	if v, ok := ctx.Value(hookDepthCtxKey{}).(int); ok {
+		return v
+	}
+	return 0
+}
+
 // GoHooks is the registry + dispatcher for Go-side hooks. One per
 // process; the Runtime holds one (lazy-init or via Options).
 //

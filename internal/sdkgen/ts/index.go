@@ -66,6 +66,35 @@ export interface ClientOptions {
   tenant?: string;
   /** Override fetch (Node 18+ has it global; testing benefits from injection). */
   fetch?: typeof fetch;
+  /** v3.x — persist the bearer token to a Storage handle (localStorage
+   *  / sessionStorage / custom). When set, the client:
+   *    1. reads the token on construction (resuming a logged-in session
+   *       across page reloads),
+   *    2. writes the token to storage whenever setToken() is called or
+   *       any auth-* / refresh path returns a fresh one,
+   *    3. clears it on logout / setToken(null).
+   *
+   *  Closes the Sentinel /lib/client.ts boilerplate where every
+   *  consumer hand-rolls localStorage.getItem / setItem.
+   *
+   *  Pass storage=localStorage for browsers, sessionStorage for
+   *  tab-scoped auth, or a custom object implementing the Storage
+   *  interface (getItem / setItem / removeItem) for SSR / native.
+   */
+  storage?: TokenStorage;
+  /** Storage key used when storage is set. Defaults to
+   *  "railbase.token". Override per-app to avoid collisions on
+   *  shared origins. */
+  storageKey?: string;
+}
+
+/** Minimal storage surface — just enough to persist a string token.
+ *  Compatible with the browser's localStorage / sessionStorage
+ *  interface, and easy to mock in tests. */
+export interface TokenStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
 }
 
 /** Subset of the request surface every wrapper needs. */
@@ -84,16 +113,40 @@ class FetchHTTPClient implements HTTPClient {
   private token: string | null;
   private tenant: string | null;
   private fetchImpl: typeof fetch;
+  private storage: TokenStorage | null;
+  private storageKey: string;
 
   constructor(opts: ClientOptions) {
     if (!opts.baseURL) throw new Error("createRailbaseClient: baseURL is required");
     this.baseURL = opts.baseURL.replace(/\/$/, "");
-    this.token = opts.token ?? null;
     this.tenant = opts.tenant ?? null;
-    this.fetchImpl = opts.fetch ?? fetch;
+    this.storage = opts.storage ?? null;
+    this.storageKey = opts.storageKey ?? "railbase.token";
+    // Hydrate token from storage first; opts.token (explicit override)
+    // wins so callers can hard-set on first construction.
+    let initial = opts.token ?? null;
+    if (!initial && this.storage) {
+      initial = this.storage.getItem(this.storageKey);
+    }
+    this.token = initial;
+    // Bind fetch to its origin (window in browsers, globalThis in
+    // Workers / Node). Without the bind, calling this.fetchImpl(...)
+    // from a method context loses 'this', and Chromium throws
+    // "Illegal invocation" because the native fetch impl looks for
+    // the WindowOrWorkerGlobalScope receiver. opts.fetch (e.g. a
+    // polyfill or test stub) is also bound -- defensive, since
+    // polyfills vary in how they handle the receiver.
+    const f = opts.fetch ?? fetch;
+    this.fetchImpl = f.bind(globalThis) as typeof fetch;
   }
 
-  setToken(token: string | null) { this.token = token; }
+  setToken(token: string | null) {
+    this.token = token;
+    if (this.storage) {
+      if (token == null) this.storage.removeItem(this.storageKey);
+      else this.storage.setItem(this.storageKey, token);
+    }
+  }
   setTenant(tenant: string | null) { this.tenant = tenant; }
 
   /** Authenticated raw fetch. Stamps the same Authorization / X-Tenant
@@ -132,6 +185,31 @@ class FetchHTTPClient implements HTTPClient {
     }
     return parsed as T;
   }
+}
+
+/** Encode a JS value as a filter-DSL literal.
+ *
+ * Handles single-quote escaping for strings (Railbase's filter
+ * parser requires single quotes for string literals — PB-compat),
+ * Date-to-ISO conversion, and pass-through for numbers / booleans /
+ * null. Generated typed filter builders use this so call-sites never
+ * concatenate raw user input into a filter string.
+ *
+ * Closes Sentinel's hand-rolled quoting:
+ *
+ *     filter: ` + "`project = '${projectId}'`" + `   // raw, unsafe if id has '
+ *
+ *     // becomes:
+ *     filter: tasksFilter.eq("project", projectId)  // safe + typed
+ */
+export function encodeFilterLiteral(v: unknown): string {
+  if (v == null) return "null";
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v === "number") return Number.isFinite(v) ? String(v) : "null";
+  if (v instanceof Date) return "'" + v.toISOString() + "'";
+  // String — single-quote escape per PB-compat parser.
+  const s = String(v).replace(/'/g, "''");
+  return "'" + s + "'";
 }
 
 /** Construct a typed Railbase client. */

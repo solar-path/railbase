@@ -143,6 +143,43 @@
 - Unified Timeline UI (`/_/logs`): один экран, фильтры actor_type/event/entity/tenant_id/request_id/outcome, drawer с before/after JSON diff.
 - Deep-dive views перенесены: App logs → Health → Process logs; Email events → Settings → Mailer → Deliveries; Notifications log → Settings → Notifications → Log.
 
+### v3.x Sentinel-derived improvements ✅
+
+Forensic audit of the Sentinel project (real consumer at /Users/work/apps/sentinel) revealed 14 concrete gaps where Railbase forced denormalisation, manual workarounds, or pivot-to-client. All addressed in this same branch:
+
+**Sprint 0 — однодневные фиксы:**
+
+- **A4 / topological migrate diff** ✅ — `internal/schema/gen/diff.go::topoSortCollections` walks the FK graph (Kahn) so CREATE TABLE ordering resolves dependencies on emit. Cycle case surfaces as an `IncompatibleChange`. Closes Sentinel's `migrations/1000_initial_schema.up.sql:1-3` ручная переставка.
+- **B5 / SDK fetch.bind** ✅ — `internal/sdkgen/ts/index.go` binds `(opts.fetch ?? fetch).bind(globalThis)` so `this.fetchImpl(...)` doesn't lose receiver. Closes Sentinel's `lib/client.ts:38` «Illegal invocation» comment.
+- **B7 / yaml config** ✅ — `internal/config/yaml.go` parses `railbase.yaml` (or `.yml`) with proper precedence (yaml < env < flag). Closes Sentinel's `railbase.yaml:4` "no-op" disclaimer.
+- **B8 / redundant FK index** ✅ — `internal/schema/gen/sql.go::fieldIndexes` skips the user-`.Index()` btree on relation columns (FK index already covers). Closes Sentinel's `_owner_idx + _owner_fk_idx` duplication.
+
+**Sprint 1 — closes «обрыв»:**
+
+- **A1 / OnBeforeServe hook + App.Pool()** ✅ — `pkg/railbase/app.go` exposes `App.OnBeforeServe(func(chi.Router))` and `App.Pool() *pgxpool.Pool`. Custom HTTP routes (CPM compute, batch operations, file streaming) now mount through the standard chi router with full Railbase context access. THE foundational gap; closes Sentinel's "CPM client-side because no custom routes" pivot.
+- **B1 / SDK type completeness** ✅ — Auth `signup()` now accepts user-defined fields (e.g. `name`); RealtimeEvent is generic `RealtimeEvent<T>` so payload typing flows through. Added `requestPasswordReset` / `confirmPasswordReset` / `requestVerification` / `confirmVerification` to the generated auth wrappers. Closes Sentinel's `as any` cast forest.
+
+**Sprint 2 — schema & data-layer expressiveness:**
+
+- **B2 / DefaultRequest** ✅ — `.DefaultRequest("auth.id")` builder method on Relation fields; REST CRUD's `applyRequestDefaults` substitutes `@request.auth.id` when client omits the field. Closes Sentinel's client-side `owner: authState.value.me.id` copy.
+- **A2 / cross-collection dotted paths** ✅ — Filter lexer/parser/SQL compiler now accept `project.owner = @request.auth.id`. One-FK-hop limit (Sentinel's exact use case); deeper paths rejected. Closes the "denormalise owner onto every task" workaround.
+- **A3 / M2M generic CRUD** ✅ — `TypeRelations` fields now generate junction tables (`<owner>_<field>`) at DDL time, surface as `[uuid, ...]` arrays on read (`array_agg ORDER BY sort_index`), and accept replace-mode writes on create. (Update-side handler wiring is the natural follow-on.) Closes Sentinel's `predecessors JSONB` workaround.
+- **B6 / JSON validation rules** ✅ — `JSONField.ArrayOfUUIDReferences("tasks").SameValueAs("project")` declares both existence + peer-equality invariants for JSONB UUID arrays; REST CRUD validates server-side in the same tx as the INSERT. Migration aid for projects still on JSONB-array predecessors.
+
+**Sprint 3 — DX:**
+
+- **B3 / typed filter builder** ✅ — Generated SDK now emits `<collection>Filter.eq/ne/gt/...` helpers per collection with `encodeFilterLiteral` handling single-quote escaping. Closes Sentinel's `` filter: `project = '${projectId}'` `` injection risk.
+- **B4 / realtime topic filters** ⏸ — Design TODO documented in `internal/realtime/realtime.go` (touch site identified, broker invariant change scoped). Full implementation deferred — substantive cross-cutting work; punted with a clear next-step note rather than shipped half-baked.
+- **C1 / `railbase dev` command** ✅ — `pkg/railbase/cli/dev.go` orchestrates backend + frontend with one ^C lifecycle, prefixed logs, /readyz polling, cross-platform (no bash). Closes Sentinel's `dev.sh` papercut.
+- **C6 / SDK auto-regen on schema change** ✅ — `railbase dev --watch-schema=./schema --sdk-pkg=./cmd/sentinel` watches `*.go` saves and re-runs `generate sdk` debounced 500ms.
+- **C2 / SPA embed helper** ✅ — `App.ServeStaticFS("/", embeddedFS)` mounts a `go:embed`-backed filesystem with SPA-style index.html fallback. Single-binary deployment for Sentinel-shaped apps.
+
+**Sprint 4 — продвинутые primitive'ы:**
+
+- **C4 / Computed fields** ✅ — `Text/Number/Bool.Computed(expr)` builder emits `GENERATED ALWAYS AS (<expr>) STORED` columns; REST CRUD strips Computed fields from writable inputs. Server-side derived values without trigger plumbing.
+- **C3 / Hook reentry guards** ✅ — `internal/hooks/hooks.go::Dispatch` carries a depth counter (max 5) via context. Closes Sentinel's "recursive hook reentry guards" gap from `schema/tasks.go:21` — runaway rollup loops surface as `ErrHookDepthExceeded`, not deadlocks.
+- **B5 / SDK session manager** ✅ — `createRailbaseClient({ storage: localStorage })` hydrates the token on construction, persists on `setToken()`, clears on logout. Closes Sentinel's hand-rolled `lib/client.ts:4-54` localStorage boilerplate.
+
 ### v3.x Unified Audit Log — Phase 1.5 / 2 / 3 / 4 ✅
 
 Все четыре фазы реализованы в этой же ветке:

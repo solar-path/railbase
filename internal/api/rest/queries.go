@@ -47,9 +47,33 @@ func buildSelectColumns(spec builder.CollectionSpec) []string {
 		cols = append(cols, "sort_index")
 	}
 	for _, f := range recordOutFields(spec) {
+		if f.Type == builder.TypeRelations {
+			cols = append(cols, relationsReadSubquery(spec.Name, f))
+			continue
+		}
 		cols = append(cols, sqlReadColumn(f))
 	}
 	return cols
+}
+
+// relationsReadSubquery renders the M2M aggregation column for one
+// TypeRelations field on `owner`. Pattern:
+//
+//	COALESCE(
+//	  (SELECT array_agg(j.ref_id::text ORDER BY j.sort_index)
+//	     FROM <owner>_<field> j
+//	    WHERE j.owner_id = <owner>.id),
+//	  '{}'::text[]
+//	) AS <field>
+//
+// Empty result → empty array (not NULL) so JSON wire shape is stable.
+// Ordering by sort_index lets clients preserve list order.
+func relationsReadSubquery(owner string, f builder.FieldSpec) string {
+	junction := owner + "_" + f.Name
+	return fmt.Sprintf(
+		"COALESCE((SELECT array_agg(j.ref_id::text ORDER BY j.sort_index) FROM %s j WHERE j.owner_id = %s.id), '{}'::text[]) AS %s",
+		junction, owner, f.Name,
+	)
 }
 
 // sqlReadColumn renders the SELECT expression for one field. Mostly
@@ -59,6 +83,12 @@ func sqlReadColumn(f builder.FieldSpec) string {
 	switch f.Type {
 	case builder.TypeRelation:
 		return fmt.Sprintf("%s::text AS %s", f.Name, f.Name)
+	case builder.TypeRelations:
+		// v3.x M2M — handled in buildSelectColumns where the owner
+		// table name is in scope. This branch is unreachable; kept
+		// for total switch coverage so a new type doesn't fall
+		// through to the silent default.
+		return "NULL::text[] AS " + f.Name
 	case builder.TypeFinance, builder.TypePercentage:
 		// Cast NUMERIC to text so the marshaller gets a string and not
 		// a pgtype.Numeric. Strings are the only safe wire shape for
@@ -187,6 +217,12 @@ func buildInsert(spec builder.CollectionSpec, fields map[string]any) (string, []
 	if err := preprocessInsertFields(spec, fields); err != nil {
 		return "", nil, err
 	}
+
+	// v3.x — strip TypeRelations from the main INSERT. M2M arrays go
+	// into the junction table AFTER the row lands (see
+	// applyRelationsAfterWrite). Stripping here keeps the column list
+	// matching the real schema (no orphan UUID[] column on the owner).
+	stripRelationsFromInsert(spec, fields)
 
 	if len(fields) == 0 {
 		// PG INSERT INTO t DEFAULT VALUES is the explicit zero-arg form.

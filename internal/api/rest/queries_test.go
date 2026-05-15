@@ -197,8 +197,10 @@ func TestCoerceForPG_TypeMismatch(t *testing.T) {
 
 // Sanity that recordOutFields filters deferred types. v1.3.1 widens
 // the readable set to include file/files (rendered as {name, url}),
-// so plain + avatar + attachments survive; password + relations stay
-// hidden.
+// v3.x: TypeRelations is now read-surfaced (junction-table-aggregated
+// array). password stays hidden; file / files render via
+// marshalRecord. Test now asserts the new shape — Relations join the
+// readable set.
 func TestRecordOutFields_FiltersDeferred(t *testing.T) {
 	c := builder.NewCollection("c").
 		Field("plain", builder.NewText()).
@@ -211,7 +213,7 @@ func TestRecordOutFields_FiltersDeferred(t *testing.T) {
 	for i, f := range out {
 		names[i] = f.Name
 	}
-	want := []string{"plain", "avatar", "attachments"}
+	want := []string{"plain", "avatar", "attachments", "siblings"}
 	if len(names) != len(want) {
 		t.Fatalf("got %v, want %v", names, want)
 	}
