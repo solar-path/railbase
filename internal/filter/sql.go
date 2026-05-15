@@ -337,15 +337,30 @@ func (c *compiler) emitIdent(v Ident) error {
 }
 
 // compareIsAnonUUID reports whether `magicSide` is the auth-id magic
-// var AND `columnSide` is an Ident that resolves to a UUID-typed column
-// on the current spec. Used by emitCompare to short-circuit the
-// anonymous-empty-string-into-UUID-column crash (FEEDBACK G4).
+// var AND `columnSide` is an Ident that resolves to a UUID-typed column.
+// Used by emitCompare to short-circuit the anonymous-empty-string-into-
+// UUID-column crash.
 //
-// Only flat idents are considered — dotted paths resolve through a
-// scalar subquery whose result is the related column's type; we leave
-// those alone because the related-collection schema isn't always
-// available at this layer (Schema resolver returning false on miss
-// would push the diagnostic upstream).
+// v0.4.2: covered flat idents — `@request.auth.id = owner` where owner
+// is a Relation field on the current spec.
+//
+// v0.4.3 (FEEDBACK G4-dotted): also covers single-hop dotted idents —
+// `@request.auth.id = project.owner` where project is a Relation on the
+// current spec and owner is a Relation on the related spec. The earlier
+// "we don't have the related-collection schema at this layer" comment
+// was wrong: c.ctx.Schema is REQUIRED for dotted-path compilation to
+// succeed at all (emitIdent calls it on the same code path), so by the
+// time we reach this helper for a dotted compare, the resolver is
+// already known to be wired. Resolving relSpec here is the same lookup
+// emitIdent does ≈30 lines below — duplicated rather than refactored
+// to keep the short-circuit check side-effect free (no SQL emission).
+//
+// Sentinel pain path this closes: anonymous request to /api/collections/
+// tasks/records with rule `@request.auth.id = project.owner` —
+// previously emitted `(SELECT projects.owner FROM projects WHERE
+// projects.id = tasks.project) = $1` with $1 = "", Postgres rejected
+// '' as UUID, REST surfaced 500 "count failed". Now collapses to
+// `(false)` before any subquery is emitted.
 func (c *compiler) compareIsAnonUUID(magicSide, columnSide Node) bool {
 	mv, ok := magicSide.(MagicVar)
 	if !ok {
@@ -355,29 +370,57 @@ func (c *compiler) compareIsAnonUUID(magicSide, columnSide Node) bool {
 		return false
 	}
 	id, ok := columnSide.(Ident)
-	if !ok || id.DottedPath != "" {
+	if !ok {
 		return false
 	}
-	return c.identIsUUIDColumn(id.Name)
+	if id.DottedPath == "" {
+		return c.specHasUUIDColumn(c.spec, id.Name)
+	}
+	// Dotted path — single FK hop. Resolve the relation segment on
+	// the current spec, then the target segment on the related spec.
+	path := strings.Split(id.DottedPath, ".")
+	if len(path) != 2 {
+		// >1 hop is not supported by emitIdent today; let emitIdent
+		// surface that as an explicit error rather than short-circuit.
+		return false
+	}
+	relName, targetCol := path[0], path[1]
+	var relField builder.FieldSpec
+	found := false
+	for _, f := range c.spec.Fields {
+		if f.Name == relName && f.Type == builder.TypeRelation {
+			relField = f
+			found = true
+			break
+		}
+	}
+	if !found || c.ctx.Schema == nil {
+		return false
+	}
+	relSpec, ok := c.ctx.Schema(relField.RelatedCollection)
+	if !ok {
+		return false
+	}
+	return c.specHasUUIDColumn(relSpec, targetCol)
 }
 
-// identIsUUIDColumn says whether `name` is a UUID-typed column on the
-// current spec. System columns (`id`, `tenant_id`, `parent`) are
-// hard-coded; user fields are UUID only when declared as Relation.
+// specHasUUIDColumn says whether `name` is a UUID-typed column on
+// `spec`. System columns (`id`, `tenant_id`, `parent`) are hard-coded;
+// user fields are UUID only when declared as Relation.
 //
 // `parent` is uuid only when AdjacencyList is enabled — the column
 // doesn't exist otherwise, so a filter naming it would have been
 // rejected upstream by columnAllowed.
-func (c *compiler) identIsUUIDColumn(name string) bool {
+func (c *compiler) specHasUUIDColumn(spec builder.CollectionSpec, name string) bool {
 	switch name {
 	case "id":
 		return true
 	case "tenant_id":
-		return c.spec.Tenant
+		return spec.Tenant
 	case "parent":
-		return c.spec.AdjacencyList
+		return spec.AdjacencyList
 	}
-	for _, f := range c.spec.Fields {
+	for _, f := range spec.Fields {
 		if f.Name == name {
 			return f.Type == builder.TypeRelation
 		}

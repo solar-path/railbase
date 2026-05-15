@@ -24,6 +24,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	authmw "github.com/railbase/railbase/internal/auth/middleware"
 	"github.com/railbase/railbase/internal/filter"
 	schemabuilder "github.com/railbase/railbase/internal/schema/builder"
@@ -51,10 +53,21 @@ func registerProjectsAndTasks(t *testing.T) schemabuilder.CollectionSpec {
 // TestFilterDottedPath_SchemaResolverWired proves filterCtx() now
 // supplies the Schema resolver, so a rule using a one-hop dotted path
 // compiles to the documented scalar-subquery SQL shape.
+//
+// v0.4.3 update: must pass an AUTHENTICATED principal. The v0.4.3
+// G4-dotted fix correctly short-circuits anonymous-UUID compares to
+// `(false)` before reaching the subquery emitter (see
+// internal/filter/anon_uuid_test.go for that contract). To verify the
+// schema resolver wire — which is a separate concern from the anon
+// short-circuit — we hand filterCtx a real UserID so the compiler
+// takes the full dotted-path emission path.
 func TestFilterDottedPath_SchemaResolverWired(t *testing.T) {
 	tasksSpec := registerProjectsAndTasks(t)
 
-	fctx := filterCtx(authmw.Principal{}) // anonymous is fine — we're testing wiring
+	fctx := filterCtx(authmw.Principal{
+		UserID:         uuid.New(),
+		CollectionName: "users",
+	})
 	if fctx.Schema == nil {
 		t.Fatal("filterCtx().Schema is nil — resolver not wired (FEEDBACK #4 regression)")
 	}
@@ -78,6 +91,33 @@ func TestFilterDottedPath_SchemaResolverWired(t *testing.T) {
 	}
 	if len(frag.Args) != 1 {
 		t.Errorf("expected exactly 1 arg (auth.id), got %d: %+v", len(frag.Args), frag.Args)
+	}
+}
+
+// TestFilterDottedPath_AnonShortCircuits is the companion check —
+// proves that with an UNauthenticated principal, the v0.4.3 G4-dotted
+// fix kicks in inside the REST layer too (not just at the filter pkg
+// level). filterCtx must produce a Context with empty AuthID, and
+// compileRule must collapse the dotted UUID compare to (false) so
+// anonymous list requests against this rule return an empty result
+// set instead of crashing on '' → uuid coercion.
+func TestFilterDottedPath_AnonShortCircuits(t *testing.T) {
+	tasksSpec := registerProjectsAndTasks(t)
+
+	fctx := filterCtx(authmw.Principal{}) // anonymous
+	if fctx.AuthID != "" {
+		t.Fatalf("anonymous filterCtx leaked an AuthID: %q", fctx.AuthID)
+	}
+
+	frag, _, err := compileRule(`project.owner = @request.auth.id`, tasksSpec, fctx, 1)
+	if err != nil {
+		t.Fatalf("compileRule: %v", err)
+	}
+	if !strings.Contains(frag.Where, "(false)") {
+		t.Errorf("anonymous dotted UUID compare didn't short-circuit: %q", frag.Where)
+	}
+	if len(frag.Args) != 0 {
+		t.Errorf("anonymous short-circuit should bind zero params, got %d: %v", len(frag.Args), frag.Args)
 	}
 }
 

@@ -176,3 +176,128 @@ func TestAnonTextField_NoShortCircuit(t *testing.T) {
 		t.Errorf("expected single empty-string arg, got %v", args)
 	}
 }
+
+// --- v0.4.3 — Sentinel FEEDBACK.md G4-dotted regression. -------------
+//
+// The v0.4.2 fix handled flat ident comparisons but the helper
+// explicitly returned false for dotted paths, leaving Sentinel's exact
+// `tasks` shape (`@request.auth.id = project.owner`) still producing
+// a SQL UUID-parse 500 on anonymous requests.
+//
+// Repro: register two collections — tasks(project → projects) and
+// projects(owner → users). Compile the rule against an anonymous
+// context (AuthID == ""). Pre-fix this emitted a scalar subquery
+// `(SELECT projects.owner FROM projects WHERE projects.id = tasks.project) = $1`
+// with $1 = "", and Postgres rejected the empty-string→uuid cast.
+// Post-fix the whole compare short-circuits to `(false)` before any
+// subquery is emitted, matching the deny-by-default posture flat
+// idents already had.
+
+// dottedSpecs registers two collections and returns a Schema resolver
+// the way the REST handler wires it up (`filterCtx().Schema`).
+func dottedSpecs() (builder.CollectionSpec, func(string) (builder.CollectionSpec, bool)) {
+	projects := builder.NewCollection("projects").
+		Field("title", builder.NewText()).
+		Field("owner", builder.NewRelation("users").Required()).
+		Spec()
+	tasks := builder.NewCollection("tasks").
+		Field("title", builder.NewText()).
+		Field("project", builder.NewRelation("projects").Required()).
+		Spec()
+	resolver := func(name string) (builder.CollectionSpec, bool) {
+		switch name {
+		case "projects":
+			return projects, true
+		case "tasks":
+			return tasks, true
+		}
+		return builder.CollectionSpec{}, false
+	}
+	return tasks, resolver
+}
+
+// TestAnonDottedRelationCompare_ShortCircuitsToFalse — the exact
+// Sentinel-G4-dotted repro: `@request.auth.id = project.owner` on
+// tasks, anonymous principal, Schema resolver wired.
+func TestAnonDottedRelationCompare_ShortCircuitsToFalse(t *testing.T) {
+	tasksSpec, schema := dottedSpecs()
+	anon := filter.Context{Schema: schema} // AuthID == ""
+
+	for _, rule := range []string{
+		`@request.auth.id = project.owner`,
+		`project.owner = @request.auth.id`, // operand order doesn't matter
+		`@me = project.owner`,
+		`project.owner = @me`,
+		`@request.auth.id != project.owner`, // != also short-circuits
+	} {
+		sql, args := compileWithSpec(t, rule, tasksSpec, anon)
+		if !strings.Contains(sql, "(false)") {
+			t.Errorf("rule %q: expected (false), got %q (args=%v)", rule, sql, args)
+		}
+		if len(args) != 0 {
+			t.Errorf("rule %q: should bind zero params, got %d: %v", rule, len(args), args)
+		}
+		// The buggy subquery + empty-string binding must not be present.
+		if strings.Contains(sql, "$1") {
+			t.Errorf("rule %q: SQL still contains $N — short-circuit missed: %q", rule, sql)
+		}
+		if strings.Contains(sql, "SELECT") {
+			t.Errorf("rule %q: SQL still emits the scalar subquery — short-circuit fired too late: %q", rule, sql)
+		}
+	}
+}
+
+// TestAuthenticatedDottedCompare_EmitsSubquery — happy path: when
+// the principal IS authenticated, the dotted-path resolver still
+// emits the scalar subquery with $1 bound to AuthID. The short-circuit
+// must not fire here.
+func TestAuthenticatedDottedCompare_EmitsSubquery(t *testing.T) {
+	tasksSpec, schema := dottedSpecs()
+	authed := filter.Context{
+		Schema:         schema,
+		AuthID:         "550e8400-e29b-41d4-a716-446655440000",
+		AuthCollection: "users",
+	}
+	sql, args := compileWithSpec(t, `@request.auth.id = project.owner`, tasksSpec, authed)
+	if strings.Contains(sql, "(false)") {
+		t.Errorf("authenticated dotted compare incorrectly short-circuited: %q", sql)
+	}
+	if !strings.Contains(sql, "SELECT projects.owner") {
+		t.Errorf("expected scalar subquery against projects.owner, got %q", sql)
+	}
+	if !strings.Contains(sql, "$1") || len(args) != 1 {
+		t.Errorf("expected single $1 binding to AuthID, got sql=%q args=%v", sql, args)
+	}
+}
+
+// TestAnonDottedTextField_NoShortCircuit — only UUID-typed targets on
+// the related spec should trip the short-circuit. A dotted path that
+// resolves to a TypeText column (e.g. `project.title`) must keep its
+// regular behaviour because '' is a valid text value.
+func TestAnonDottedTextField_NoShortCircuit(t *testing.T) {
+	tasksSpec, schema := dottedSpecs()
+	sql, args := compileWithSpec(t, `project.title = @request.auth.id`, tasksSpec, filter.Context{Schema: schema})
+	if strings.Contains(sql, "(false)") {
+		t.Errorf("dotted text-typed comparison incorrectly short-circuited: %q", sql)
+	}
+	if !strings.Contains(sql, "SELECT projects.title") {
+		t.Errorf("expected scalar subquery against projects.title, got %q", sql)
+	}
+	if len(args) != 1 || args[0] != "" {
+		t.Errorf("expected single empty-string arg for the magic var, got %v", args)
+	}
+}
+
+// TestAnonDottedID_ShortCircuitsToFalse — `project.id` is the system
+// UUID column on the related spec. Less idiomatic than `= project.owner`
+// but operators write it (e.g. `id = project.id` doesn't make sense,
+// but `@me = project.id` for a "you are the project" model does). The
+// short-circuit must catch UUID-typed system columns on the related
+// spec, not just user-declared Relation fields.
+func TestAnonDottedID_ShortCircuitsToFalse(t *testing.T) {
+	tasksSpec, schema := dottedSpecs()
+	sql, _ := compileWithSpec(t, `@request.auth.id = project.id`, tasksSpec, filter.Context{Schema: schema})
+	if !strings.Contains(sql, "(false)") {
+		t.Errorf("expected (false) for dotted-id compare, got %q", sql)
+	}
+}
