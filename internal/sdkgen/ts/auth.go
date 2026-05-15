@@ -173,6 +173,44 @@ func writeAuthBuilder(b *strings.Builder, spec builder.CollectionSpec) {
     },
 `, cName, cName)
 
+	// v0.4.3 Sprint 3 — TOTP enrollment management. All four endpoints
+	// are AUTHED — caller must already be signed in (the account-page
+	// security tab is the canonical UX). Backend lives in mfa_flow.go;
+	// the 2FA status read is on the global accountClient (collection-
+	// agnostic) so it isn't duplicated per auth-collection here.
+	fmt.Fprintf(b, `    /** POST /api/collections/%s/totp-enroll-start
+     *  Generates a fresh TOTP secret + provisioning URI for the
+     *  caller's QR-code scanner and a one-time set of recovery codes.
+     *  The enrollment stays PENDING until totpEnrollConfirm() lands
+     *  with a working code. Calling enroll-start twice ROLLS the
+     *  pending secret — render the QR every time the user opens the
+     *  setup screen. */
+    totpEnrollStart(): Promise<{ secret: string; provisioning_uri: string; recovery_codes: string[] }> {
+      return http.request("POST", "/api/collections/%s/totp-enroll-start");
+    },
+    /** POST /api/collections/%s/totp-enroll-confirm
+     *  Verifies the user's first authenticator code and flips the
+     *  enrollment from pending → active. Idempotent — once confirmed,
+     *  replays are 204. */
+    totpEnrollConfirm(input: { code: string }): Promise<void> {
+      return http.request("POST", "/api/collections/%s/totp-enroll-confirm", { body: input });
+    },
+    /** POST /api/collections/%s/totp-disable
+     *  Disables 2FA. Requires a current TOTP code OR a recovery code
+     *  (proves second-factor possession — defends against a stolen
+     *  session disabling 2FA outright). */
+    totpDisable(input: { code: string }): Promise<void> {
+      return http.request("POST", "/api/collections/%s/totp-disable", { body: input });
+    },
+    /** POST /api/collections/%s/totp-recovery-codes
+     *  Regenerates the recovery-codes list, invalidating all previous
+     *  codes. Render the returned codes ONCE — the server only keeps
+     *  hashes after this returns. */
+    totpRegenerateRecoveryCodes(): Promise<{ codes: string[] }> {
+      return http.request("POST", "/api/collections/%s/totp-recovery-codes");
+    },
+`, cName, cName, cName, cName, cName, cName, cName, cName)
+
 	b.WriteString("  };\n")
 	b.WriteString("}\n")
 }

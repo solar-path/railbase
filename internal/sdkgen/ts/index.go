@@ -35,6 +35,7 @@ import { stripeClient } from "./stripe.js";
 import { notificationsClient } from "./notifications.js";
 import { realtimeClient } from "./realtime.js";
 import { i18nClient } from "./i18n.js";
+import { accountClient } from "./account.js";
 `)
 
 	// Imports: one per collection wrapper + types.
@@ -230,6 +231,10 @@ export function createRailbaseClient(opts: ClientOptions) {
     realtime: realtimeClient(http),
     /** i18n — translation bundles + client-side Translator. Schema-independent. */
     i18n: i18nClient(http),
+    /** Account — self-service endpoints (sessions, password, profile, 2FA).
+     *  Requires authentication; surface mirrors the air/rail account
+     *  screens. Schema-independent. */
+    account: accountClient(http),
 
 `)
 

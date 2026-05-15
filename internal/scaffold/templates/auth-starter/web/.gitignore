@@ -1,0 +1,8 @@
+node_modules
+dist
+.vite
+*.local
+
+# Generated SDK — re-emit via `railbase generate sdk` rather than tracking.
+src/_generated/*
+!src/_generated/README.txt

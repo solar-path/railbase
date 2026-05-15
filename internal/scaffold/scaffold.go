@@ -27,7 +27,7 @@ import (
 	"text/template"
 )
 
-//go:embed templates/basic/*
+//go:embed all:templates
 var templatesFS embed.FS
 
 // Template selects which scaffold to expand. v0.2 ships only "basic";
@@ -36,7 +36,27 @@ type Template string
 
 const (
 	TemplateBasic Template = "basic"
+	// TemplateAuthStarter overlays the basic scaffold with a Preact +
+	// Vite + Tailwind frontend pre-populated with the air/rail-style
+	// account UI (sign-in, profile, password, sessions, 2FA, appearance).
+	// Uses the generated TS SDK as its HTTP client — no hand-written
+	// API wrapper, no drift from the backend contract.
+	TemplateAuthStarter Template = "auth-starter"
 )
+
+// templateChain returns the ordered list of template directories that
+// should be walked for a given flavour. Later entries OVERLAY earlier
+// ones (last write wins for any duplicate path), which gives us cheap
+// inheritance: TemplateAuthStarter walks basic first, then its own
+// overrides on top — no duplicating every basic file in the new tree.
+func templateChain(t Template) []string {
+	switch t {
+	case TemplateAuthStarter:
+		return []string{"templates/basic", "templates/auth-starter"}
+	default:
+		return []string{"templates/" + string(t)}
+	}
+}
 
 // Options is the user-facing surface of the init command.
 type Options struct {
@@ -114,68 +134,76 @@ func Init(opts Options) ([]string, error) {
 	}
 
 	var written []string
+	// Track files emitted earlier in the chain so overlay templates
+	// (auth-starter on top of basic) can be reported once with the
+	// LATER content — `written` is for the user-facing log, dedup'd.
+	seen := map[string]bool{}
 
-	tmplRoot := "templates/" + string(opts.Template)
-	err = fs.WalkDir(templatesFS, tmplRoot, func(srcPath string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
+	for _, tmplRoot := range templateChain(opts.Template) {
+		err = fs.WalkDir(templatesFS, tmplRoot, func(srcPath string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if d.IsDir() {
+				return nil
+			}
+
+			// Strip the templates/<flavour>/ prefix and the .tmpl suffix
+			// to produce the destination path inside the project dir.
+			rel := strings.TrimPrefix(srcPath, tmplRoot+"/")
+			rel = strings.TrimSuffix(rel, ".tmpl")
+
+			// Special case: cmd/main.go must land in cmd/<projectname>/
+			// because Go expects one main.go per command directory and
+			// the directory name becomes the binary name.
+			if rel == "cmd/main.go" {
+				rel = filepath.Join("cmd", filepath.Base(opts.ProjectDir), "main.go")
+			}
+
+			dstPath := filepath.Join(opts.ProjectDir, rel)
+
+			if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+				return err
+			}
+
+			body, err := fs.ReadFile(templatesFS, srcPath)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", srcPath, err)
+			}
+
+			// .tmpl files go through text/template; everything else is
+			// copied verbatim. Lets us ship binary fixtures or static
+			// SQL without escaping pain.
+			if strings.HasSuffix(srcPath, ".tmpl") {
+				t, err := template.New(srcPath).Parse(string(body))
+				if err != nil {
+					return fmt.Errorf("parse %s: %w", srcPath, err)
+				}
+				f, err := os.Create(dstPath)
+				if err != nil {
+					return err
+				}
+				if err := t.Execute(f, data); err != nil {
+					_ = f.Close()
+					return fmt.Errorf("execute %s: %w", srcPath, err)
+				}
+				if err := f.Close(); err != nil {
+					return err
+				}
+			} else {
+				if err := os.WriteFile(dstPath, body, 0o644); err != nil {
+					return err
+				}
+			}
+			if !seen[rel] {
+				written = append(written, rel)
+				seen[rel] = true
+			}
 			return nil
-		}
-
-		// Strip the templates/<flavour>/ prefix and the .tmpl suffix
-		// to produce the destination path inside the project dir.
-		rel := strings.TrimPrefix(srcPath, tmplRoot+"/")
-		rel = strings.TrimSuffix(rel, ".tmpl")
-
-		// Special case: cmd/main.go must land in cmd/<projectname>/
-		// because Go expects one main.go per command directory and
-		// the directory name becomes the binary name.
-		if rel == "cmd/main.go" {
-			rel = filepath.Join("cmd", filepath.Base(opts.ProjectDir), "main.go")
-		}
-
-		dstPath := filepath.Join(opts.ProjectDir, rel)
-
-		if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
-			return err
-		}
-
-		body, err := fs.ReadFile(templatesFS, srcPath)
+		})
 		if err != nil {
-			return fmt.Errorf("read %s: %w", srcPath, err)
+			return nil, err
 		}
-
-		// .tmpl files go through text/template; everything else is
-		// copied verbatim. Lets us ship binary fixtures or static
-		// SQL without escaping pain.
-		if strings.HasSuffix(srcPath, ".tmpl") {
-			t, err := template.New(srcPath).Parse(string(body))
-			if err != nil {
-				return fmt.Errorf("parse %s: %w", srcPath, err)
-			}
-			f, err := os.Create(dstPath)
-			if err != nil {
-				return err
-			}
-			if err := t.Execute(f, data); err != nil {
-				_ = f.Close()
-				return fmt.Errorf("execute %s: %w", srcPath, err)
-			}
-			if err := f.Close(); err != nil {
-				return err
-			}
-		} else {
-			if err := os.WriteFile(dstPath, body, 0o644); err != nil {
-				return err
-			}
-		}
-		written = append(written, rel)
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 
 	// Secret file is generated, not templated. Permission 0600 —

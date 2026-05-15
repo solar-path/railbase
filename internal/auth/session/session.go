@@ -55,6 +55,13 @@ var ErrNotFound = errors.New("session: not found or expired")
 // reduced view so middleware can decide which fields to surface in
 // downstream context.Value (auth.id, auth.collection are the
 // minimum; ip/user_agent help debugging).
+//
+// v0.4.3 — DeviceName + IsTrusted added for the account-page
+// "rename device" / "mark trusted" controls. Pre-migration sessions
+// have DeviceName == "" + IsTrusted == false (column defaults).
+// Trust enforcement at signin (skip 2FA on trusted devices, extend
+// TTL, etc.) is deferred to v0.5; today these are persisted user
+// intent only.
 type Session struct {
 	ID             uuid.UUID
 	CollectionName string
@@ -64,6 +71,8 @@ type Session struct {
 	ExpiresAt      time.Time
 	IP             string
 	UserAgent      string
+	DeviceName     string
+	IsTrusted      bool
 }
 
 // Store is the session persistence handle. Holds the master secret
@@ -275,6 +284,153 @@ func (s *Store) RevokeAllFor(ctx context.Context, collectionName string, userID 
 	tag, err := s.pool.Exec(ctx, q, collectionName, userID, clock.Now())
 	if err != nil {
 		return 0, fmt.Errorf("session: revoke-all-for: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// ListFor returns every LIVE session (not revoked, not expired) for
+// the (collection, user) tuple, sorted by last_active_at DESC so the
+// "most recently used" device sits at the top of the list. Used by
+// the user-facing `GET /api/auth/sessions` endpoint (v0.4.3 — closes
+// Sentinel FEEDBACK G4 follow-up: parity with air/rail's "active
+// sessions" account screen).
+//
+// The token hash is intentionally NOT included in the result — surfacing
+// it would let a UI bug or hostile XSS exfiltrate the lookup key and
+// forge requests against any listed session. The session.ID is the
+// stable opaque handle the caller passes back to RevokeByID.
+func (s *Store) ListFor(ctx context.Context, collectionName string, userID uuid.UUID) ([]*Session, error) {
+	const q = `
+        SELECT id, collection_name, user_id, created_at, last_active_at, expires_at,
+               COALESCE(ip, '') AS ip, COALESCE(user_agent, '') AS user_agent,
+               COALESCE(device_name, '') AS device_name, is_trusted
+          FROM _sessions
+         WHERE collection_name = $1 AND user_id = $2
+           AND revoked_at IS NULL
+           AND expires_at > $3
+         ORDER BY last_active_at DESC`
+	rows, err := s.pool.Query(ctx, q, collectionName, userID, clock.Now())
+	if err != nil {
+		return nil, fmt.Errorf("session: list-for: %w", err)
+	}
+	defer rows.Close()
+	var out []*Session
+	for rows.Next() {
+		s := &Session{}
+		if err := rows.Scan(&s.ID, &s.CollectionName, &s.UserID, &s.CreatedAt,
+			&s.LastActiveAt, &s.ExpiresAt, &s.IP, &s.UserAgent,
+			&s.DeviceName, &s.IsTrusted); err != nil {
+			return nil, fmt.Errorf("session: list-for scan: %w", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("session: list-for rows: %w", err)
+	}
+	return out, nil
+}
+
+// UpdateMetadata writes the user-supplied per-device fields on a
+// session row. Both fields are POINTERS — nil means "leave unchanged",
+// non-nil means "write this value". Lets the same handler back the
+// "rename" + "trust toggle" UI controls (and future ones) without a
+// combinatorial endpoint explosion.
+//
+// Scoped to (collection, user, id) so a caller can't rename someone
+// else's session by guessing UUIDs — same posture as RevokeByID.
+// Returns ErrNotFound when no live row matches.
+func (s *Store) UpdateMetadata(ctx context.Context, collectionName string, userID, sessionID uuid.UUID, deviceName *string, isTrusted *bool) error {
+	if deviceName == nil && isTrusted == nil {
+		// No-op call — degenerate but harmless. Return nil rather than
+		// querying so the partial-update API is forgiving.
+		return nil
+	}
+	// Build the dynamic SET clause. Parameter order: optional name,
+	// optional trust, then the three identity keys.
+	set := make([]string, 0, 2)
+	args := make([]any, 0, 5)
+	if deviceName != nil {
+		args = append(args, *deviceName)
+		set = append(set, fmt.Sprintf("device_name = $%d", len(args)))
+	}
+	if isTrusted != nil {
+		args = append(args, *isTrusted)
+		set = append(set, fmt.Sprintf("is_trusted = $%d", len(args)))
+	}
+	args = append(args, collectionName, userID, sessionID)
+	q := fmt.Sprintf(`
+        UPDATE _sessions
+           SET %s
+         WHERE collection_name = $%d AND user_id = $%d AND id = $%d
+           AND revoked_at IS NULL`,
+		joinSet(set), len(args)-2, len(args)-1, len(args))
+	tag, err := s.pool.Exec(ctx, q, args...)
+	if err != nil {
+		return fmt.Errorf("session: update-metadata: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// joinSet renders ["a = $1", "b = $2"] as `a = $1, b = $2`.
+// Standalone helper because strings.Join with ", " is the obvious
+// move; pinning it as a named function keeps the UpdateMetadata SQL
+// builder readable.
+func joinSet(parts []string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += ", "
+		}
+		out += p
+	}
+	return out
+}
+
+// RevokeByID soft-revokes a session by primary key, scoped to the
+// (collection, user) tuple so a malicious caller can't kill someone
+// else's session by guessing UUIDs. Returns ErrNotFound when no live
+// row matches — either id is unknown, or it's already revoked, or it
+// belongs to another user (all three collapse into one error for the
+// same reason Lookup does: don't leak which case).
+//
+// Backs `DELETE /api/auth/sessions/{id}`.
+func (s *Store) RevokeByID(ctx context.Context, collectionName string, userID, sessionID uuid.UUID) error {
+	const q = `
+        UPDATE _sessions
+           SET revoked_at = $4
+         WHERE id = $3 AND collection_name = $1 AND user_id = $2
+           AND revoked_at IS NULL`
+	tag, err := s.pool.Exec(ctx, q, collectionName, userID, sessionID, clock.Now())
+	if err != nil {
+		return fmt.Errorf("session: revoke-by-id: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RevokeOthers revokes every live session for (collection, user)
+// EXCEPT the one whose ID is `keepSessionID`. Returns the count of
+// rows revoked. Used by the "sign out everywhere else" account-page
+// action and after a password change.
+//
+// keepSessionID = uuid.Nil revokes every session (identical to
+// RevokeAllFor). The explicit overload makes the call site readable
+// at the cost of one zero-uuid branch.
+func (s *Store) RevokeOthers(ctx context.Context, collectionName string, userID, keepSessionID uuid.UUID) (int64, error) {
+	const q = `
+        UPDATE _sessions
+           SET revoked_at = $4
+         WHERE collection_name = $1 AND user_id = $2
+           AND revoked_at IS NULL
+           AND id <> $3`
+	tag, err := s.pool.Exec(ctx, q, collectionName, userID, keepSessionID, clock.Now())
+	if err != nil {
+		return 0, fmt.Errorf("session: revoke-others: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }

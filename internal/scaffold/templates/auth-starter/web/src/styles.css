@@ -1,0 +1,8 @@
+@import "tailwindcss";
+
+/* Minimal scoped resets — Tailwind 4 ships with preflight, this is
+   the project-specific overlay layer for global tokens. */
+:root {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}

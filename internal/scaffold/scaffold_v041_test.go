@@ -181,6 +181,127 @@ func TestInit_MainWiresWebembed(t *testing.T) {
 	}
 }
 
+// TestInit_AuthStarter_OverlaysBasic — proves the auth-starter
+// template walks basic FIRST (inherits go.mod, schema, webembed) and
+// THEN overlays its own files (web/, package.json, src/pages, ...).
+// Without the chain walk, the user would lose the basic files and
+// the project wouldn't compile.
+func TestInit_AuthStarter_OverlaysBasic(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "demo")
+	_, err := Init(Options{
+		ProjectDir:      dir,
+		Template:        TemplateAuthStarter,
+		RailbaseVersion: "v0.4.3",
+	})
+	if err != nil {
+		t.Fatalf("Init auth-starter: %v", err)
+	}
+	// Files from BASIC must be present.
+	for _, p := range []string{
+		"go.mod",
+		"railbase.yaml",
+		"webembed/embed.go",
+		"webembed/web-dist/README.txt",
+		"cmd/demo/main.go",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, p)); err != nil {
+			t.Errorf("auth-starter scaffold missing basic-template file %q: %v", p, err)
+		}
+	}
+	// Files from auth-starter overlay must be present.
+	for _, p := range []string{
+		"web/package.json",
+		"web/vite.config.ts",
+		"web/index.html",
+		"web/tsconfig.json",
+		"web/src/main.tsx",
+		"web/src/app.tsx",
+		"web/src/api.ts",
+		"web/src/auth.ts",
+		"web/src/lib/ui.tsx",
+		"web/src/pages/login.tsx",
+		"web/src/pages/account.tsx",
+		"web/src/pages/profile.tsx",
+		"web/src/pages/security.tsx",
+		"web/src/pages/appearance.tsx",
+		"web/src/_generated/README.txt",
+		"web/.gitignore",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, p)); err != nil {
+			t.Errorf("auth-starter overlay missing %q: %v", p, err)
+		}
+	}
+}
+
+// TestInit_AuthStarter_TemplatesRenderProjectName — the .tmpl files
+// in auth-starter use {{.ProjectName}}; the scaffold must run them
+// through text/template not just copy verbatim.
+func TestInit_AuthStarter_TemplatesRenderProjectName(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "myapp")
+	if _, err := Init(Options{
+		ProjectDir:      dir,
+		Template:        TemplateAuthStarter,
+		RailbaseVersion: "v0.4.3",
+	}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	pkg, err := os.ReadFile(filepath.Join(dir, "web/package.json"))
+	if err != nil {
+		t.Fatalf("read package.json: %v", err)
+	}
+	body := string(pkg)
+	if !strings.Contains(body, `"name": "myapp-web"`) {
+		t.Errorf("package.json template didn't expand ProjectName:\n%s", body)
+	}
+	idx, err := os.ReadFile(filepath.Join(dir, "web/index.html"))
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	if !strings.Contains(string(idx), "<title>myapp</title>") {
+		t.Errorf("index.html didn't expand ProjectName: %s", idx)
+	}
+}
+
+// TestInit_AuthStarter_PagesReferenceGeneratedSDK — guarantees the
+// pages talk to the SDK via the generated module path, not by
+// duplicating an API client. Catches a regression where someone
+// pastes a hard-coded fetch() back into the pages.
+func TestInit_AuthStarter_PagesReferenceGeneratedSDK(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "demo")
+	if _, err := Init(Options{
+		ProjectDir:      dir,
+		Template:        TemplateAuthStarter,
+		RailbaseVersion: "v0.4.3",
+	}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	api, err := os.ReadFile(filepath.Join(dir, "web/src/api.ts"))
+	if err != nil {
+		t.Fatalf("read api.ts: %v", err)
+	}
+	body := string(api)
+	if !strings.Contains(body, `from "./_generated/index.js"`) {
+		t.Errorf("api.ts should import from generated SDK, got:\n%s", body)
+	}
+	if !strings.Contains(body, "createRailbaseClient") {
+		t.Errorf("api.ts missing createRailbaseClient call:\n%s", body)
+	}
+	// security.tsx uses rb.account.* — proves the page lands on the
+	// v0.4.3 account namespace.
+	sec, _ := os.ReadFile(filepath.Join(dir, "web/src/pages/security.tsx"))
+	for _, want := range []string{
+		"rb.account.changePassword",
+		"rb.account.listSessions",
+		"rb.account.revokeSession",
+		"rb.account.revokeOtherSessions",
+		"rb.account.twoFAStatus",
+	} {
+		if !strings.Contains(string(sec), want) {
+			t.Errorf("security.tsx missing %q\n%s", want, sec)
+		}
+	}
+}
+
 // TestInit_YamlTemplateDefaultsToCorrectPort proves the railbase.yaml
 // the scaffold writes matches the binary's actual default port (:8095).
 // A regression here would mean the operator runs `./mydemo serve`,

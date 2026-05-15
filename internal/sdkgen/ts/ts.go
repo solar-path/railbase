@@ -79,6 +79,10 @@ func Generate(specs []builder.CollectionSpec, opts Options) ([]string, error) {
 		{"types.ts", []byte(EmitTypes(sorted))},
 		{"zod.ts", []byte(EmitZod(sorted))},
 		{"auth.ts", []byte(EmitAuth(sorted))},
+		// v0.4.3 — account.ts: self-service endpoints (sessions list/
+		// revoke, future profile/password/2FA). Schema-independent —
+		// these are global /api/auth/* routes, not per-collection.
+		{"account.ts", []byte(EmitAccount())},
 		// stripe.ts / notifications.ts / realtime.ts are schema-
 		// independent — their endpoints are fixed, not derived from
 		// CollectionSpec — so the Emit* fns take no specs. Always

@@ -256,6 +256,32 @@ func Mount(r chi.Router, d *Deps) {
 		r.Delete("/webauthn-credentials/{id}", d.webauthnDeleteHandler)
 	})
 	r.Get("/api/auth/me", d.meHandler)
+
+	// v0.4.3 — account session management. User-facing parity with
+	// the air/rail "active sessions" account screen. Auth middleware
+	// upstream gates these (PrincipalFrom returns zero → handlers 401).
+	r.Get("/api/auth/sessions", d.listSessionsHandler)
+	r.Delete("/api/auth/sessions/others", d.revokeOtherSessionsHandler)
+	r.Delete("/api/auth/sessions/{id}", d.revokeSessionHandler)
+	// v0.4.3 Sprint 5 — device labelling. Single PATCH endpoint that
+	// accepts {device_name?, is_trusted?} so renames + trust-toggles
+	// share one round-trip.
+	r.Patch("/api/auth/sessions/{id}", d.updateSessionMetadataHandler)
+
+	// v0.4.3 Sprint 2 — profile + password self-service. PATCH is the
+	// only verb the JS SDK speaks here; PUT would imply replace-the-row
+	// semantics which is wrong (operators expect "set just the fields
+	// I sent"). Change-password is a POST because it has side effects
+	// beyond the row (revokes other sessions).
+	r.Patch("/api/auth/me", d.patchMeHandler)
+	r.Post("/api/auth/change-password", d.changePasswordHandler)
+
+	// v0.4.3 Sprint 3 — 2FA read-side. The four mutation endpoints
+	// (totp-enroll-start/confirm/disable/recovery-codes) already exist
+	// under /api/collections/{name}/. This GET is the missing read
+	// peer: UIs need to know "am I enrolled?" before they decide whether
+	// to render the "Set up 2FA" CTA or the "Disable 2FA" action.
+	r.Get("/api/auth/2fa/status", d.twoFAStatusHandler)
 }
 
 // authResponse is the success envelope for signup / signin / refresh.
