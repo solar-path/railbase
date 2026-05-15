@@ -29,6 +29,7 @@ import {
   type QEditableField,
 } from "@/lib/ui/QEditableForm.ui";
 import { CronInput, CronCell } from "../fields/cron";
+import { useT, type Translator } from "../i18n";
 
 // Backups admin screen — read-only listing of .tar.gz archives in
 // <DataDir>/backups/ plus a "create new backup" button, AND a
@@ -49,42 +50,45 @@ import { CronInput, CronCell } from "../fields/cron";
 // drawer defaults to `kind=scheduled_backup` so the primary
 // "schedule a backup" flow is one click + one form.
 
-const archiveColumns: ColumnDef<BackupRecord>[] = [
-  {
-    id: "name",
-    header: "name",
-    accessor: "name",
-    sortable: true,
-    cell: (b) => <span class="font-mono">{b.name}</span>,
-  },
-  {
-    id: "size",
-    header: "size",
-    accessor: "size_bytes",
-    sortable: true,
-    cell: (b) => (
-      <span class="font-mono text-xs whitespace-nowrap">
-        {humanSize(b.size_bytes)}
-      </span>
-    ),
-  },
-  {
-    id: "created",
-    header: "created",
-    accessor: "created",
-    sortable: true,
-    cell: (b) => (
-      <span
-        class="font-mono text-xs text-muted-foreground whitespace-nowrap"
-        title={b.created}
-      >
-        {relativeTime(b.created)}
-      </span>
-    ),
-  },
-];
+function buildArchiveColumns(t: Translator["t"]): ColumnDef<BackupRecord>[] {
+  return [
+    {
+      id: "name",
+      header: t("backups.col.name"),
+      accessor: "name",
+      sortable: true,
+      cell: (b) => <span class="font-mono">{b.name}</span>,
+    },
+    {
+      id: "size",
+      header: t("backups.col.size"),
+      accessor: "size_bytes",
+      sortable: true,
+      cell: (b) => (
+        <span class="font-mono text-xs whitespace-nowrap">
+          {humanSize(b.size_bytes)}
+        </span>
+      ),
+    },
+    {
+      id: "created",
+      header: t("backups.col.created"),
+      accessor: "created",
+      sortable: true,
+      cell: (b) => (
+        <span
+          class="font-mono text-xs text-muted-foreground whitespace-nowrap"
+          title={b.created}
+        >
+          {relativeTime(t, b.created)}
+        </span>
+      ),
+    },
+  ];
+}
 
 export function BackupsScreen() {
+  const { t } = useT();
   const qc = useQueryClient();
 
   // Success banner state — populated by a successful Create, cleared
@@ -157,12 +161,13 @@ export function BackupsScreen() {
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Backups"
+        title={t("backups.title")}
         description={
           <>
-            {items.length} archive{items.length === 1 ? "" : "s"}
-            {items.length > 0 ? <> — {humanSize(totalSize)} total</> : null}.
-            Stored under <code className="font-mono">&lt;dataDir&gt;/backups/</code>.
+            {t("backups.archiveCount", { count: items.length })}
+            {items.length > 0 ? <> — {t("backups.totalSize", { size: humanSize(totalSize) })}</> : null}.{" "}
+            {t("backups.storedUnder")}{" "}
+            <code className="font-mono">&lt;dataDir&gt;/backups/</code>.
           </>
         }
         actions={
@@ -174,10 +179,10 @@ export function BackupsScreen() {
             {createM.isPending ? (
               <>
                 <Spinner />
-                Creating…
+                {t("backups.creating")}
               </>
             ) : (
-              <>+ Create backup</>
+              <>{t("backups.create")}</>
             )}
           </Button>
         }
@@ -187,10 +192,12 @@ export function BackupsScreen() {
         <div className="rounded border border-amber-400/40 bg-amber-50 dark:bg-amber-950/40 px-3 py-2 text-sm text-amber-900 dark:text-amber-200 flex items-center gap-3">
           <Spinner />
           <div>
-            <strong>Database restore in progress.</strong> User traffic to{" "}
-            <code className="font-mono">/api/*</code> is being served 503 with{" "}
-            <code className="font-mono">Retry-After: 30</code>. The admin UI
-            stays reachable.
+            <strong>{t("backups.restoreInProgress")}</strong>{" "}
+            {t("backups.restoreInProgressLead")}{" "}
+            <code className="font-mono">/api/*</code>{" "}
+            {t("backups.restoreInProgressMid")}{" "}
+            <code className="font-mono">Retry-After: 30</code>.{" "}
+            {t("backups.restoreInProgressTail")}
           </div>
         </div>
       ) : null}
@@ -198,17 +205,16 @@ export function BackupsScreen() {
       {flash ? (
         <div className="rounded border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-primary flex items-start justify-between gap-3">
           <div>
-            Backup created: <span className="font-mono">{flash.name}</span>{" "}
-            ({flash.manifest.tables_count} table
-            {flash.manifest.tables_count === 1 ? "" : "s"},{" "}
-            {flash.manifest.rows_count.toLocaleString()} row
-            {flash.manifest.rows_count === 1 ? "" : "s"})
+            {t("backups.createdBanner")}{" "}
+            <span className="font-mono">{flash.name}</span>{" "}
+            ({t("backups.tableCount", { count: flash.manifest.tables_count })},{" "}
+            {t("backups.rowCount", { count: flash.manifest.rows_count.toLocaleString() })})
           </div>
           <Button
             variant="ghost"
             size="sm"
             onClick={() => setFlash(null)}
-            aria-label="Dismiss"
+            aria-label={t("backups.dismiss")}
             className="text-primary/70 hover:text-primary hover:bg-transparent h-auto p-0"
           >
             ×
@@ -219,20 +225,19 @@ export function BackupsScreen() {
       {restoreFlash ? (
         <div className="rounded border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-primary flex items-start justify-between gap-3">
           <div>
-            Restored <span className="font-mono">{restoreFlash.archive}</span>{" "}
-            ({restoreFlash.tables} table
-            {restoreFlash.tables === 1 ? "" : "s"},{" "}
-            {restoreFlash.rows.toLocaleString()} row
-            {restoreFlash.rows === 1 ? "" : "s"})
+            {t("backups.restoredBanner")}{" "}
+            <span className="font-mono">{restoreFlash.archive}</span>{" "}
+            ({t("backups.tableCount", { count: restoreFlash.tables })},{" "}
+            {t("backups.rowCount", { count: restoreFlash.rows.toLocaleString() })})
             {restoreFlash.forced ? (
-              <span className="ml-2 text-xs">— forced past head mismatch</span>
+              <span className="ml-2 text-xs">{t("backups.forcedNote")}</span>
             ) : null}
           </div>
           <Button
             variant="ghost"
             size="sm"
             onClick={() => setRestoreFlash(null)}
-            aria-label="Dismiss"
+            aria-label={t("backups.dismiss")}
             className="text-primary/70 hover:text-primary hover:bg-transparent h-auto p-0"
           >
             ×
@@ -242,20 +247,20 @@ export function BackupsScreen() {
 
       {createM.isError ? (
         <div className="rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          Backup failed:{" "}
+          {t("backups.createFailed")}{" "}
           <span className="font-mono">
-            {(createM.error as { message?: string } | null)?.message ?? "unknown error"}
+            {(createM.error as { message?: string } | null)?.message ?? t("backups.unknownError")}
           </span>
         </div>
       ) : null}
 
       <AdminPage.Body className="space-y-6">
         <QDatatable
-          columns={archiveColumns}
+          columns={buildArchiveColumns(t)}
           data={items}
           loading={q.isLoading}
           rowKey="path"
-          emptyMessage="No backups yet — click Create backup to make your first one."
+          emptyMessage={t("backups.empty")}
           rowActions={(row) => {
             const actions: Array<{
               label: string;
@@ -265,7 +270,7 @@ export function BackupsScreen() {
             }> = [];
             if (restoreVisible) {
               actions.push({
-                label: "Restore…",
+                label: t("backups.restoreAction"),
                 destructive: true,
                 disabled: () => maintenanceActive,
                 onSelect: () => setRestoreTarget(row),
@@ -278,12 +283,11 @@ export function BackupsScreen() {
         <p className="text-xs text-muted-foreground">
           {restoreVisible ? (
             <>
-              Restoring TRUNCATES every table in the archive before
-              re-inserting rows. The action is gated by{" "}
-              <code className="font-mono">RAILBASE_ENABLE_UI_RESTORE</code> +
-              the <code className="font-mono">admin.backup.restore</code> RBAC
-              key, fences user traffic for the transaction window, and
-              records an audit event. CLI alternative:{" "}
+              {t("backups.help.restoreLead")}{" "}
+              <code className="font-mono">RAILBASE_ENABLE_UI_RESTORE</code>{" "}
+              {t("backups.help.plus")}{" "}
+              <code className="font-mono">admin.backup.restore</code>{" "}
+              {t("backups.help.restoreMid")}{" "}
               <code className="font-mono">
                 railbase backup restore &lt;path&gt; --force
               </code>
@@ -291,31 +295,28 @@ export function BackupsScreen() {
             </>
           ) : caps && !caps.ui_restore_enabled ? (
             <>
-              UI restore is disabled. Set{" "}
+              {t("backups.help.disabledLead")}{" "}
               <code className="font-mono">RAILBASE_ENABLE_UI_RESTORE=true</code>{" "}
-              on the server to enable, or use{" "}
+              {t("backups.help.disabledMid")}{" "}
               <code className="font-mono">
                 railbase backup restore &lt;path&gt; --force
               </code>{" "}
-              from the CLI.
+              {t("backups.help.disabledTail")}
             </>
           ) : caps && !caps.can_restore ? (
             <>
-              This admin lacks the{" "}
-              <code className="font-mono">admin.backup.restore</code> RBAC
-              action. Operators with{" "}
-              <code className="font-mono">site:system_admin</code> can restore
-              from the UI; downgraded admins must use the CLI.
+              {t("backups.help.noRbacLead")}{" "}
+              <code className="font-mono">admin.backup.restore</code>{" "}
+              {t("backups.help.noRbacMid")}{" "}
+              <code className="font-mono">site:system_admin</code>{" "}
+              {t("backups.help.noRbacTail")}
             </>
           ) : (
-            <>
-              Restore is loaded on demand — the Restore action will appear
-              once capabilities resolve.
-            </>
+            <>{t("backups.help.onDemand")}</>
           )}
         </p>
 
-        <SchedulesSection />
+        <SchedulesSection t={t} />
       </AdminPage.Body>
 
       <RestoreDrawer
@@ -333,6 +334,7 @@ export function BackupsScreen() {
           void qc.invalidateQueries({ queryKey: ["backups"] });
           void qc.invalidateQueries({ queryKey: ["backups-capabilities"] });
         }}
+        t={t}
       />
     </AdminPage>
   );
@@ -351,6 +353,7 @@ function RestoreDrawer({
   caps,
   onClose,
   onRestored,
+  t,
 }: {
   target: BackupRecord | null;
   caps: BackupsCapabilities | undefined;
@@ -362,6 +365,7 @@ function RestoreDrawer({
     schema_head: string;
     forced: boolean;
   }) => void;
+  t: Translator["t"];
 }) {
   const open = target !== null;
 
@@ -375,12 +379,13 @@ function RestoreDrawer({
     >
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-xl">
         <DrawerHeader>
-          <DrawerTitle>Restore from backup</DrawerTitle>
+          <DrawerTitle>{t("backups.restoreDrawer.title")}</DrawerTitle>
           <DrawerDescription>
-            This will <strong>TRUNCATE CASCADE</strong> every table in the
-            archive before re-inserting rows. User traffic to{" "}
-            <code className="font-mono">/api/*</code> is fenced for the
-            transaction window. The action is recorded in the audit log.
+            {t("backups.restoreDrawer.descLead")}{" "}
+            <strong>TRUNCATE CASCADE</strong>{" "}
+            {t("backups.restoreDrawer.descMid")}{" "}
+            <code className="font-mono">/api/*</code>{" "}
+            {t("backups.restoreDrawer.descTail")}
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
@@ -391,6 +396,7 @@ function RestoreDrawer({
               caps={caps}
               onClose={onClose}
               onRestored={onRestored}
+              t={t}
             />
           ) : null}
         </div>
@@ -404,6 +410,7 @@ function RestoreDrawerBody({
   caps,
   onClose,
   onRestored,
+  t,
 }: {
   target: BackupRecord;
   caps: BackupsCapabilities | undefined;
@@ -415,6 +422,7 @@ function RestoreDrawerBody({
     schema_head: string;
     forced: boolean;
   }) => void;
+  t: Translator["t"];
 }) {
   const archive = target.name;
   const [confirmText, setConfirmText] = useState("");
@@ -467,27 +475,27 @@ function RestoreDrawerBody({
       <section className="rounded border bg-muted/40 p-3 text-sm space-y-2">
         <header className="flex items-center justify-between">
           <strong className="text-xs uppercase tracking-wide text-muted-foreground">
-            Dry-run preview
+            {t("backups.dryRun.title")}
           </strong>
           {dryRunQ.isFetching ? (
             <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <Spinner /> inspecting…
+              <Spinner /> {t("backups.dryRun.inspecting")}
             </span>
           ) : null}
         </header>
         {dryRunQ.isLoading ? (
           <p className="text-xs text-muted-foreground">
-            Reading archive manifest…
+            {t("backups.dryRun.reading")}
           </p>
         ) : dryError ? (
           <p className="text-xs text-destructive">
-            Dry-run failed: {errMessage(dryError)}
+            {t("backups.dryRun.failed")}: {errMessage(dryError)}
           </p>
         ) : dry ? (
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs font-mono">
-            <dt className="text-muted-foreground">archive</dt>
+            <dt className="text-muted-foreground">{t("backups.dryRun.archive")}</dt>
             <dd>{dry.archive}</dd>
-            <dt className="text-muted-foreground">created</dt>
+            <dt className="text-muted-foreground">{t("backups.dryRun.created")}</dt>
             <dd>{dry.created_at}</dd>
             <dt className="text-muted-foreground">railbase</dt>
             <dd>{dry.railbase_version}</dd>
@@ -495,40 +503,40 @@ function RestoreDrawerBody({
             <dd className="truncate" title={dry.postgres_version}>
               {dry.postgres_version}
             </dd>
-            <dt className="text-muted-foreground">format</dt>
+            <dt className="text-muted-foreground">{t("backups.dryRun.format")}</dt>
             <dd className="flex items-center gap-2">
               v{dry.format_version}{" "}
               {dry.format_version_ok ? (
                 <Badge variant="secondary" className="text-[10px]">
-                  OK
+                  {t("backups.dryRun.ok")}
                 </Badge>
               ) : (
                 <Badge variant="outline" className="text-[10px] text-destructive border-destructive/40">
-                  unsupported
+                  {t("backups.dryRun.unsupported")}
                 </Badge>
               )}
             </dd>
-            <dt className="text-muted-foreground">schema head</dt>
+            <dt className="text-muted-foreground">{t("backups.dryRun.schemaHead")}</dt>
             <dd className="flex items-center gap-2 truncate">
               <span className="truncate" title={dry.archive_schema_head}>
                 {short(dry.archive_schema_head)}
               </span>
               {dry.schema_head_matches ? (
                 <Badge variant="secondary" className="text-[10px]">
-                  matches current
+                  {t("backups.dryRun.matchesCurrent")}
                 </Badge>
               ) : (
                 <Badge variant="outline" className="text-[10px] text-destructive border-destructive/40">
-                  diverges from {short(dry.current_schema_head)}
+                  {t("backups.dryRun.divergesFrom", { head: short(dry.current_schema_head) })}
                 </Badge>
               )}
             </dd>
-            <dt className="text-muted-foreground">tables / rows</dt>
+            <dt className="text-muted-foreground">{t("backups.dryRun.tablesRows")}</dt>
             <dd>
-              {dry.tables_count} table
-              {dry.tables_count === 1 ? "" : "s"} —{" "}
-              {dry.rows_count.toLocaleString()} row
-              {dry.rows_count === 1 ? "" : "s"} will be TRUNCATEd + re-inserted
+              {t("backups.dryRun.summary", {
+                tables: dry.tables_count,
+                rows: dry.rows_count.toLocaleString(),
+              })}
             </dd>
           </dl>
         ) : null}
@@ -536,33 +544,31 @@ function RestoreDrawerBody({
 
       {formatBlocked ? (
         <div className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          This archive's format version is newer than the running binary
-          supports. Upgrade Railbase or recreate the archive on a matching
-          version before restoring.
+          {t("backups.formatBlocked")}
         </div>
       ) : null}
 
       {needsForce && !formatBlocked ? (
         <div className="rounded border border-amber-400/40 bg-amber-50 dark:bg-amber-950/40 px-3 py-2 text-xs text-amber-900 dark:text-amber-200 space-y-2">
           <p>
-            <strong>Schema head mismatch.</strong> The archive was created
-            against a different migration head. Restoring may leave columns
-            unpopulated or fail outright if the shape diverged. Tick{" "}
-            <em>I understand</em> to proceed anyway.
+            <strong>{t("backups.headMismatch.title")}</strong>{" "}
+            {t("backups.headMismatch.body")}{" "}
+            <em>{t("backups.headMismatch.iUnderstand")}</em>{" "}
+            {t("backups.headMismatch.toProceed")}
           </p>
           <label className="flex items-center gap-2 text-amber-900 dark:text-amber-200">
             <Checkbox
               checked={force}
               onCheckedChange={(c) => setForce(Boolean(c))}
             />
-            <span>I understand head heads diverge — force restore</span>
+            <span>{t("backups.headMismatch.forceLabel")}</span>
           </label>
         </div>
       ) : null}
 
       <div className="space-y-1.5">
         <label className="font-mono text-xs font-medium text-muted-foreground">
-          To confirm, type the archive name exactly:{" "}
+          {t("backups.typeToConfirm")}{" "}
           <span className="text-foreground">{archive}</span>
         </label>
         <Input
@@ -576,21 +582,21 @@ function RestoreDrawerBody({
         />
         {confirmText.length > 0 && !confirmMatches ? (
           <p className="text-xs text-amber-700 dark:text-amber-300">
-            Doesn't match yet — type the filename character-for-character.
+            {t("backups.typeMismatch")}
           </p>
         ) : null}
       </div>
 
       {submitError ? (
         <div className="rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          Restore failed: <span className="font-mono">{submitError}</span>
+          {t("backups.restoreFailed")}: <span className="font-mono">{submitError}</span>
         </div>
       ) : null}
 
       <DrawerFooter className="px-0 pb-0">
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose} disabled={submitM.isPending}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             variant="destructive"
@@ -603,10 +609,10 @@ function RestoreDrawerBody({
             {submitM.isPending ? (
               <>
                 <Spinner />
-                Restoring…
+                {t("backups.restoring")}
               </>
             ) : (
-              <>Restore now</>
+              <>{t("backups.restoreNow")}</>
             )}
           </Button>
         </div>
@@ -631,7 +637,7 @@ function short(s: string): string {
 
 type ScheduleTarget = CronSchedule | "new" | null;
 
-function SchedulesSection() {
+function SchedulesSection({ t }: { t: Translator["t"] }) {
   const qc = useQueryClient();
   const [target, setTarget] = useState<ScheduleTarget>(null);
 
@@ -648,7 +654,11 @@ function SchedulesSection() {
     mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
       enabled ? adminAPI.cronEnable(name) : adminAPI.cronDisable(name),
     onSuccess: (_data, vars) => {
-      toast.success(`Schedule ${vars.enabled ? "enabled" : "disabled"}.`);
+      toast.success(
+        vars.enabled
+          ? t("backups.toast.scheduleEnabled")
+          : t("backups.toast.scheduleDisabled"),
+      );
       invalidate();
     },
     onError: (err) => toast.error(errMessage(err)),
@@ -657,7 +667,7 @@ function SchedulesSection() {
   const runNowM = useMutation({
     mutationFn: (name: string) => adminAPI.cronRunNow(name),
     onSuccess: (data) => {
-      toast.success(`Job queued: ${data.job_id.slice(0, 8)}…`);
+      toast.success(t("backups.toast.jobQueued", { id: data.job_id.slice(0, 8) }));
     },
     onError: (err) => toast.error(errMessage(err)),
   });
@@ -665,7 +675,7 @@ function SchedulesSection() {
   const deleteM = useMutation({
     mutationFn: (name: string) => adminAPI.cronDelete(name),
     onSuccess: () => {
-      toast.success("Schedule deleted.");
+      toast.success(t("backups.toast.scheduleDeleted"));
       invalidate();
     },
     onError: (err) => toast.error(errMessage(err)),
@@ -674,19 +684,19 @@ function SchedulesSection() {
   const columns: ColumnDef<CronSchedule>[] = [
     {
       id: "name",
-      header: "name",
+      header: t("backups.sched.name"),
       accessor: "name",
       cell: (s) => (
         <span className="flex items-center gap-2 font-mono">
           {s.name}
           {s.is_builtin ? (
             <Badge variant="secondary" className="text-[10px]">
-              builtin
+              {t("backups.sched.builtin")}
             </Badge>
           ) : null}
           {!s.kind_known ? (
             <Badge variant="outline" className="text-[10px] text-destructive border-destructive/40">
-              unknown kind
+              {t("backups.sched.unknownKind")}
             </Badge>
           ) : null}
         </span>
@@ -694,39 +704,39 @@ function SchedulesSection() {
     },
     {
       id: "expression",
-      header: "expression",
+      header: t("backups.sched.expression"),
       cell: (s) => <CronCell value={s.expression} />,
     },
     {
       id: "kind",
-      header: "kind",
+      header: t("backups.sched.kind"),
       cell: (s) => <span className="font-mono text-xs">{s.kind}</span>,
     },
     {
       id: "enabled",
-      header: "enabled",
+      header: t("backups.sched.enabled"),
       cell: (s) =>
         s.enabled ? (
-          <Badge variant="secondary">on</Badge>
+          <Badge variant="secondary">{t("backups.sched.on")}</Badge>
         ) : (
-          <Badge variant="outline">paused</Badge>
+          <Badge variant="outline">{t("backups.sched.paused")}</Badge>
         ),
     },
     {
       id: "next_run_at",
-      header: "next run",
+      header: t("backups.sched.nextRun"),
       cell: (s) => (
         <span className="font-mono text-xs text-muted-foreground" title={s.next_run_at ?? ""}>
-          {s.next_run_at ? relativeTime(s.next_run_at) : "—"}
+          {s.next_run_at ? relativeTime(t, s.next_run_at) : "—"}
         </span>
       ),
     },
     {
       id: "last_run_at",
-      header: "last run",
+      header: t("backups.sched.lastRun"),
       cell: (s) => (
         <span className="font-mono text-xs text-muted-foreground" title={s.last_run_at ?? ""}>
-          {s.last_run_at ? relativeTime(s.last_run_at) : "—"}
+          {s.last_run_at ? relativeTime(t, s.last_run_at) : "—"}
         </span>
       ),
     },
@@ -736,15 +746,15 @@ function SchedulesSection() {
     <section className="space-y-3">
       <header className="flex items-center justify-between gap-4 border-t pt-4">
         <div>
-          <h2 className="text-lg font-semibold">Scheduled jobs</h2>
+          <h2 className="text-lg font-semibold">{t("backups.sched.title")}</h2>
           <p className="text-xs text-muted-foreground">
-            Persisted cron schedules. The default destination for{" "}
-            <code className="font-mono">scheduled_backup</code> mirrors the
-            manual archives above — both share the same retention sweep.
+            {t("backups.sched.descLead")}{" "}
+            <code className="font-mono">scheduled_backup</code>{" "}
+            {t("backups.sched.descTail")}
           </p>
         </div>
         <Button size="sm" onClick={() => setTarget("new")}>
-          + New schedule
+          {t("backups.sched.new")}
         </Button>
       </header>
 
@@ -753,27 +763,27 @@ function SchedulesSection() {
         data={listQ.data?.items ?? []}
         loading={listQ.isLoading}
         rowKey={(s) => s.name}
-        emptyMessage="No scheduled jobs yet — click + New schedule to add one."
+        emptyMessage={t("backups.sched.empty")}
         rowActions={(row) => [
           {
-            label: "Run now",
+            label: t("backups.sched.runNow"),
             disabled: () => !row.enabled || runNowM.isPending,
             onSelect: () => runNowM.mutate(row.name),
           },
           {
-            label: row.enabled ? "Disable" : "Enable",
+            label: row.enabled ? t("backups.sched.disable") : t("backups.sched.enableAction"),
             onSelect: () =>
               enableM.mutate({ name: row.name, enabled: !row.enabled }),
           },
-          { label: "Edit", onSelect: () => setTarget(row) },
+          { label: t("backups.sched.edit"), onSelect: () => setTarget(row) },
           {
-            label: "Delete",
+            label: t("backups.sched.delete"),
             destructive: true,
             hidden: () => row.is_builtin,
             onSelect: () => {
               if (
                 window.confirm(
-                  `Delete schedule "${row.name}"? This cannot be undone.`,
+                  t("backups.sched.deleteConfirm", { name: row.name }),
                 )
               ) {
                 deleteM.mutate(row.name);
@@ -790,6 +800,7 @@ function SchedulesSection() {
           invalidate();
           setTarget(null);
         }}
+        t={t}
       />
     </section>
   );
@@ -801,10 +812,12 @@ function ScheduleEditorDrawer({
   target,
   onClose,
   onSaved,
+  t,
 }: {
   target: ScheduleTarget;
   onClose: () => void;
   onSaved: () => void;
+  t: Translator["t"];
 }) {
   const open = target !== null;
   const isEdit = target !== null && target !== "new";
@@ -821,14 +834,16 @@ function ScheduleEditorDrawer({
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-xl">
         <DrawerHeader>
           <DrawerTitle>
-            {isEdit ? `Edit schedule: ${seed!.name}` : "New schedule"}
+            {isEdit
+              ? t("backups.sched.editTitle", { name: seed!.name })
+              : t("backups.sched.newTitle")}
           </DrawerTitle>
           <DrawerDescription>
             {isEdit
               ? seed!.is_builtin
-                ? "Builtin schedule — name + kind are locked. You can retune the expression or pause it."
-                : "Update the cron expression, kind, payload, or pause state."
-              : "Persisted cron job. Defaults to a backup schedule — pick a different kind for cleanup or other handlers."}
+                ? t("backups.sched.descBuiltin")
+                : t("backups.sched.descEdit")
+              : t("backups.sched.descNew")}
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
@@ -838,6 +853,7 @@ function ScheduleEditorDrawer({
               seed={seed}
               onClose={onClose}
               onSaved={onSaved}
+              t={t}
             />
           ) : null}
         </div>
@@ -855,10 +871,12 @@ function ScheduleEditorBody({
   seed,
   onClose,
   onSaved,
+  t,
 }: {
   seed: CronSchedule | null;
   onClose: () => void;
   onSaved: () => void;
+  t: Translator["t"];
 }) {
   const isEdit = seed !== null;
   const isBuiltin = seed?.is_builtin === true;
@@ -911,24 +929,23 @@ function ScheduleEditorBody({
     return [
       {
         key: "name",
-        label: "Name",
+        label: t("backups.sched.field.name"),
         required: !isEdit,
         readOnly: isEdit,
         helpText: !isEdit
-          ? "Letters, digits, underscore, hyphen. Used as the schedule identifier — cannot be changed later."
+          ? t("backups.sched.field.nameHelp")
           : undefined,
       },
       {
         key: "kind",
-        label: "Kind",
+        label: t("backups.sched.field.kind"),
         required: true,
         readOnly: isBuiltin,
         helpText: isBuiltin ? (
-          "Builtin schedule — kind is locked."
+          t("backups.sched.field.kindBuiltin")
         ) : kind !== "scheduled_backup" ? (
           <>
-            This kind takes an empty payload. For richer per-kind
-            configuration use the CLI:{" "}
+            {t("backups.sched.field.kindCliHint")}{" "}
             <code className="font-mono">
               railbase cron upsert {String(d.name || "<name>")} &quot;
               {String(d.expression ?? "")}&quot; {kind} --payload
@@ -937,21 +954,19 @@ function ScheduleEditorBody({
           </>
         ) : undefined,
       },
-      { key: "expression", label: "Cron expression", required: true },
-      { key: "enabled", label: "Enabled" },
+      { key: "expression", label: t("backups.sched.field.expression"), required: true },
+      { key: "enabled", label: t("backups.sched.field.enabled") },
       ...(kind === "scheduled_backup"
         ? [
             {
               key: "retention_days",
-              label: "Retention (days)",
-              helpText:
-                "Older archives are pruned after a successful backup. 0 disables pruning.",
+              label: t("backups.sched.field.retentionDays"),
+              helpText: t("backups.sched.field.retentionDaysHelp"),
             } as QEditableField,
             {
               key: "out_dir",
-              label: "Output directory (optional)",
-              helpText:
-                "Defaults to <dataDir>/backups so manual + scheduled archives share the same retention sweep.",
+              label: t("backups.sched.field.outDir"),
+              helpText: t("backups.sched.field.outDirHelp"),
             } as QEditableField,
           ]
         : []),
@@ -1001,7 +1016,7 @@ function ScheduleEditorBody({
               onCheckedChange={(checked) => onChange(Boolean(checked))}
             />
             <span class="text-sm">
-              {value ? "Active" : "Paused (no jobs are queued)"}
+              {value ? t("backups.sched.statusActive") : t("backups.sched.statusPaused")}
             </span>
           </div>
         );
@@ -1022,7 +1037,7 @@ function ScheduleEditorBody({
         return (
           <Input
             type="text"
-            placeholder="leave blank for default"
+            placeholder={t("backups.sched.field.outDirPlaceholder")}
             className="font-mono"
             value={(value as string) ?? ""}
             onInput={(e) => onChange(e.currentTarget.value)}
@@ -1040,25 +1055,25 @@ function ScheduleEditorBody({
     const name = String(d.name ?? "").trim();
     if (!isEdit) {
       if (!name) {
-        fe.name = "Name required";
+        fe.name = t("backups.sched.err.nameRequired");
       } else if (!/^[A-Za-z0-9_-]{1,80}$/.test(name)) {
-        fe.name = "Name: letters, digits, underscore, hyphen (≤ 80 chars)";
+        fe.name = t("backups.sched.err.nameInvalid");
       }
     }
     const kind = String(d.kind ?? "").trim();
     if (!kind) {
-      fe.kind = "Kind required";
+      fe.kind = t("backups.sched.err.kindRequired");
     }
     const expr = String(d.expression ?? "").trim();
     if (!expr) {
-      fe.expression = "Cron expression required";
+      fe.expression = t("backups.sched.err.expressionRequired");
     } else if (!/^[\d*/,-]+(\s+[\d*/,-]+){4}$/.test(expr)) {
-      fe.expression = "Must be 5 fields (digits, *, /, comma, hyphen)";
+      fe.expression = t("backups.sched.err.expressionInvalid");
     }
     if (kind === "scheduled_backup") {
       const r = Number(d.retention_days);
       if (!Number.isInteger(r) || r < 0) {
-        fe.retention_days = "Must be a non-negative integer";
+        fe.retention_days = t("backups.sched.err.retentionInvalid");
       }
     }
     return fe;
@@ -1111,7 +1126,7 @@ function ScheduleEditorBody({
       values={draftSeed}
       renderInput={renderInput}
       onCreate={handleSave}
-      submitLabel={isEdit ? "Save" : "Create schedule"}
+      submitLabel={isEdit ? t("common.save") : t("backups.sched.createSchedule")}
       onCancel={onClose}
       fieldErrors={fieldErrors}
       formError={formError}
@@ -1143,33 +1158,33 @@ function humanSize(n: number): string {
 // label. Cheap inline impl: we don't pull date-fns just for one
 // helper. Falls back to the raw timestamp if parsing fails, so a
 // malformed value never blanks the cell.
-function relativeTime(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  const diffMs = Date.now() - t;
+function relativeTime(t: Translator["t"], iso: string): string {
+  const parsed = Date.parse(iso);
+  if (Number.isNaN(parsed)) return iso;
+  const diffMs = Date.now() - parsed;
   const sec = Math.round(diffMs / 1000);
-  if (sec > -5 && sec < 5) return "just now";
+  if (sec > -5 && sec < 5) return t("backups.rel.justNow");
   if (sec < 0) {
     const abs = -sec;
-    if (abs < 60) return `in ${abs}s`;
+    if (abs < 60) return t("backups.rel.inSeconds", { count: abs });
     const min = Math.round(abs / 60);
-    if (min < 60) return `in ${min} minute${min === 1 ? "" : "s"}`;
+    if (min < 60) return t("backups.rel.inMinutes", { count: min });
     const hr = Math.round(min / 60);
-    if (hr < 24) return `in ${hr} hour${hr === 1 ? "" : "s"}`;
+    if (hr < 24) return t("backups.rel.inHours", { count: hr });
     const day = Math.round(hr / 24);
-    return `in ${day} day${day === 1 ? "" : "s"}`;
+    return t("backups.rel.inDays", { count: day });
   }
-  if (sec < 60) return `${sec}s ago`;
+  if (sec < 60) return t("backups.rel.secondsAgo", { count: sec });
   const min = Math.round(sec / 60);
-  if (min < 60) return `${min} minute${min === 1 ? "" : "s"} ago`;
+  if (min < 60) return t("backups.rel.minutesAgo", { count: min });
   const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr} hour${hr === 1 ? "" : "s"} ago`;
+  if (hr < 24) return t("backups.rel.hoursAgo", { count: hr });
   const day = Math.round(hr / 24);
-  if (day < 30) return `${day} day${day === 1 ? "" : "s"} ago`;
+  if (day < 30) return t("backups.rel.daysAgo", { count: day });
   const mo = Math.round(day / 30);
-  if (mo < 12) return `${mo} month${mo === 1 ? "" : "s"} ago`;
+  if (mo < 12) return t("backups.rel.monthsAgo", { count: mo });
   const yr = Math.round(mo / 12);
-  return `${yr} year${yr === 1 ? "" : "s"} ago`;
+  return t("backups.rel.yearsAgo", { count: yr });
 }
 
 // Spinner is a tiny inline SVG; the Tailwind `animate-spin` utility

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { adminAPI } from "../api/admin";
 import type { JobRecord } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
@@ -19,69 +20,72 @@ import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 
 type StatusFilter = "" | "pending" | "running" | "completed" | "failed" | "cancelled";
 
-const columns: ColumnDef<JobRecord>[] = [
-  {
-    id: "created",
-    header: "created",
-    accessor: "created_at",
-    cell: (j) => (
-      <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">
-        {j.created_at}
-      </span>
-    ),
-  },
-  {
-    id: "kind",
-    header: "kind",
-    accessor: "kind",
-    cell: (j) => <span className="font-mono">{j.kind}</span>,
-  },
-  {
-    id: "queue",
-    header: "queue",
-    accessor: "queue",
-    cell: (j) => (
-      <span className="font-mono text-xs text-muted-foreground">{j.queue}</span>
-    ),
-  },
-  {
-    id: "status",
-    header: "status",
-    accessor: "status",
-    cell: (j) => <Badge variant={statusVariant(j.status)}>{j.status}</Badge>,
-  },
-  {
-    id: "attempts",
-    header: "attempts",
-    cell: (j) => (
-      <span className="font-mono text-xs whitespace-nowrap">
-        {j.attempts}/{j.max_attempts}
-      </span>
-    ),
-  },
-  {
-    id: "last_error",
-    header: "last error",
-    accessor: "last_error",
-    cell: (j) => (
-      <span className="block max-w-md truncate text-xs text-destructive">
-        {j.last_error ? firstLine(j.last_error) : ""}
-      </span>
-    ),
-  },
-  {
-    id: "id",
-    header: "id",
-    accessor: "id",
-    cell: (j) => (
-      <span className="font-mono text-xs" title={j.id}>
-        {j.id.slice(0, 8)}…
-      </span>
-    ),
-  },
-];
+function buildJobsColumns(t: Translator["t"]): ColumnDef<JobRecord>[] {
+  return [
+    {
+      id: "created",
+      header: t("jobs.col.created"),
+      accessor: "created_at",
+      cell: (j) => (
+        <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">
+          {j.created_at}
+        </span>
+      ),
+    },
+    {
+      id: "kind",
+      header: t("jobs.col.kind"),
+      accessor: "kind",
+      cell: (j) => <span className="font-mono">{j.kind}</span>,
+    },
+    {
+      id: "queue",
+      header: t("jobs.col.queue"),
+      accessor: "queue",
+      cell: (j) => (
+        <span className="font-mono text-xs text-muted-foreground">{j.queue}</span>
+      ),
+    },
+    {
+      id: "status",
+      header: t("jobs.col.status"),
+      accessor: "status",
+      cell: (j) => <Badge variant={statusVariant(j.status)}>{translateStatus(t, j.status)}</Badge>,
+    },
+    {
+      id: "attempts",
+      header: t("jobs.col.attempts"),
+      cell: (j) => (
+        <span className="font-mono text-xs whitespace-nowrap">
+          {j.attempts}/{j.max_attempts}
+        </span>
+      ),
+    },
+    {
+      id: "last_error",
+      header: t("jobs.col.lastError"),
+      accessor: "last_error",
+      cell: (j) => (
+        <span className="block max-w-md truncate text-xs text-destructive">
+          {j.last_error ? firstLine(j.last_error) : ""}
+        </span>
+      ),
+    },
+    {
+      id: "id",
+      header: t("jobs.col.id"),
+      accessor: "id",
+      cell: (j) => (
+        <span className="font-mono text-xs" title={j.id}>
+          {j.id.slice(0, 8)}…
+        </span>
+      ),
+    },
+  ];
+}
 
 export function JobsScreen() {
+  const { t } = useT();
   const [total, setTotal] = useState(0);
 
   const [status, setStatus] = useState<StatusFilter>("");
@@ -99,39 +103,33 @@ export function JobsScreen() {
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Jobs queue"
-        description={
-          <>
-            {total} job{total === 1 ? "" : "s"} total. Showing newest first.
-            Use the <code className="font-mono">railbase jobs</code> CLI for cancel /
-            run-now / reset / recover.
-          </>
-        }
+        title={t("jobs.title")}
+        description={t("jobs.description", { count: total, cmd: "railbase jobs" })}
       />
 
       <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">status</span>
+          <span className="text-muted-foreground">{t("jobs.filter.status")}</span>
           <select
             value={status}
             onChange={(e) => setStatus(e.currentTarget.value as StatusFilter)}
             className="rounded border border-input px-2 py-1 bg-transparent"
           >
-            <option value="">all</option>
-            <option value="pending">pending</option>
-            <option value="running">running</option>
-            <option value="completed">completed</option>
-            <option value="failed">failed</option>
-            <option value="cancelled">cancelled</option>
+            <option value="">{t("jobs.filter.all")}</option>
+            <option value="pending">{t("jobs.status.pending")}</option>
+            <option value="running">{t("jobs.status.running")}</option>
+            <option value="completed">{t("jobs.status.completed")}</option>
+            <option value="failed">{t("jobs.status.failed")}</option>
+            <option value="cancelled">{t("jobs.status.cancelled")}</option>
           </select>
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">kind</span>
+          <span className="text-muted-foreground">{t("jobs.filter.kind")}</span>
           <Input
             type="text"
             value={kindInput}
             onInput={(e) => setKindInput(e.currentTarget.value)}
-            placeholder="substring"
+            placeholder={t("jobs.filter.kindPlaceholder")}
             className="w-56 h-8 font-mono text-xs"
           />
         </label>
@@ -145,17 +143,17 @@ export function JobsScreen() {
               setKind("");
             }}
           >
-            clear
+            {t("jobs.filter.clear")}
           </Button>
         ) : null}
       </AdminPage.Toolbar>
 
       <AdminPage.Body>
         <QDatatable
-          columns={columns}
+          columns={buildJobsColumns(t)}
           rowKey="id"
           pageSize={50}
-          emptyMessage="No jobs."
+          emptyMessage={t("jobs.empty")}
           deps={[status, kind]}
           fetch={async (params) => {
             const r = await adminAPI.jobs({
@@ -171,6 +169,19 @@ export function JobsScreen() {
       </AdminPage.Body>
     </AdminPage>
   );
+}
+
+// translateStatus localises a job status string for badge display. The
+// raw enum is the source of truth on the wire; this is presentation only.
+function translateStatus(t: Translator["t"], s: string): string {
+  switch (s) {
+    case "pending":   return t("jobs.status.pending");
+    case "running":   return t("jobs.status.running");
+    case "completed": return t("jobs.status.completed");
+    case "failed":    return t("jobs.status.failed");
+    case "cancelled": return t("jobs.status.cancelled");
+    default:          return s;
+  }
 }
 
 // Status badge mapping. The kit's badge palette is small, so we

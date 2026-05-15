@@ -1,4 +1,5 @@
 import { AdminPage } from "../layout/admin_page";
+import { useT } from "../i18n";
 import { AppLogPanel } from "./log_app";
 import { EmailEventsPanel } from "./email-events";
 import { NotificationsPanel } from "./notifications";
@@ -25,15 +26,16 @@ import { NotificationsPanel } from "./notifications";
 // /logs/realtime (live broadcast state) so all process-level
 // diagnostics live under one /health prefix in the IA.
 export function ProcessLogsScreen() {
+  const { t } = useT();
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Process logs"
+        title={t("processLogs.title")}
         description={
           <>
-            Structured slog events persisted in <code className="font-mono">_logs</code>.
-            14-day retention; toggle via <code className="font-mono">logs.persist</code>
-            {" "}setting or <code className="font-mono">RAILBASE_LOGS_PERSIST</code> env.
+            {t("processLogs.descPart1")} <code className="font-mono">_logs</code>.
+            {" "}{t("processLogs.descPart2")} <code className="font-mono">logs.persist</code>
+            {" "}{t("processLogs.descPart3")} <code className="font-mono">RAILBASE_LOGS_PERSIST</code> {t("processLogs.descPart4")}
           </>
         }
       />
@@ -50,17 +52,16 @@ export function ProcessLogsScreen() {
 // Timeline `mailer.send` row links here scoped to the recipient so
 // the operator goes from "who sent it" to "did it land".
 export function MailerDeliveriesScreen() {
+  const { t } = useT();
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Mailer deliveries"
+        title={t("mailerDeliveries.title")}
         description={
           <>
-            Per-recipient delivery state machine — one row per{" "}
-            <code className="font-mono">mailer.Send</code> + every provider
-            webhook update (delivered / bounced / complained). Distinct from
-            the Timeline <code className="font-mono">mailer.send</code> audit
-            event, which records the trigger; this surface records the outcome.
+            {t("mailerDeliveries.descPart1")}{" "}
+            <code className="font-mono">mailer.Send</code> {t("mailerDeliveries.descPart2")}{" "}
+            <code className="font-mono">mailer.send</code> {t("mailerDeliveries.descPart3")}
           </>
         }
       />
@@ -73,17 +74,12 @@ export function MailerDeliveriesScreen() {
 // log of persisted in-app notification deliveries (`_notifications`
 // table). Sibling to Settings → Notifications (the prefs editor).
 export function NotificationsLogScreen() {
+  const { t } = useT();
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Notifications log"
-        description={
-          <>
-            Cross-user log of persisted in-app notifications. Distinct from
-            the Notifications preferences editor (Settings → Notifications)
-            which controls per-user delivery preferences.
-          </>
-        }
+        title={t("notificationsLog.title")}
+        description={t("notificationsLog.description")}
       />
       <NotificationsPanel />
     </AdminPage>

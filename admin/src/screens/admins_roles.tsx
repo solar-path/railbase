@@ -41,6 +41,7 @@ import type {
   RBACRoleActionsResponse,
 } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 
 import { Badge } from "@/lib/ui/badge.ui";
 import { Button } from "@/lib/ui/button.ui";
@@ -62,6 +63,7 @@ import {
 import { toast } from "@/lib/ui/sonner.ui";
 
 export function AdminsRolesScreen() {
+  const { t } = useT();
   const qc = useQueryClient();
   const adminsQ = useQuery({
     queryKey: ["admins-with-roles"],
@@ -104,13 +106,13 @@ export function AdminsRolesScreen() {
     () => [
       {
         id: "email",
-        header: "email",
+        header: t("admins.col.email"),
         accessor: "email",
         cell: (a) => <span className="font-medium">{a.email}</span>,
       },
       {
         id: "id",
-        header: "id",
+        header: t("admins.col.id"),
         accessor: "id",
         cell: (a) => (
           <span className="font-mono text-[11px] text-muted-foreground">
@@ -120,23 +122,24 @@ export function AdminsRolesScreen() {
       },
       {
         id: "roles",
-        header: "site roles",
+        header: t("admins.col.siteRoles"),
         accessor: (a) => a.roles.join(","),
         cell: (a) => (
           <RoleBadgeList
             names={a.roles}
             roles={siteRoles}
             onInspect={(r) => setInspectRole(r)}
+            t={t}
           />
         ),
       },
     ],
-    [siteRoles],
+    [siteRoles, t],
   );
 
   const rowActions: RowAction<AdminWithRoles>[] = [
     {
-      label: "Edit roles",
+      label: t("admins.action.editRoles"),
       onSelect: (a) => setEditTarget(a),
     },
   ];
@@ -147,25 +150,28 @@ export function AdminsRolesScreen() {
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Admins & roles"
-        description="Assign or downgrade an admin's site role-set. The backend refuses to leave the deployment with zero system_admins."
+        title={t("admins.title")}
+        description={t("admins.description")}
       />
       <AdminPage.Toolbar>
         <Input
-          placeholder="Filter by email…"
+          placeholder={t("admins.filterPlaceholder")}
           value={filter}
           onInput={(e: any) => setFilter(e.currentTarget.value)}
           className="max-w-xs"
         />
         <span className="text-xs text-muted-foreground">
-          {adminsQ.data?.admins.length ?? 0} admin(s) · {siteRoles.length} site role(s)
+          {t("admins.summary", {
+            admins: adminsQ.data?.admins.length ?? 0,
+            roles: siteRoles.length,
+          })}
         </span>
       </AdminPage.Toolbar>
       <AdminPage.Body>
         {error ? (
           <Card>
             <CardContent className="p-4 text-sm text-destructive">
-              Failed to load: {errMessage(error)}
+              {t("admins.loadFailed", { msg: errMessage(error) })}
             </CardContent>
           </Card>
         ) : (
@@ -177,8 +183,8 @@ export function AdminsRolesScreen() {
             rowKey={(a) => a.id}
             emptyMessage={
               filter
-                ? "No admins match the filter."
-                : "No admins yet — create one via `railbase admin create` or the bootstrap wizard."
+                ? t("admins.empty.filter")
+                : t("admins.empty.none")
             }
           />
         )}
@@ -193,12 +199,14 @@ export function AdminsRolesScreen() {
           setEditTarget(null);
           void qc.invalidateQueries({ queryKey: ["admins-with-roles"] });
         }}
+        t={t}
       />
 
       {/* Role inspector sheet — what does this role grant? */}
       <RoleInspectorSheet
         role={inspectRole}
         onClose={() => setInspectRole(null)}
+        t={t}
       />
     </AdminPage>
   );
@@ -211,15 +219,17 @@ function RoleBadgeList({
   names,
   roles,
   onInspect,
+  t,
 }: {
   names: string[];
   roles: RBACRole[];
   onInspect: (r: RBACRole) => void;
+  t: Translator["t"];
 }) {
   if (names.length === 0) {
     return (
       <span className="text-xs text-muted-foreground italic">
-        no site roles
+        {t("admins.noSiteRoles")}
       </span>
     );
   }
@@ -254,11 +264,13 @@ function RoleEditorSheet({
   allRoles,
   onClose,
   onSaved,
+  t,
 }: {
   target: AdminWithRoles | null;
   allRoles: RBACRole[];
   onClose: () => void;
   onSaved: () => void;
+  t: Translator["t"];
 }) {
   const [selected, setSelected] = useState<string[]>([]);
 
@@ -274,7 +286,7 @@ function RoleEditorSheet({
       return adminAPI.setAdminRoles(target.id, selected);
     },
     onSuccess: () => {
-      toast.success("Roles updated.");
+      toast.success(t("admins.editor.savedToast"));
       onSaved();
     },
     onError: (err) => {
@@ -304,18 +316,18 @@ function RoleEditorSheet({
     <Sheet open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <SheetContent className="sm:max-w-md">
         <SheetHeader>
-          <SheetTitle>Edit roles</SheetTitle>
+          <SheetTitle>{t("admins.editor.title")}</SheetTitle>
           <SheetDescription>
             {target ? (
               <>
-                Admin: <span className="font-mono">{target.email}</span>
+                {t("admins.editor.adminLabel")} <span className="font-mono">{target.email}</span>
               </>
             ) : null}
           </SheetDescription>
         </SheetHeader>
         <div className="mt-4 space-y-3">
           {allRoles.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No site roles available.</p>
+            <p className="text-sm text-muted-foreground">{t("admins.editor.noRoles")}</p>
           ) : (
             allRoles.map((r) => (
               <label
@@ -330,7 +342,7 @@ function RoleEditorSheet({
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-sm font-medium">{r.name}</span>
                     {r.is_system ? (
-                      <Badge variant="outline" className="text-[10px]">system</Badge>
+                      <Badge variant="outline" className="text-[10px]">{t("admins.editor.systemBadge")}</Badge>
                     ) : null}
                   </div>
                   {r.description ? (
@@ -342,17 +354,16 @@ function RoleEditorSheet({
           )}
           {selected.length === 0 ? (
             <p className="text-xs text-amber-700 dark:text-amber-300">
-              Warning: an admin with zero site roles can sign in but every
-              rbac-gated handler will deny them.
+              {t("admins.editor.warnZero")}
             </p>
           ) : null}
           <div className="flex justify-end gap-2 pt-2 border-t">
-            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button variant="ghost" onClick={onClose}>{t("common.cancel")}</Button>
             <Button
               disabled={!dirty || saveM.isPending}
               onClick={() => saveM.mutate()}
             >
-              {saveM.isPending ? "Saving…" : "Save"}
+              {saveM.isPending ? t("admins.editor.saving") : t("common.save")}
             </Button>
           </div>
         </div>
@@ -365,9 +376,11 @@ function RoleEditorSheet({
 function RoleInspectorSheet({
   role,
   onClose,
+  t,
 }: {
   role: RBACRole | null;
   onClose: () => void;
+  t: Translator["t"];
 }) {
   const actionsQ = useQuery<RBACRoleActionsResponse>({
     queryKey: ["rbac", "role", role?.id, "actions"],
@@ -390,23 +403,22 @@ function RoleInspectorSheet({
         <div className="mt-4 space-y-3 text-sm">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Badge variant="outline">{role?.scope}</Badge>
-            {role?.is_system ? <Badge variant="outline">system</Badge> : null}
+            {role?.is_system ? <Badge variant="outline">{t("admins.editor.systemBadge")}</Badge> : null}
           </div>
           {actionsQ.isLoading ? (
-            <p className="text-muted-foreground">Loading actions…</p>
+            <p className="text-muted-foreground">{t("admins.inspector.loadingActions")}</p>
           ) : actionsQ.error ? (
             <p className="text-destructive">{errMessage(actionsQ.error)}</p>
           ) : actionsQ.data?.bypass ? (
             <Card className="border-destructive/40 bg-destructive/5">
               <CardContent className="p-3 text-sm">
-                <strong>Full bypass.</strong> Grants every action. Holders
-                are not denied any rbac-gated handler.
+                <strong>{t("admins.inspector.bypassTitle")}</strong> {t("admins.inspector.bypassDesc")}
               </CardContent>
             </Card>
           ) : actionsQ.data && actionsQ.data.actions.length > 0 ? (
             <div className="space-y-1">
               <p className="text-xs text-muted-foreground">
-                {actionsQ.data.actions.length} action(s) granted:
+                {t("admins.inspector.actionsGranted", { count: actionsQ.data.actions.length })}
               </p>
               <ul className="divide-y border rounded-md">
                 {actionsQ.data.actions.map((a) => (
@@ -418,7 +430,7 @@ function RoleInspectorSheet({
             </div>
           ) : (
             <p className="text-muted-foreground">
-              No actions granted. Holders are denied every rbac-gated handler.
+              {t("admins.inspector.noActions")}
             </p>
           )}
         </div>

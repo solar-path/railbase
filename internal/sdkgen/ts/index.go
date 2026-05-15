@@ -36,6 +36,8 @@ import { notificationsClient } from "./notifications.js";
 import { realtimeClient } from "./realtime.js";
 import { i18nClient } from "./i18n.js";
 import { accountClient } from "./account.js";
+import { tenantsClient } from "./tenants.js";
+import { contactClient } from "./contact.js";
 `)
 
 	// Imports: one per collection wrapper + types.
@@ -235,6 +237,14 @@ export function createRailbaseClient(opts: ClientOptions) {
      *  Requires authentication; surface mirrors the air/rail account
      *  screens. Schema-independent. */
     account: accountClient(http),
+    /** Tenants — workspaces CRUD + per-tenant role lookup. Pair with
+     *  rb.setTenant(id) to scope subsequent collection reads/writes
+     *  to a selected workspace. Schema-independent. */
+    tenants: tenantsClient(http),
+    /** Contact — public POST /api/contact form helper. Callable
+     *  without auth — the scaffold's marketing pages use it
+     *  pre-signin. Schema-independent. */
+    contact: contactClient(http),
 
 `)
 

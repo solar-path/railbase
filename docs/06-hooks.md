@@ -28,74 +28,82 @@ schema.Collection("posts").
 
 ### Record hooks
 
+Hooks are methods on the `$app` global. Each `on*` method returns a
+builder; call `.bindFunc(handler)` to attach. The handler MUST call
+`e.next()` to proceed — throwing aborts the chain (400 from a Before
+hook; logged from an After hook, since the row is already committed).
+
 ```js
-onRecordCreate("posts", (e) => {
-  // Before — внутри транзакции
-  if (!e.record.title) throw new BadRequestError("title required")
-  e.record.set("slug", slugify(e.record.get("title")))
+$app.onRecordBeforeCreate("posts").bindFunc((e) => {
+  // Before — inside the transaction.
+  // `e.record` is a plain JS object — read/write fields directly.
+  const title = (e.record.title || "").trim()
+  if (!title) throw new Error("title required")
+  e.record.title = title
   e.next()
 })
 
-onRecordAfterCreate("posts", (e) => {
+$app.onRecordAfterCreate("posts").bindFunc((e) => {
   // After commit — side effects safe
-  $mailer.send({ template: "new_post.md", to: subscribers, data: e.record })
+  console.log("post created:", e.record.id)
+  e.next()
 })
-
-onRecordUpdate / onRecordAfterUpdate / onRecordDelete / onRecordAfterDelete
-onRecordValidate                  // pre-save validation
-onRecordAuthRequest                // auth flow hook
 ```
+
+Available events: `onRecordBeforeCreate`, `onRecordAfterCreate`,
+`onRecordBeforeUpdate`, `onRecordAfterUpdate`, `onRecordBeforeDelete`,
+`onRecordAfterDelete`. Each scope is per-collection (the first
+argument). Watchdog: each invocation is capped at 5s wall time.
 
 ### Custom HTTP routes
 
 ```js
-routerAdd("GET", "/hello/:name", (c) => {
-  const user = c.auth()
-  return c.json(200, { hi: c.pathParam("name"), me: user?.email })
+$app.routerAdd("GET", "/hello/:name", (c) => {
+  return c.json(200, { hi: c.pathParam("name") })
 })
-
-routerAdd("POST", "/webhooks/stripe", (c) => {
-  const sig = c.request().header.get("Stripe-Signature")
-  const body = c.body()
-  // verify and handle
-  return c.json(200, { ok: true })
-}, /* middlewares: */ [$apis.requireAuth(), $apis.bodyLimit(10 * 1024 * 1024)])
 ```
 
 ### Cron jobs
 
 ```js
-cronAdd("digest", "0 9 * * *", () => {
-  $app.dao().findRecordsByFilter("posts", "created > @yesterday")
-       .forEach(r => $app.realtime().publish(`digest.${r.id}`, r))
+$app.cronAdd("digest", "0 9 * * *", () => {
+  // runs at 09:00 daily, server time
+  console.log("daily digest")
 })
 ```
 
-### Authority hooks (с plugin)
+### Per-request hook
 
 ```js
-onAuthorityApproved("payments", "create", (e) => {...})
-onAuthorityRejected("payments", "create", (e) => {...})
-```
-
-### Document hooks
-
-```js
-onDocumentUploaded((e) => {
-  if (e.document.ownerType === "vendorInvoice") {
-    $jobs.enqueue("extract_invoice", { documentId: e.document.id })
-  }
+$app.onRequest((e) => {
+  // Fires synchronously before every request. Use for telemetry,
+  // request-shape rewrites, etc. Call e.next() to proceed.
+  e.next()
 })
-
-onDocumentArchived((e) => {...})
-onDocumentAccessed((e) => {...})
 ```
+
+### Authority + Document hooks
+
+> **Status: deferred.** `onAuthority*` / `onDocument*` are not in the
+> shipping JS surface. For now, register equivalent Go hooks via
+> `app.GoHooks().OnRecordAfterCreate(...)` — see `pkg/railbase/hooks/`
+> for the typed API.
 
 ---
 
 ## JSVM bindings — что доступно из JS
 
-Полный порт PB's `plugins/jsvm/` bindings.
+> **Status (shipping, as of v1.2.x):** Only the `$app.*` surface
+> documented above (record hooks, `routerAdd`, `cronAdd`, `onRequest`,
+> `realtime()`) is wired through the goja runtime. The remaining
+> bindings below (`$apis`, `$http`, `$os`, `$security`, `$template`,
+> `$tokens`, `$filesystem`, `$mailer`, `$dbx`, `$inflector`, `$export`,
+> `$documents`, `$authority`, `$jobs`) are roadmap entries — calling
+> them from JS today will throw "ReferenceError: $apis is not defined"
+> (or similar). For now, reach those services from Go via the
+> equivalent `app.Mailer()` / `app.Stripe()` / `app.Jobs()` / etc.
+> accessors and register the route with `$app.routerAdd` if you need
+> a JS entry point. Track the full surface in [16-roadmap.md](16-roadmap.md).
 
 ### `$app` — main application object
 

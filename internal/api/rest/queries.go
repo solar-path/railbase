@@ -502,34 +502,81 @@ func coerceForPG(spec builder.CollectionSpec, name string, v any) (any, error) {
 		return out, nil
 
 	case builder.TypeNumber:
+		// FEEDBACK #28 — coerce + bounds-check at the application
+		// layer so violations surface as 422 with the field name
+		// instead of waiting for the DB CHECK to fire with a less
+		// helpful "violates constraint posts_price_chk0" message.
+		// The CHECK is still emitted (defense in depth) but operators
+		// who watch logs see the friendly error first.
+		var (
+			intVal   int64
+			floatVal float64
+			isInt    = f.IsInt
+		)
 		switch n := v.(type) {
 		case json.Number:
-			if f.IsInt {
+			if isInt {
 				i, err := n.Int64()
 				if err != nil {
 					return nil, fmt.Errorf("field %q: expected integer, got %s", name, n.String())
 				}
-				return i, nil
+				intVal = i
+			} else {
+				fl, err := n.Float64()
+				if err != nil {
+					return nil, fmt.Errorf("field %q: invalid number %s", name, n.String())
+				}
+				floatVal = fl
 			}
-			fl, err := n.Float64()
-			if err != nil {
-				return nil, fmt.Errorf("field %q: invalid number %s", name, n.String())
-			}
-			return fl, nil
 		case float64:
-			if f.IsInt {
+			if isInt {
 				if n != float64(int64(n)) {
 					return nil, fmt.Errorf("field %q: expected integer, got %v", name, n)
 				}
-				return int64(n), nil
+				intVal = int64(n)
+			} else {
+				floatVal = n
 			}
-			return n, nil
 		case int:
-			return int64(n), nil
+			if isInt {
+				intVal = int64(n)
+			} else {
+				floatVal = float64(n)
+			}
 		case int64:
-			return n, nil
+			if isInt {
+				intVal = n
+			} else {
+				floatVal = float64(n)
+			}
+		default:
+			return nil, fmt.Errorf("field %q: expected number, got %T", name, v)
 		}
-		return nil, fmt.Errorf("field %q: expected number, got %T", name, v)
+		// Bounds: compare against the DSL's Min/Max. NumberField stores
+		// Min/Max as *float64 regardless of IsInt, so we widen for the
+		// comparison and round-trip back to int64 on the return path.
+		if f.Min != nil {
+			cur := floatVal
+			if isInt {
+				cur = float64(intVal)
+			}
+			if cur < *f.Min {
+				return nil, fmt.Errorf("field %q: value %v is below Min(%v)", name, cur, *f.Min)
+			}
+		}
+		if f.Max != nil {
+			cur := floatVal
+			if isInt {
+				cur = float64(intVal)
+			}
+			if cur > *f.Max {
+				return nil, fmt.Errorf("field %q: value %v is above Max(%v)", name, cur, *f.Max)
+			}
+		}
+		if isInt {
+			return intVal, nil
+		}
+		return floatVal, nil
 
 	case builder.TypeBool:
 		if b, ok := v.(bool); ok {

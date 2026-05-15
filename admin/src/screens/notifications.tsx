@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import type { NotificationRecord } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
@@ -28,65 +29,68 @@ import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 
 type ChannelFilter = "" | "inapp" | "email" | "push";
 
-const columns: ColumnDef<NotificationRecord>[] = [
-  {
-    id: "created",
-    header: "created",
-    accessor: "created_at",
-    cell: (n) => (
-      <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">
-        {n.created_at}
-      </span>
-    ),
-  },
-  {
-    id: "kind",
-    header: "kind",
-    accessor: "kind",
-    cell: (n) => <span className="font-mono">{n.kind}</span>,
-  },
-  {
-    id: "channel",
-    header: "channel",
-    accessor: "channel",
-    cell: (n) => (
-      <Badge variant="outline" className={channelBadgeClass(n.channel)}>
-        {n.channel}
-      </Badge>
-    ),
-  },
-  {
-    id: "title",
-    header: "title",
-    accessor: "title",
-    cell: (n) => <span className="block max-w-md truncate">{n.title}</span>,
-  },
-  {
-    id: "user",
-    header: "user",
-    accessor: "user_id",
-    cell: (n) => (
-      <span className="font-mono text-xs" title={n.user_id}>
-        {n.user_id.slice(0, 8)}…
-      </span>
-    ),
-  },
-  {
-    id: "read",
-    header: "read",
-    cell: (n) =>
-      n.read_at ? (
-        <span className="text-xs text-muted-foreground">read</span>
-      ) : (
-        <span className="inline-flex items-center gap-1 text-xs text-primary">
-          <span className="inline-block w-2 h-2 rounded-full bg-primary" />
-          unread
+function buildNotificationColumns(t: Translator["t"]): ColumnDef<NotificationRecord>[] {
+  return [
+    {
+      id: "created",
+      header: t("notifications.col.created"),
+      accessor: "created_at",
+      cell: (n) => (
+        <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">
+          {n.created_at}
         </span>
       ),
-  },
-];
+    },
+    {
+      id: "kind",
+      header: t("notifications.col.kind"),
+      accessor: "kind",
+      cell: (n) => <span className="font-mono">{n.kind}</span>,
+    },
+    {
+      id: "channel",
+      header: t("notifications.col.channel"),
+      accessor: "channel",
+      cell: (n) => (
+        <Badge variant="outline" className={channelBadgeClass(n.channel)}>
+          {n.channel}
+        </Badge>
+      ),
+    },
+    {
+      id: "title",
+      header: t("notifications.col.title"),
+      accessor: "title",
+      cell: (n) => <span className="block max-w-md truncate">{n.title}</span>,
+    },
+    {
+      id: "user",
+      header: t("notifications.col.user"),
+      accessor: "user_id",
+      cell: (n) => (
+        <span className="font-mono text-xs" title={n.user_id}>
+          {n.user_id.slice(0, 8)}…
+        </span>
+      ),
+    },
+    {
+      id: "read",
+      header: t("notifications.col.read"),
+      cell: (n) =>
+        n.read_at ? (
+          <span className="text-xs text-muted-foreground">{t("notifications.read")}</span>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-xs text-primary">
+            <span className="inline-block w-2 h-2 rounded-full bg-primary" />
+            {t("notifications.unread")}
+          </span>
+        ),
+    },
+  ];
+}
 
 export function NotificationsPanel() {
+  const { t } = useT();
   const [kindInput, setKindInput] = useState("");
   const [kind, setKind] = useState(""); // debounced
   const [channel, setChannel] = useState<ChannelFilter>("");
@@ -96,12 +100,12 @@ export function NotificationsPanel() {
 
   // Debounce text inputs. 300ms matches the logs / jobs viewers.
   useEffect(() => {
-    const t = setTimeout(() => setKind(kindInput), 300);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setKind(kindInput), 300);
+    return () => clearTimeout(timer);
   }, [kindInput]);
   useEffect(() => {
-    const t = setTimeout(() => setUserId(userIdInput), 300);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setUserId(userIdInput), 300);
+    return () => clearTimeout(timer);
   }, [userIdInput]);
 
   // Stats endpoint feeds the header banner. Loaded once; refetched
@@ -133,8 +137,12 @@ export function NotificationsPanel() {
   return (
     <>
       <p className="text-sm text-muted-foreground">
-        {stats ? `${stats.total} delivered (${stats.unread} unread). ` : ""}
-        Cross-user log of persisted notifications. Showing newest first.
+        {stats
+          ? t("notifications.summary", {
+              delivered: stats.total,
+              unread: stats.unread,
+            })
+          : t("notifications.summaryShort")}
       </p>
 
       {stats ? (
@@ -143,7 +151,7 @@ export function NotificationsPanel() {
             <Badge
               key={"kind-" + k}
               variant="secondary"
-              title={`${n} notifications with kind=${k}`}
+              title={t("notifications.kindCountTitle", { count: n, kind: k })}
             >
               <span className="font-mono">{k}</span>
               <span className="text-muted-foreground"> · {n}</span>
@@ -153,49 +161,49 @@ export function NotificationsPanel() {
             <Badge
               key={"channel-" + c}
               variant="secondary"
-              title={`${n} notifications delivered via ${c}`}
+              title={t("notifications.channelCountTitle", { count: n, channel: c })}
             >
               {c}
               <span className="text-muted-foreground"> · {n}</span>
             </Badge>
           ))}
           {topKinds.length === 0 && topChannels.length === 0 ? (
-            <span className="text-xs text-muted-foreground">No deliveries yet.</span>
+            <span className="text-xs text-muted-foreground">{t("notifications.noDeliveries")}</span>
           ) : null}
         </div>
       ) : null}
 
       <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">kind</span>
+          <span className="text-muted-foreground">{t("notifications.filter.kind")}</span>
           <Input
             type="text"
             value={kindInput}
             onInput={(e) => setKindInput(e.currentTarget.value)}
-            placeholder="exact match"
+            placeholder={t("notifications.filter.kindPlaceholder")}
             className="w-56 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">channel</span>
+          <span className="text-muted-foreground">{t("notifications.filter.channel")}</span>
           <select
             value={channel}
             onChange={(e) => setChannel(e.currentTarget.value as ChannelFilter)}
             className="rounded border border-input px-2 py-1 bg-transparent"
           >
-            <option value="">all</option>
-            <option value="inapp">inapp</option>
-            <option value="email">email</option>
-            <option value="push">push</option>
+            <option value="">{t("notifications.filter.all")}</option>
+            <option value="inapp">{t("notifications.channel.inapp")}</option>
+            <option value="email">{t("notifications.channel.email")}</option>
+            <option value="push">{t("notifications.channel.push")}</option>
           </select>
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">user_id</span>
+          <span className="text-muted-foreground">{t("notifications.filter.userId")}</span>
           <Input
             type="text"
             value={userIdInput}
             onInput={(e) => setUserIdInput(e.currentTarget.value)}
-            placeholder="UUID"
+            placeholder={t("notifications.filter.userIdPlaceholder")}
             className="w-64 h-8 font-mono text-xs"
           />
         </label>
@@ -204,7 +212,7 @@ export function NotificationsPanel() {
             checked={unreadOnly}
             onCheckedChange={(c) => setUnreadOnly(c === true)}
           />
-          <span className="text-muted-foreground">unread only</span>
+          <span className="text-muted-foreground">{t("notifications.filter.unreadOnly")}</span>
         </label>
         {(kind || channel || userId || unreadOnly) ? (
           <Button
@@ -219,17 +227,17 @@ export function NotificationsPanel() {
               setUnreadOnly(false);
             }}
           >
-            clear
+            {t("notifications.filter.clear")}
           </Button>
         ) : null}
       </AdminPage.Toolbar>
 
       <AdminPage.Body>
         <QDatatable
-          columns={columns}
+          columns={buildNotificationColumns(t)}
           rowKey="id"
           pageSize={50}
-          emptyMessage="No notifications."
+          emptyMessage={t("notifications.empty")}
           deps={[kind, channel, userId, unreadOnly]}
           fetch={async (params) => {
             const r = await adminAPI.notificationsList({

@@ -140,6 +140,39 @@ func readFromAddrCLI(ctx context.Context, mgr *settings.Manager) string {
 	return ""
 }
 
+// stringGetter is the subset of settings.Manager the
+// mailer-unconfigured probe needs. Narrow interface so the logic is
+// pure-function-testable without spinning up a real Postgres pool.
+type stringGetter interface {
+	GetString(ctx context.Context, key string) (string, bool, error)
+}
+
+// mailerUnconfiguredCLI returns true iff the operator hasn't set
+// `mailer.from` AND hasn't marked mailer setup as skipped. Used by
+// `admin create` to print a one-line "your welcome email won't
+// deliver" note up-front (FEEDBACK #10). A fresh `railbase init` ends
+// up here on first admin creation — without this, the welcome email
+// gets enqueued silently and the operator wonders why their inbox is
+// empty.
+func mailerUnconfiguredCLI(ctx context.Context, rt *runtimeContext) bool {
+	mgr := settings.New(settings.Options{Pool: rt.pool.Pool})
+	if mgr == nil {
+		return false
+	}
+	return mailerUnconfiguredFrom(ctx, mgr)
+}
+
+// mailerUnconfiguredFrom is the testable body of mailerUnconfiguredCLI.
+// Receives any settings-shaped getter so unit tests can pass a stub
+// without touching the database.
+func mailerUnconfiguredFrom(ctx context.Context, g stringGetter) bool {
+	if v, ok, _ := g.GetString(ctx, "mailer.setup_skipped_at"); ok && v != "" {
+		return false // explicit skip — operator knows
+	}
+	from, _, _ := g.GetString(ctx, "mailer.from")
+	return strings.TrimSpace(from) == ""
+}
+
 // readAdminURLCLI mirrors readAdminURL from adminapi/bootstrap.go.
 func readAdminURLCLI(ctx context.Context, mgr *settings.Manager) string {
 	if mgr != nil {

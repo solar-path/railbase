@@ -14,6 +14,7 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/lib/ui/drawer.ui";
+import { useT, type Translator } from "../i18n";
 
 // v3.x Timeline panel — single timeline over _audit_log_site +
 // _audit_log_tenant. Replaces the Audit / App logs / Email events /
@@ -40,56 +41,61 @@ type ActorTypeFilter =
 
 const PER_PAGE = 50;
 
-const columns: ColumnDef<AuditTimelineRow>[] = [
-  {
-    id: "at",
-    header: "when",
-    cell: (r) => (
-      <span className="font-mono text-xs text-muted-foreground" title={r.at}>
-        {formatTimestamp(r.at)}
-      </span>
-    ),
-  },
-  {
-    id: "actor",
-    header: "actor",
-    cell: (r) => <ActorCell row={r} />,
-  },
-  {
-    id: "event",
-    header: "action",
-    cell: (r) => (
-      <div className="flex items-center gap-2">
-        <span className="font-mono text-xs">{r.event}</span>
-        {r.source === "tenant" ? (
-          <Badge variant="outline" className="text-[10px]">
-            tenant
-          </Badge>
-        ) : null}
-      </div>
-    ),
-  },
-  {
-    id: "entity",
-    header: "entity",
-    cell: (r) =>
-      r.entity.type || r.entity.id ? (
-        <span className="font-mono text-xs">
-          <span className="text-muted-foreground">{r.entity.type}</span>
-          {r.entity.id ? <span> {r.entity.id}</span> : null}
+function buildTimelineColumns(t: Translator["t"]): ColumnDef<AuditTimelineRow>[] {
+  return [
+    {
+      id: "at",
+      header: t("timeline.col.when"),
+      cell: (r) => (
+        <span className="font-mono text-xs text-muted-foreground" title={r.at}>
+          {formatTimestamp(r.at)}
         </span>
-      ) : (
-        <span className="text-muted-foreground">—</span>
       ),
-  },
-  {
-    id: "outcome",
-    header: "outcome",
-    cell: (r) => <Badge variant={outcomeVariant(r.outcome)}>{r.outcome}</Badge>,
-  },
-];
+    },
+    {
+      id: "actor",
+      header: t("timeline.col.actor"),
+      cell: (r) => <ActorCell row={r} />,
+    },
+    {
+      id: "event",
+      header: t("timeline.col.action"),
+      cell: (r) => (
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-xs">{r.event}</span>
+          {r.source === "tenant" ? (
+            <Badge variant="outline" className="text-[10px]">
+              {t("timeline.source.tenant")}
+            </Badge>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      id: "entity",
+      header: t("timeline.col.entity"),
+      cell: (r) =>
+        r.entity.type || r.entity.id ? (
+          <span className="font-mono text-xs">
+            <span className="text-muted-foreground">{r.entity.type}</span>
+            {r.entity.id ? <span> {r.entity.id}</span> : null}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
+    {
+      id: "outcome",
+      header: t("timeline.col.outcome"),
+      cell: (r) => (
+        <Badge variant={outcomeVariant(r.outcome)}>{t(`timeline.outcome.${r.outcome}`)}</Badge>
+      ),
+    },
+  ];
+}
 
 export function TimelinePanel() {
+  const { t } = useT();
   const [total, setTotal] = useState(0);
 
   const [eventInput, setEventInput] = useState("");
@@ -161,26 +167,24 @@ export function TimelinePanel() {
   return (
     <>
       <p className="text-sm text-muted-foreground">
-        {total} event{total === 1 ? "" : "s"} total. Unified timeline — system,
-        admin, and user actions in one append-only journal. Hash-chained;
-        verify integrity with{" "}
-        <code className="font-mono">railbase audit verify</code>. Row click
-        opens the full before/after diff.
+        {t("timeline.eventCount", { count: total })} {t("timeline.summaryLead")}{" "}
+        <code className="font-mono">railbase audit verify</code>.{" "}
+        {t("timeline.summaryTail")}
       </p>
 
       <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">action</span>
+          <span className="text-muted-foreground">{t("timeline.filter.action")}</span>
           <Input
             type="text"
             value={eventInput}
             onInput={(e) => setEventInput(e.currentTarget.value)}
-            placeholder="e.g. auth.signin or vendor."
+            placeholder={t("timeline.filter.actionPlaceholder")}
             className="w-56 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">actor</span>
+          <span className="text-muted-foreground">{t("timeline.filter.actor")}</span>
           <select
             value={actorType}
             onChange={(e) =>
@@ -188,41 +192,41 @@ export function TimelinePanel() {
             }
             className="rounded border border-input px-2 py-1 bg-transparent h-8 text-xs"
           >
-            <option value="">all</option>
-            <option value="system">system</option>
-            <option value="admin">admin</option>
-            <option value="user">user</option>
-            <option value="api_token">api token</option>
-            <option value="job">job</option>
+            <option value="">{t("timeline.filter.all")}</option>
+            <option value="system">{t("timeline.actor.system")}</option>
+            <option value="admin">{t("timeline.actor.admin")}</option>
+            <option value="user">{t("timeline.actor.user")}</option>
+            <option value="api_token">{t("timeline.actor.api_token")}</option>
+            <option value="job">{t("timeline.actor.job")}</option>
           </select>
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">outcome</span>
+          <span className="text-muted-foreground">{t("timeline.filter.outcome")}</span>
           <select
             value={outcome}
             onChange={(e) => setOutcome(e.currentTarget.value as OutcomeFilter)}
             className="rounded border border-input px-2 py-1 bg-transparent h-8 text-xs"
           >
-            <option value="">all</option>
-            <option value="success">success</option>
-            <option value="denied">denied</option>
-            <option value="error">error</option>
+            <option value="">{t("timeline.filter.all")}</option>
+            <option value="success">{t("timeline.outcome.success")}</option>
+            <option value="denied">{t("timeline.outcome.denied")}</option>
+            <option value="error">{t("timeline.outcome.error")}</option>
           </select>
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">entity</span>
+          <span className="text-muted-foreground">{t("timeline.filter.entity")}</span>
           <Input
             type="text"
             value={entityType}
             onInput={(e) => setEntityType(e.currentTarget.value)}
-            placeholder="type"
+            placeholder={t("timeline.filter.entityTypePlaceholder")}
             className="w-28 h-8 font-mono text-xs"
           />
           <Input
             type="text"
             value={entityIdInput}
             onInput={(e) => setEntityIdInput(e.currentTarget.value)}
-            placeholder="id"
+            placeholder={t("timeline.filter.entityIdPlaceholder")}
             className="w-40 h-8 font-mono text-xs"
           />
         </label>
@@ -232,12 +236,12 @@ export function TimelinePanel() {
             type="text"
             value={requestIdInput}
             onInput={(e) => setRequestIdInput(e.currentTarget.value)}
-            placeholder="for cross-row trace"
+            placeholder={t("timeline.filter.requestIdPlaceholder")}
             className="w-44 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">since</span>
+          <span className="text-muted-foreground">{t("timeline.filter.since")}</span>
           <Input
             type="datetime-local"
             value={since}
@@ -246,7 +250,7 @@ export function TimelinePanel() {
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">until</span>
+          <span className="text-muted-foreground">{t("timeline.filter.until")}</span>
           <Input
             type="datetime-local"
             value={until}
@@ -255,15 +259,15 @@ export function TimelinePanel() {
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">source</span>
+          <span className="text-muted-foreground">{t("timeline.filter.source")}</span>
           <select
             value={source}
             onChange={(e) => setSource(e.currentTarget.value as SourceFilter)}
             className="rounded border border-input px-2 py-1 bg-transparent h-8 text-xs"
           >
-            <option value="all">all</option>
-            <option value="site">site</option>
-            <option value="tenant">tenant</option>
+            <option value="all">{t("timeline.filter.all")}</option>
+            <option value="site">{t("timeline.source.site")}</option>
+            <option value="tenant">{t("timeline.source.tenant")}</option>
           </select>
         </label>
         {anyFilter ? (
@@ -285,14 +289,14 @@ export function TimelinePanel() {
               setSource("all");
             }}
           >
-            clear
+            {t("timeline.clear")}
           </Button>
         ) : null}
       </AdminPage.Toolbar>
 
       <AdminPage.Body>
         <QDatatable
-          columns={columns}
+          columns={buildTimelineColumns(t)}
           rowKey={(r) => `${r.source}:${r.id}`}
           fetch={async ({ page: p }) => {
             const resp = await adminAPI.auditTimeline({
@@ -318,12 +322,12 @@ export function TimelinePanel() {
           }}
           pageSize={PER_PAGE}
           deps={filterDeps}
-          emptyMessage="No events match the current filters."
+          emptyMessage={t("timeline.empty")}
           onRowClick={(row) => setDrawerRow(row)}
         />
       </AdminPage.Body>
 
-      <TimelineDrawer row={drawerRow} onClose={() => setDrawerRow(null)} />
+      <TimelineDrawer row={drawerRow} onClose={() => setDrawerRow(null)} t={t} />
     </>
   );
 }
@@ -333,9 +337,11 @@ export function TimelinePanel() {
 function TimelineDrawer({
   row,
   onClose,
+  t,
 }: {
   row: AuditTimelineRow | null;
   onClose: () => void;
+  t: Translator["t"];
 }) {
   const open = row !== null;
   return (
@@ -352,7 +358,7 @@ function TimelineDrawer({
             {row ? (
               <span className="font-mono text-sm">{row.event}</span>
             ) : (
-              "Event details"
+              t("timeline.drawer.title")
             )}
           </DrawerTitle>
           <DrawerDescription>
@@ -363,49 +369,49 @@ function TimelineDrawer({
                 </span>
                 {" — "}
                 <Badge variant={outcomeVariant(row.outcome)}>
-                  {row.outcome}
+                  {t(`timeline.outcome.${row.outcome}`)}
                 </Badge>
-                {" · source: "}
+                {" · "}{t("timeline.drawer.source")}{": "}
                 <span className="font-mono">{row.source}</span>
-                {" · seq "}
+                {" · "}{t("timeline.drawer.seq")}{" "}
                 <span className="font-mono">{row.seq}</span>
               </>
             ) : null}
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-4 text-sm">
-          {row ? <TimelineDrawerBody row={row} /> : null}
+          {row ? <TimelineDrawerBody row={row} t={t} /> : null}
         </div>
       </DrawerContent>
     </Drawer>
   );
 }
 
-function TimelineDrawerBody({ row }: { row: AuditTimelineRow }) {
+function TimelineDrawerBody({ row, t }: { row: AuditTimelineRow; t: Translator["t"] }) {
   return (
     <>
-      <DLBlock title="Actor">
+      <DLBlock title={t("timeline.drawer.actor")}>
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs font-mono">
-          <dt className="text-muted-foreground">type</dt>
+          <dt className="text-muted-foreground">{t("timeline.drawer.type")}</dt>
           <dd>{row.actor.type}</dd>
-          <dt className="text-muted-foreground">id</dt>
+          <dt className="text-muted-foreground">{t("timeline.drawer.id")}</dt>
           <dd>{row.actor.id ?? <span className="text-muted-foreground">—</span>}</dd>
           {row.actor.email ? (
             <>
-              <dt className="text-muted-foreground">email</dt>
+              <dt className="text-muted-foreground">{t("timeline.drawer.email")}</dt>
               <dd>{row.actor.email}</dd>
             </>
           ) : null}
           {row.actor.collection ? (
             <>
-              <dt className="text-muted-foreground">collection</dt>
+              <dt className="text-muted-foreground">{t("timeline.drawer.collection")}</dt>
               <dd>{row.actor.collection}</dd>
             </>
           ) : null}
         </dl>
       </DLBlock>
 
-      <DLBlock title="Context">
+      <DLBlock title={t("timeline.drawer.context")}>
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs font-mono">
           {row.tenant_id ? (
             <>
@@ -415,7 +421,7 @@ function TimelineDrawerBody({ row }: { row: AuditTimelineRow }) {
           ) : null}
           {row.entity.type || row.entity.id ? (
             <>
-              <dt className="text-muted-foreground">entity</dt>
+              <dt className="text-muted-foreground">{t("timeline.drawer.entity")}</dt>
               <dd>
                 {row.entity.type}
                 {row.entity.id ? ` ${row.entity.id}` : ""}
@@ -446,13 +452,13 @@ function TimelineDrawerBody({ row }: { row: AuditTimelineRow }) {
       </DLBlock>
 
       {row.error_code ? (
-        <DLBlock title="Error">
+        <DLBlock title={t("timeline.drawer.error")}>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs font-mono">
-            <dt className="text-muted-foreground">code</dt>
+            <dt className="text-muted-foreground">{t("timeline.drawer.code")}</dt>
             <dd>{row.error_code}</dd>
             {row.error_data ? (
               <>
-                <dt className="text-muted-foreground">data</dt>
+                <dt className="text-muted-foreground">{t("timeline.drawer.data")}</dt>
                 <dd>
                   <JSONBlock value={row.error_data} />
                 </dd>
@@ -462,17 +468,17 @@ function TimelineDrawerBody({ row }: { row: AuditTimelineRow }) {
         </DLBlock>
       ) : null}
 
-      <DLBlock title="Before / After">
+      <DLBlock title={t("timeline.drawer.beforeAfter")}>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
-              before
+              {t("timeline.drawer.before")}
             </div>
             <JSONBlock value={row.before} />
           </div>
           <div>
             <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
-              after
+              {t("timeline.drawer.after")}
             </div>
             <JSONBlock value={row.after} />
           </div>
@@ -480,7 +486,7 @@ function TimelineDrawerBody({ row }: { row: AuditTimelineRow }) {
       </DLBlock>
 
       {row.meta ? (
-        <DLBlock title="Meta">
+        <DLBlock title={t("timeline.drawer.meta")}>
           <JSONBlock value={row.meta} />
         </DLBlock>
       ) : null}

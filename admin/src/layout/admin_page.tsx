@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { cn } from "@/lib/ui/cn";
+import { useT } from "../i18n";
 
 // AdminPage — canonical compound layout contract for every screen
 // under admin/src/screens/*.tsx.
@@ -141,7 +142,7 @@ AdminPage.Empty = AdminPageEmpty;
 // the raw error.message string. Background is destructive-tinted
 // (not red-500 literal — uses token).
 function AdminPageError({
-  title = "Failed to load",
+  title,
   message,
   retry,
 }: {
@@ -149,9 +150,14 @@ function AdminPageError({
   message?: ReactNode;
   retry?: () => void;
 }) {
+  const { t } = useT();
+  // Default title goes through i18n. Callers can still pass a custom
+  // ReactNode (e.g. an icon + text bundle), in which case it bypasses
+  // the dictionary.
+  const resolvedTitle = title ?? t("admin.errorTitle");
   return (
     <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm">
-      <p className="font-medium text-destructive">{title}</p>
+      <p className="font-medium text-destructive">{resolvedTitle}</p>
       {message ? (
         <p className="text-xs text-muted-foreground mt-1 font-mono">{message}</p>
       ) : null}
@@ -161,7 +167,7 @@ function AdminPageError({
           onClick={retry}
           className="mt-2 text-xs underline text-destructive hover:no-underline"
         >
-          retry
+          {t("admin.retry")}
         </button>
       ) : null}
     </div>

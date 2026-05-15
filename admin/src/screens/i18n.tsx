@@ -4,6 +4,7 @@ import { adminAPI } from "../api/admin";
 import { APIError, isAPIError } from "../api/client";
 import type { I18nCoverage, I18nLocalesResponse } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 import { Button } from "@/lib/ui/button.ui";
 import { Card } from "@/lib/ui/card.ui";
 import { Badge } from "@/lib/ui/badge.ui";
@@ -63,6 +64,7 @@ interface TranslationRow {
 }
 
 export function I18nScreen() {
+  const { t } = useT();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<string | null>(null);
 
@@ -149,7 +151,7 @@ export function I18nScreen() {
       // clears immediately rather than after the query round-trip.
       setSaved(dataRef.current.map((r) => ({ ...r })));
       setCellErrors([]);
-      toast.success("Saved");
+      toast.success(t("i18nScreen.toast.saved"));
       void qc.invalidateQueries({ queryKey: ["i18n-locales"] });
       void qc.invalidateQueries({ queryKey: ["i18n-file", vars.locale] });
     },
@@ -178,26 +180,26 @@ export function I18nScreen() {
           }
           if (next.length > 0) {
             setCellErrors(next);
-            toast.error("Validation errors — see fields.");
+            toast.error(t("i18nScreen.toast.validation"));
             return;
           }
         }
       }
       const msg = err instanceof Error ? err.message : String(err);
-      toast.error(`Error: ${msg}`);
+      toast.error(t("i18nScreen.toast.error", { message: msg }));
     },
   });
 
   const deleteM = useMutation({
     mutationFn: (locale: string) => adminAPI.i18nFileDelete(locale),
     onSuccess: (_data, locale) => {
-      toast.success(`Removed override for ${locale}`);
+      toast.success(t("i18nScreen.toast.removed", { locale }));
       void qc.invalidateQueries({ queryKey: ["i18n-locales"] });
       void qc.invalidateQueries({ queryKey: ["i18n-file", locale] });
     },
     onError: (err) => {
       const msg = err instanceof Error ? err.message : String(err);
-      toast.error(`Error: ${msg}`);
+      toast.error(t("i18nScreen.toast.error", { message: msg }));
     },
   });
 
@@ -217,40 +219,31 @@ export function I18nScreen() {
   const handleDelete = useCallback(() => {
     if (selected === null) return;
     if (
-      !window.confirm(
-        `Delete override file for "${selected}"? Embedded fallbacks remain unaffected.`,
-      )
+      !window.confirm(t("i18nScreen.confirm.deleteOverride", { locale: selected }))
     ) {
       return;
     }
     deleteM.mutate(selected);
-  }, [selected, deleteM]);
+  }, [selected, deleteM, t]);
 
   const handleNewLocale = useCallback(() => {
-    const raw = window.prompt(
-      'New locale tag (BCP-47: e.g. "es", "pt-BR", "ja"):',
-      "",
-    );
+    const raw = window.prompt(t("i18nScreen.prompt.newLocale"), "");
     if (!raw) return;
     const trimmed = raw.trim();
     if (!LOCALE_REGEX.test(trimmed)) {
-      window.alert(
-        'Invalid locale tag. Expected 2-3 lowercase letters, optionally followed by "-" and 2 uppercase letters (e.g. "en", "pt-BR").',
-      );
+      window.alert(t("i18nScreen.alert.invalidLocale"));
       return;
     }
     if (
       localesQ.data?.overrides.includes(trimmed) &&
-      !window.confirm(
-        `Override for "${trimmed}" already exists. Open it instead?`,
-      )
+      !window.confirm(t("i18nScreen.confirm.openExisting", { locale: trimmed }))
     ) {
       return;
     }
     // The fileQ refetch + the seedRows memo will seed the grid from
     // the embedded reference once the new locale loads.
     setSelected(trimmed);
-  }, [localesQ.data]);
+  }, [localesQ.data, t]);
 
   // Unavailable detection runs LAST: every hook above must dispatch
   // on every render so React's hook-order invariant holds even when
@@ -258,33 +251,33 @@ export function I18nScreen() {
   const isUnavailable =
     localesQ.error instanceof APIError && localesQ.error.code === "unavailable";
   if (isUnavailable) {
-    return <UnavailableState />;
+    return <UnavailableState tr={t} />;
   }
 
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Translations"
+        title={t("i18nScreen.title")}
         description={
           <>
-            Edit per-locale override bundles in{" "}
-            <span className="font-mono">pb_data/i18n/</span>. Embedded
-            defaults ship in the binary; overrides win when present.
+            {t("i18nScreen.descriptionPrefix")}{" "}
+            <span className="font-mono">pb_data/i18n/</span>. {t("i18nScreen.descriptionSuffix")}
           </>
         }
         actions={
           <Button type="button" size="sm" onClick={handleNewLocale}>
-            + New locale
+            {t("i18nScreen.action.newLocale")}
           </Button>
         }
       />
 
       <AdminPage.Body className="space-y-3">
         {selected === null ? (
-          <EmptyState />
+          <EmptyState tr={t} />
         ) : (
           <>
             <StatsHeader
+              tr={t}
               locale={selected}
               data={localesQ.data}
               coverage={coverage}
@@ -298,14 +291,15 @@ export function I18nScreen() {
 
             {fileQ.isLoading ? (
               <Card className="p-6 text-sm text-muted-foreground">
-                Loading…
+                {t("common.loading")}
               </Card>
             ) : data.length === 0 ? (
               <Card className="border-dashed p-6 text-sm text-muted-foreground">
-                No translation keys yet. The reference (en) bundle is empty.
+                {t("i18nScreen.empty.refEmpty")}
               </Card>
             ) : (
               <TranslationsGrid
+                tr={t}
                 data={data}
                 onChange={setData}
                 errors={cellErrors}
@@ -322,9 +316,11 @@ export function I18nScreen() {
 // Mirrors the sidebar-list affordance from the pre-v1.7.40 layout:
 // monospace locale code, bin/ovr tags, coverage numbers.
 function LocaleSelectItem({
+  tr,
   locale,
   data,
 }: {
+  tr: Translator["t"];
   locale: string;
   data: I18nLocalesResponse | undefined;
 }) {
@@ -337,7 +333,7 @@ function LocaleSelectItem({
         <span className="font-mono">{locale}</span>
         {isEmbedded ? (
           <Badge variant="secondary" className="text-[9px] px-1 py-0">
-            bin
+            {tr("i18nScreen.tag.bin")}
           </Badge>
         ) : null}
         {isOverride ? (
@@ -345,7 +341,7 @@ function LocaleSelectItem({
             variant="outline"
             className="text-[9px] px-1 py-0 border-input bg-muted text-foreground"
           >
-            ovr
+            {tr("i18nScreen.tag.ovr")}
           </Badge>
         ) : null}
         {cov ? (
@@ -359,6 +355,7 @@ function LocaleSelectItem({
 }
 
 function StatsHeader({
+  tr,
   locale,
   data,
   coverage,
@@ -369,6 +366,7 @@ function StatsHeader({
   onSave,
   onDelete,
 }: {
+  tr: Translator["t"];
   locale: string;
   data: I18nLocalesResponse | undefined;
   coverage: I18nCoverage | undefined;
@@ -384,7 +382,7 @@ function StatsHeader({
     <Card className="p-4">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="space-y-1 min-w-0">
-          <div className="text-sm text-muted-foreground">Editing locale</div>
+          <div className="text-sm text-muted-foreground">{tr("i18nScreen.editingLocale")}</div>
           <div className="flex items-center gap-3">
             <Select value={locale} onValueChange={onSelect}>
               <SelectTrigger className="w-[260px]">
@@ -394,7 +392,7 @@ function StatsHeader({
               </SelectTrigger>
               <SelectContent>
                 {supported.map((l) => (
-                  <LocaleSelectItem key={l} locale={l} data={data} />
+                  <LocaleSelectItem key={l} tr={tr} locale={l} data={data} />
                 ))}
               </SelectContent>
             </Select>
@@ -402,9 +400,12 @@ function StatsHeader({
           {coverage ? (
             <div className="mt-1 text-xs text-muted-foreground">
               <span className="font-medium text-foreground">
-                {coverage.translated} of {coverage.total_keys}
+                {tr("i18nScreen.coverage.translated", {
+                  translated: coverage.translated,
+                  total: coverage.total_keys,
+                })}
               </span>{" "}
-              keys translated ·{" "}
+              ·{" "}
               <span
                 className={
                   coverage.missing_keys.length === 0
@@ -412,7 +413,7 @@ function StatsHeader({
                     : "text-foreground"
                 }
               >
-                {coverage.missing_keys.length} missing
+                {tr("i18nScreen.coverage.missing", { count: coverage.missing_keys.length })}
               </span>
             </div>
           ) : null}
@@ -420,7 +421,7 @@ function StatsHeader({
         <div className="flex items-center gap-2">
           {dirty ? (
             <Badge variant="secondary" className="text-[11px]">
-              unsaved
+              {tr("i18nScreen.unsaved")}
             </Badge>
           ) : null}
           <Button
@@ -429,7 +430,7 @@ function StatsHeader({
             onClick={onSave}
             disabled={!dirty || pending}
           >
-            {pending ? "Saving…" : "Save"}
+            {pending ? tr("i18nScreen.action.saving") : tr("i18nScreen.action.save")}
           </Button>
           <Button
             type="button"
@@ -439,8 +440,8 @@ function StatsHeader({
             disabled={!hasOverride}
             title={
               hasOverride
-                ? "Remove the on-disk override file"
-                : "No override file to delete"
+                ? tr("i18nScreen.deleteOverride.title")
+                : tr("i18nScreen.deleteOverride.noOverride")
             }
             className={
               hasOverride
@@ -448,7 +449,7 @@ function StatsHeader({
                 : ""
             }
           >
-            Delete override
+            {tr("i18nScreen.action.deleteOverride")}
           </Button>
         </div>
       </div>
@@ -457,10 +458,12 @@ function StatsHeader({
 }
 
 function TranslationsGrid({
+  tr,
   data,
   onChange,
   errors,
 }: {
+  tr: Translator["t"];
   data: TranslationRow[];
   onChange: (data: TranslationRow[]) => void;
   errors: QEditableListError[];
@@ -474,27 +477,27 @@ function TranslationsGrid({
     () => [
       {
         key: "key",
-        header: "Key",
+        header: tr("i18nScreen.grid.key"),
         type: "computed",
         width: 280,
         compute: (r) => r.key,
       },
       {
         key: "value",
-        header: "Translation",
+        header: tr("i18nScreen.grid.translation"),
         type: "text",
         width: 360,
-        placeholder: "Not translated",
+        placeholder: tr("i18nScreen.grid.notTranslated"),
       },
       {
         key: "reference",
-        header: "Reference (en)",
+        header: tr("i18nScreen.grid.reference"),
         type: "computed",
         width: 280,
         compute: (r) => r.reference || "—",
       },
     ],
-    [],
+    [tr],
   );
 
   return (
@@ -509,34 +512,31 @@ function TranslationsGrid({
   );
 }
 
-function EmptyState() {
+function EmptyState({ tr }: { tr: Translator["t"] }) {
   return (
     <Card className="border-dashed p-6 text-sm text-muted-foreground">
-      Pick a locale from the dropdown.
+      {tr("i18nScreen.empty.pickLocale")}
     </Card>
   );
 }
 
-function UnavailableState() {
+function UnavailableState({ tr }: { tr: Translator["t"] }) {
   return (
     <div className="space-y-4">
       <header>
-        <h1 className="text-2xl font-semibold">Translations</h1>
+        <h1 className="text-2xl font-semibold">{tr("i18nScreen.title")}</h1>
         <p className="text-sm text-muted-foreground">
-          Per-locale override bundles for the i18n catalog.
+          {tr("i18nScreen.unavailable.subtitle")}
         </p>
       </header>
       <div className="rounded-lg border-2 border-dashed border-input bg-muted p-6 max-w-2xl">
         <div className="text-sm font-medium text-foreground">
-          i18n overrides directory not configured.
+          {tr("i18nScreen.unavailable.title")}
         </div>
         <div className="text-xs text-foreground mt-2 leading-relaxed">
-          Set the{" "}
-          <span className="font-mono">RAILBASE_I18N_DIR</span> environment
-          variable (e.g.{" "}
-          <span className="font-mono">pb_data/i18n</span>) and restart the
-          server. Override files override embedded bundles per-locale; the
-          editor will pick them up on next load.
+          {tr("i18nScreen.unavailable.line1Prefix")}{" "}
+          <span className="font-mono">RAILBASE_I18N_DIR</span> {tr("i18nScreen.unavailable.line1Mid")}{" "}
+          <span className="font-mono">pb_data/i18n</span>{tr("i18nScreen.unavailable.line1Suffix")}
         </div>
       </div>
     </div>

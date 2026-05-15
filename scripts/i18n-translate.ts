@@ -210,16 +210,20 @@ async function main() {
   const args = Bun.argv.slice(2);
   const force = args.includes("--force");
   const onlyIdx = args.indexOf("--only");
-  const only =
-    onlyIdx >= 0 && args[onlyIdx + 1]
-      ? new Set(args[onlyIdx + 1]!.split(",").map((s) => s.trim()))
-      : null;
+  const onlyArg = onlyIdx >= 0 ? args[onlyIdx + 1] : undefined;
+  const only = onlyArg
+    ? new Set(onlyArg.split(",").map((s) => s.trim()))
+    : null;
 
   // First non-flag arg is the source en.json; default to the admin SPA.
-  const positional = args.filter((a) => !a.startsWith("--") && a !== args[onlyIdx + 1]);
+  // Note: when --only isn't passed, onlyArg is undefined — don't let the
+  // filter accidentally drop a positional path equal to args[0].
+  const positional = args.filter(
+    (a, i) => !a.startsWith("--") && (onlyArg === undefined || a !== onlyArg || i !== onlyIdx + 1),
+  );
   const repoRoot = resolve(import.meta.dir, "..");
   const sourcePath = resolve(
-    positional[0] ?? join(repoRoot, "admin/src/i18n/en.json"),
+    positional[0] ?? join(repoRoot, "admin/src/i18n/locales/en.json"),
   );
 
   const en = await loadDict(sourcePath);

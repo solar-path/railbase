@@ -100,6 +100,55 @@ func TestValidate_RejectsReservedFieldNames(t *testing.T) {
 	}
 }
 
+// FEEDBACK #2 — the SQL-keyword rejection must point the embedder at
+// a concrete rename for the keywords that appear most often in domain
+// models (`user`, `order`). Without this, the error reads "pick a
+// different name" and the embedder has to guess what convention we'd
+// like — which is exactly what tripped shopper.
+func TestValidate_ReservedKeyword_SuggestsRename(t *testing.T) {
+	cases := []struct {
+		field, wantSuggestion string
+	}{
+		{"user", `"customer"`},     // exact shopper trip
+		{"order", `"order_ref"`},   // exact shopper trip
+		{"group", `"team"`},
+		{"select", `"selection"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.field, func(t *testing.T) {
+			err := builder.NewCollection("orders").
+				Field(tc.field, builder.NewText()).
+				Validate()
+			if err == nil {
+				t.Fatalf("expected error for reserved keyword %q", tc.field)
+			}
+			if !strings.Contains(err.Error(), tc.wantSuggestion) {
+				t.Errorf("error should suggest %s, got: %v", tc.wantSuggestion, err)
+			}
+			if !strings.Contains(err.Error(), "docs/03-schema.md#reserved-keywords") {
+				t.Errorf("error should point at docs anchor, got: %v", err)
+			}
+		})
+	}
+}
+
+// Reserved keyword with no curated suggestion falls through to the
+// generic "_id / _ref suffix" hint — still actionable, no dead end.
+func TestValidate_ReservedKeyword_GenericFallback(t *testing.T) {
+	// `between` is in the reserved set but not in reservedKeywordRenames.
+	err := builder.NewCollection("orders").
+		Field("between", builder.NewText()).
+		Validate()
+	if err == nil {
+		t.Fatal("expected error for reserved keyword 'between'")
+	}
+	for _, want := range []string{`"between"_id`, `"between"_ref`, "docs/03-schema.md#reserved-keywords"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("generic fallback missing %q, got: %v", want, err)
+		}
+	}
+}
+
 func TestValidate_RejectsTenantIDOnTenantCollection(t *testing.T) {
 	err := builder.NewCollection("posts").
 		Tenant().

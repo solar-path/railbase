@@ -116,16 +116,68 @@ func TestCreateCollectionSQL_MultiSelectArray(t *testing.T) {
 }
 
 func TestAddColumnSQL_WithCheck(t *testing.T) {
+	// Required NOT NULL field WITHOUT default → FEEDBACK #19 emits
+	// the three-step backfill pattern (nullable → UPDATE TODO →
+	// SET NOT NULL) so existing rows don't trip 23502 at apply.
 	f := builder.NewText().Required().MinLen(5).Spec()
 	f.Name = "tagline"
 
 	sql := gen.AddColumnSQL("posts", f)
 
-	if !strings.Contains(sql, `ALTER TABLE posts ADD COLUMN tagline TEXT NOT NULL`) {
-		t.Errorf("ADD COLUMN missing:\n%s", sql)
+	if !strings.Contains(sql, `ALTER TABLE posts ADD COLUMN tagline TEXT;`) {
+		t.Errorf("step 1 (nullable ADD COLUMN) missing:\n%s", sql)
+	}
+	if !strings.Contains(sql, `UPDATE posts SET tagline = /* TODO: backfill expression */ NULL WHERE tagline IS NULL;`) {
+		t.Errorf("step 2 (UPDATE backfill TODO) missing:\n%s", sql)
+	}
+	if !strings.Contains(sql, `ALTER TABLE posts ALTER COLUMN tagline SET NOT NULL;`) {
+		t.Errorf("step 3 (SET NOT NULL) missing:\n%s", sql)
+	}
+	// The single-shot "ADD COLUMN … NOT NULL" form must NOT appear —
+	// that's the pre-fix path which fails against non-empty tables.
+	if strings.Contains(sql, `ADD COLUMN tagline TEXT NOT NULL`) {
+		t.Errorf("unsafe single-shot NOT NULL ADD COLUMN regressed:\n%s", sql)
 	}
 	if !strings.Contains(sql, `ALTER TABLE posts ADD CONSTRAINT posts_tagline_chk0 CHECK`) {
 		t.Errorf("CHECK constraint missing:\n%s", sql)
+	}
+}
+
+// FEEDBACK #19 happy-path: fields that DO carry a usable server-side
+// default keep the single-line ALTER TABLE … ADD COLUMN … NOT NULL
+// form. Postgres backfills existing rows from the default at apply
+// time, which is safe.
+func TestAddColumnSQL_WithDefault_NoSplit(t *testing.T) {
+	f := builder.NewText().Required().Default("untitled").Spec()
+	f.Name = "title"
+
+	sql := gen.AddColumnSQL("posts", f)
+
+	if !strings.Contains(sql, `ALTER TABLE posts ADD COLUMN title TEXT NOT NULL UNIQUE DEFAULT 'untitled';`) &&
+		!strings.Contains(sql, `ALTER TABLE posts ADD COLUMN title TEXT NOT NULL DEFAULT 'untitled';`) {
+		t.Errorf("single-line ALTER with DEFAULT missing:\n%s", sql)
+	}
+	if strings.Contains(sql, `UPDATE posts SET title`) {
+		t.Errorf("backfill UPDATE should NOT appear when DEFAULT is set:\n%s", sql)
+	}
+	if strings.Contains(sql, `ALTER COLUMN title SET NOT NULL`) {
+		t.Errorf("redundant SET NOT NULL emitted when single-line form was sufficient:\n%s", sql)
+	}
+}
+
+// Nullable fields (Required = false) keep the trivial form — no
+// backfill needed since NULL is a valid value.
+func TestAddColumnSQL_Nullable_NoSplit(t *testing.T) {
+	f := builder.NewText().Spec()
+	f.Name = "subtitle"
+
+	sql := gen.AddColumnSQL("posts", f)
+
+	if !strings.Contains(sql, `ALTER TABLE posts ADD COLUMN subtitle TEXT;`) {
+		t.Errorf("trivial ALTER missing:\n%s", sql)
+	}
+	if strings.Contains(sql, `UPDATE posts`) {
+		t.Errorf("backfill UPDATE leaked into nullable ADD:\n%s", sql)
 	}
 }
 

@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter-preact";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { api, isAPIError } from "../api/client";
 import { useAuth } from "../auth/context";
+import { useT, type Translator } from "../i18n";
 import { Button } from "@/lib/ui/button.ui";
 import { Card } from "@/lib/ui/card.ui";
 import { Checkbox } from "@/lib/ui/checkbox.ui";
@@ -86,55 +87,70 @@ type SaveResponse = {
 // (plus form.watch("driver")) drives which fields render. The "local_socket"
 // branch keeps `password` optional because peer/trust auth on local
 // sockets often does without one.
-const dbStepSchema = z.discriminatedUnion("driver", [
-  z.object({
-    driver: z.literal("local_socket"),
-    socket_dir: z.string().min(1, "Pick a socket"),
-    username: z.string().min(1, "Username required"),
-    password: z.string().optional(),
-    database: z.string().min(1, "Database name required"),
-    sslmode: z.enum(["disable", "require", "prefer"]),
-    create_db: z.boolean(),
-  }),
-  z.object({
-    driver: z.literal("external_dsn"),
-    external_dsn: z
-      .string()
-      .regex(/^postgres(ql)?:\/\//, "Must start with postgres://"),
-  }),
-  // `embedded` carries no fields — it's a zero-config choice. The UI
-  // only OFFERS it when /_setup/detect reports current_mode ===
-  // "embedded", i.e. the binary was built with `-tags embed_pg` and is
-  // already running on the bundled Postgres. Production binaries don't
-  // ship embed_pg, so the radio stays hidden there and this branch is
-  // never selected. Selecting it is a no-op on the backend: the absence
-  // of a `.dsn` file IS the "use embedded" signal.
-  z.object({
-    driver: z.literal("embedded"),
-  }),
-]);
+function makeDbStepSchema(t: Translator["t"]) {
+  return z.discriminatedUnion("driver", [
+    z.object({
+      driver: z.literal("local_socket"),
+      socket_dir: z.string().min(1, t("bootstrap.err.pickSocket")),
+      username: z.string().min(1, t("bootstrap.err.usernameRequired")),
+      password: z.string().optional(),
+      database: z.string().min(1, t("bootstrap.err.databaseRequired")),
+      sslmode: z.enum(["disable", "require", "prefer"]),
+      create_db: z.boolean(),
+    }),
+    z.object({
+      driver: z.literal("external_dsn"),
+      external_dsn: z
+        .string()
+        .regex(/^postgres(ql)?:\/\//, t("bootstrap.err.dsnPrefix")),
+    }),
+    // `embedded` carries no fields — it's a zero-config choice. The UI
+    // only OFFERS it when /_setup/detect reports current_mode ===
+    // "embedded", i.e. the binary was built with `-tags embed_pg` and is
+    // already running on the bundled Postgres. Production binaries don't
+    // ship embed_pg, so the radio stays hidden there and this branch is
+    // never selected. Selecting it is a no-op on the backend: the absence
+    // of a `.dsn` file IS the "use embedded" signal.
+    z.object({
+      driver: z.literal("embedded"),
+    }),
+  ]);
+}
 
-type DBStepValues = z.infer<typeof dbStepSchema>;
+type DBStepValues =
+  | {
+      driver: "local_socket";
+      socket_dir: string;
+      username: string;
+      password?: string;
+      database: string;
+      sslmode: "disable" | "require" | "prefer";
+      create_db: boolean;
+    }
+  | { driver: "external_dsn"; external_dsn: string }
+  | { driver: "embedded" };
 
-const adminStepSchema = z
-  .object({
-    email: z.string().email("Valid email required"),
-    password: z
-      .string()
-      .min(8, "Min 8 characters")
-      .regex(/[A-Z]/, "Need uppercase")
-      .regex(/[0-9]/, "Need digit")
-      .regex(/[^A-Za-z0-9]/, "Need symbol"),
-    confirm: z.string(),
-  })
-  // Cross-field validation: zod's .refine + path: ["confirm"] surfaces
-  // the error under the confirm field's <FormMessage> automatically.
-  .refine((d) => d.password === d.confirm, {
-    message: "Passwords don't match",
-    path: ["confirm"],
-  });
+function makeAdminStepSchema(t: Translator["t"]) {
+  return z
+    .object({
+      email: z.string().email(t("bootstrap.err.emailRequired")),
+      password: z
+        .string()
+        .min(8, t("passwordReset.errMin8"))
+        .regex(/[A-Z]/, t("passwordReset.errUpper"))
+        .regex(/[0-9]/, t("passwordReset.errDigit"))
+        .regex(/[^A-Za-z0-9]/, t("passwordReset.errSymbol")),
+      confirm: z.string(),
+    })
+    // Cross-field validation: zod's .refine + path: ["confirm"] surfaces
+    // the error under the confirm field's <FormMessage> automatically.
+    .refine((d) => d.password === d.confirm, {
+      message: t("passwordReset.errMismatch"),
+      path: ["confirm"],
+    });
+}
 
-type AdminStepValues = z.infer<typeof adminStepSchema>;
+type AdminStepValues = { email: string; password: string; confirm: string };
 
 // v0.9 — wizard is back to 2 steps (DB / admin). Auth-methods and
 // mailer config moved to Settings. The bootstrapCreateHandler gates
@@ -148,6 +164,7 @@ export function BootstrapScreen() {
   // is already configured (return-visit AFTER an in-process reload OR
   // manual restart). The mailer step doesn't auto-advance — it's
   // explicitly operator-acknowledged before admin creation.
+  const { t } = useT();
   const [step, setStep] = useState<Step>(0);
   const [autoAdvanced, setAutoAdvanced] = useState(false);
 
@@ -182,19 +199,19 @@ export function BootstrapScreen() {
     // eslint-disable-next-line railbase/no-raw-page-shell
     <div className="min-h-screen flex items-center justify-center bg-muted p-6">
       <div className="w-full max-w-2xl space-y-3">
-        <Stepper step={step} />
+        <Stepper step={step} t={t} />
         {step === 0 ? (
-          <DatabaseStep onContinue={() => setStep(1)} />
+          <DatabaseStep onContinue={() => setStep(1)} t={t} />
         ) : (
-          <AdminStep onBack={() => setStep(0)} />
+          <AdminStep onBack={() => setStep(0)} t={t} />
         )}
       </div>
     </div>
   );
 }
 
-function Stepper({ step }: { step: Step }) {
-  const labels = ["1. Database", "2. Admin account"];
+function Stepper({ step, t }: { step: Step; t: Translator["t"] }) {
+  const labels = [t("bootstrap.step.database"), t("bootstrap.step.admin")];
   return (
     <ol className="flex items-center gap-3 text-sm text-muted-foreground">
       {labels.map((label, i) => (
@@ -211,7 +228,7 @@ function Stepper({ step }: { step: Step }) {
 
 // DatabaseStep — calls /_/setup/detect on mount, lets the operator
 // pick a driver, exposes Probe + Save controls.
-function DatabaseStep({ onContinue }: { onContinue: () => void }) {
+function DatabaseStep({ onContinue, t }: { onContinue: () => void; t: Translator["t"] }) {
   const [detect, setDetect] = useState<DetectResponse | null>(null);
   const [detectErr, setDetectErr] = useState<string | null>(null);
 
@@ -225,6 +242,8 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
   // so a "fix the database name → re-probe" flow doesn't leak the
   // acknowledgement from the previous (dangerous) target.
   const [proceedAnyway, setProceedAnyway] = useState(false);
+
+  const dbStepSchema = useMemo(() => makeDbStepSchema(t), [t]);
 
   // Default to "external_dsn" with an empty string — overridden after
   // detect if local sockets exist (preferred for ops on their own
@@ -273,14 +292,14 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
       .catch((e: unknown) => {
         if (!cancelled) {
           setDetectErr(
-            e instanceof Error ? e.message : "Failed to detect local Postgres.",
+            e instanceof Error ? e.message : t("bootstrap.err.detectFailed"),
           );
         }
       });
     return () => {
       cancelled = true;
     };
-     
+
   }, []);
 
   // The backend payload predates the discriminated union: it expects a
@@ -377,13 +396,13 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
       if (r.status === 400) {
         const m =
           (data as { error?: { message?: string } }).error?.message ??
-          "Validation error.";
+          t("bootstrap.err.validation");
         setErr(m);
       } else {
         setProbe(data as ProbeResponse);
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Probe failed.");
+      setErr(e instanceof Error ? e.message : t("bootstrap.err.probeFailed"));
     } finally {
       setBusy(null);
     }
@@ -431,7 +450,7 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
       if (r.status === 400) {
         const m =
           (data as { error?: { message?: string } }).error?.message ??
-          "Validation error.";
+          t("bootstrap.err.validation");
         setErr(m);
       } else {
         const saveData = data as SaveResponse;
@@ -447,7 +466,7 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
         }
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Save failed.");
+      setErr(e instanceof Error ? e.message : t("bootstrap.err.saveFailed"));
     } finally {
       setBusy(null);
     }
@@ -489,22 +508,19 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
           <header className="space-y-1">
-            <h1 className="text-xl font-semibold">Welcome to Railbase</h1>
+            <h1 className="text-xl font-semibold">{t("bootstrap.welcomeTitle")}</h1>
             <p className="text-sm text-muted-foreground">
-              Choose where to store your data. You can change this later by
-              editing{" "}
+              {t("bootstrap.welcomeDescPart1")}{" "}
               <code className="font-mono px-1 py-0.5 bg-muted rounded">
                 &lt;dataDir&gt;/.dsn
               </code>
-              .
+              {t("bootstrap.welcomeDescPart2")}
             </p>
           </header>
 
           {detect?.configured ? (
             <div className="text-sm bg-primary/10 border border-primary/40 text-primary rounded px-3 py-2">
-              Database is already configured — running against your external
-              PostgreSQL. You can re-run the wizard to change targets, or skip
-              straight to{" "}
+              {t("bootstrap.configured.part1")}{" "}
               <Button
                 type="button"
                 variant="link"
@@ -512,9 +528,9 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
                 onClick={onContinue}
                 className="h-auto p-0 underline font-medium"
               >
-                admin setup
+                {t("bootstrap.configured.linkLabel")}
               </Button>
-              .
+              {t("bootstrap.configured.part2")}
             </div>
           ) : null}
           {detectErr ? (
@@ -528,7 +544,7 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
             name="driver"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Database driver</FormLabel>
+                <FormLabel>{t("bootstrap.driverLabel")}</FormLabel>
                 <FormControl>
                   <RadioGroup
                     value={field.value}
@@ -547,26 +563,29 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
                       <DriverRadio
                         value="embedded"
                         checked={field.value === "embedded"}
-                        title="Use embedded PostgreSQL"
-                        subtitle="Bundled Postgres for local development — already running, no configuration needed"
+                        title={t("bootstrap.driver.embedded.title")}
+                        subtitle={t("bootstrap.driver.embedded.subtitle")}
                       />
                     ) : null}
                     <DriverRadio
                       value="local_socket"
                       checked={field.value === "local_socket"}
                       disabled={!hasSockets}
-                      title="Use my local PostgreSQL"
+                      title={t("bootstrap.driver.localSocket.title")}
                       subtitle={
                         hasSockets
-                          ? `Detected ${detect?.sockets.length} socket${detect && detect.sockets.length === 1 ? "" : "s"}`
-                          : "No local PostgreSQL detected on this machine"
+                          ? t("bootstrap.driver.localSocket.detected", {
+                              count: detect?.sockets.length ?? 0,
+                              s: detect && detect.sockets.length === 1 ? "" : "s",
+                            })
+                          : t("bootstrap.driver.localSocket.notDetected")
                       }
                     />
                     <DriverRadio
                       value="external_dsn"
                       checked={field.value === "external_dsn"}
-                      title="Use an external PostgreSQL"
-                      subtitle="Managed Postgres (Supabase, Neon, RDS, …) or a remote host"
+                      title={t("bootstrap.driver.external.title")}
+                      subtitle={t("bootstrap.driver.external.subtitle")}
                     />
                   </RadioGroup>
                 </FormControl>
@@ -582,7 +601,7 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
                 name="socket_dir"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Socket</FormLabel>
+                    <FormLabel>{t("bootstrap.socket")}</FormLabel>
                     <FormControl>
                       <RadioGroup
                         value={field.value}
@@ -614,12 +633,12 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
                 name="username"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Username</FormLabel>
+                    <FormLabel>{t("bootstrap.username")}</FormLabel>
                     <FormControl>
                       <Input
                         type="text"
                         autoComplete="username"
-                        placeholder="Postgres role (often your OS user — not an email)"
+                        placeholder={t("bootstrap.usernamePlaceholder")}
                         value={field.value ?? ""}
                         onInput={(e) =>
                           field.onChange(e.currentTarget.value)
@@ -638,7 +657,7 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
                 name="password"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Password (optional)</FormLabel>
+                    <FormLabel>{t("bootstrap.passwordOptional")}</FormLabel>
                     <FormControl>
                       <Input
                         type="password"
@@ -653,8 +672,7 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
                       />
                     </FormControl>
                     <FormDescription>
-                      Leave empty for peer/trust auth (local sockets often
-                      don&apos;t need a password).
+                      {t("bootstrap.passwordHelp")}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -666,7 +684,7 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
                   name="database"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Database</FormLabel>
+                      <FormLabel>{t("bootstrap.database")}</FormLabel>
                       <FormControl>
                         <Input
                           type="text"
@@ -719,7 +737,7 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
                           onCheckedChange={(v) => field.onChange(v === true)}
                         />
                       </FormControl>
-                      Create the database if it doesn&apos;t exist
+                      {t("bootstrap.createDbIfMissing")}
                     </label>
                     <FormMessage />
                   </FormItem>
@@ -748,8 +766,8 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
                     />
                   </FormControl>
                   <FormDescription>
-                    Must start with{" "}
-                    <code className="font-mono">postgres://</code> or
+                    {t("bootstrap.dsnHelpPart1")}{" "}
+                    <code className="font-mono">postgres://</code> {t("bootstrap.dsnHelpOr")}
                     <code className="font-mono ml-1">postgresql://</code>.
                   </FormDescription>
                   <FormMessage />
@@ -758,16 +776,17 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
             />
           ) : null}
 
-          {probe ? <ProbeResult probe={probe} /> : null}
+          {probe ? <ProbeResult probe={probe} t={t} /> : null}
           {foreignDb ? (
             <ForeignDbWarning
               count={probe?.public_table_count ?? 0}
               proceedAnyway={proceedAnyway}
               onToggle={setProceedAnyway}
+              t={t}
             />
           ) : null}
-          {existingRailbase ? <ExistingRailbaseNotice /> : null}
-          {save ? <SaveResult save={save} /> : null}
+          {existingRailbase ? <ExistingRailbaseNotice t={t} /> : null}
+          {save ? <SaveResult save={save} t={t} /> : null}
           {err ? (
             <p className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded px-3 py-2">
               {err}
@@ -784,7 +803,7 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
                 disabled={busy !== null || save?.ok === true}
                 onClick={onProbe}
               >
-                {busy === "probe" ? "Probing…" : "Probe connection"}
+                {busy === "probe" ? t("bootstrap.probing") : t("bootstrap.probeConnection")}
               </Button>
             ) : null}
             <Button
@@ -792,15 +811,15 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
               disabled={busy !== null || save?.ok === true || saveLocked}
               title={
                 saveLocked
-                  ? "Confirm the warning above before saving."
+                  ? t("bootstrap.saveLockedTitle")
                   : undefined
               }
             >
               {busy === "save"
-                ? "Saving…"
+                ? t("bootstrap.saving")
                 : driver === "embedded"
-                  ? "Continue with embedded"
-                  : "Save and restart later"}
+                  ? t("bootstrap.continueEmbedded")
+                  : t("bootstrap.saveAndRestart")}
             </Button>
             {/*
               Once save succeeded, the new DSN is on disk but the current
@@ -820,12 +839,10 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
             <div className="mt-3 rounded border border-primary/40 bg-primary/10 px-3 py-3 text-sm text-primary">
               <strong className="block mb-1 flex items-center gap-2">
                 <span className="inline-block h-3 w-3 rounded-full bg-primary animate-pulse" />
-                Reloading on your new database…
+                {t("bootstrap.reloadingTitle")}
               </strong>
               <span className="block">
-                The server is applying migrations and restarting in-place.
-                This page will refresh automatically once it&apos;s ready — no
-                terminal commands needed.
+                {t("bootstrap.reloadingDesc")}
               </span>
             </div>
           ) : null}
@@ -836,11 +853,10 @@ function DatabaseStep({ onContinue }: { onContinue: () => void }) {
             // from a normal-boot wizard re-run where the chan is nil).
             <div className="mt-3 rounded border border-input bg-muted px-3 py-3 text-sm text-foreground">
               <strong className="block mb-1">
-                Restart railbase to continue.
+                {t("bootstrap.restartTitle")}
               </strong>
               <span className="block">
-                The configuration is saved. Re-run the process to pick up the
-                new DSN.
+                {t("bootstrap.restartDesc")}
               </span>
               <code className="mt-2 block whitespace-pre rounded bg-muted px-2 py-1 text-xs text-foreground">
                 {`# Ctrl-C in the terminal, then:\n./railbase serve`}
@@ -926,32 +942,31 @@ function ForeignDbWarning({
   count,
   proceedAnyway,
   onToggle,
+  t,
 }: {
   count: number;
   proceedAnyway: boolean;
   onToggle: (v: boolean) => void;
+  t: Translator["t"];
 }) {
   return (
     <div className="text-sm bg-muted border border-input text-foreground rounded px-3 py-3 space-y-2">
-      <p className="font-medium">This database is not empty.</p>
+      <p className="font-medium">{t("bootstrap.foreignDb.title")}</p>
       <p className="text-xs">
-        Found <strong>{count}</strong> table{count === 1 ? "" : "s"} in the{" "}
-        <code className="font-mono">public</code> schema, but none of them
-        is a Railbase marker. Railbase expects either an empty database
-        or an existing Railbase instance — saving now would install
-        service tables and Postgres extensions alongside another app&apos;s
-        data.
+        {t("bootstrap.foreignDb.foundPart1")} <strong>{count}</strong>{" "}
+        {t(count === 1 ? "bootstrap.foreignDb.tableOne" : "bootstrap.foreignDb.tableMany")}{" "}
+        {t("bootstrap.foreignDb.foundPart2")}{" "}
+        <code className="font-mono">public</code> {t("bootstrap.foreignDb.foundPart3")}
       </p>
       <p className="text-xs">
-        If this is intentional (e.g. you&apos;re co-locating Railbase with
-        another app in the same DB), tick the box to confirm.
+        {t("bootstrap.foreignDb.intentional")}
       </p>
       <label className="inline-flex items-center gap-2 text-sm cursor-pointer pt-1">
         <Checkbox
           checked={proceedAnyway}
           onCheckedChange={(v) => onToggle(v === true)}
         />
-        I understand — install Railbase alongside the existing tables.
+        {t("bootstrap.foreignDb.confirm")}
       </label>
     </div>
   );
@@ -961,20 +976,19 @@ function ForeignDbWarning({
 // the `_migrations` marker, confirming the operator is reconnecting to
 // an existing Railbase install (e.g. after a restore or a re-deploy).
 // Pure information; doesn't gate the Save button.
-function ExistingRailbaseNotice() {
+function ExistingRailbaseNotice({ t }: { t: Translator["t"] }) {
   return (
     <div className="text-sm bg-primary/10 border border-primary/40 text-primary rounded px-3 py-2">
-      <p className="font-medium">Existing Railbase instance detected.</p>
+      <p className="font-medium">{t("bootstrap.existing.title")}</p>
       <p className="text-xs">
-        Found the <code className="font-mono">_migrations</code> marker —
-        this database already belongs to Railbase. Saving will reconnect
-        the running process to it and apply any pending migrations.
+        {t("bootstrap.existing.descPart1")}{" "}
+        <code className="font-mono">_migrations</code> {t("bootstrap.existing.descPart2")}
       </p>
     </div>
   );
 }
 
-function ProbeResult({ probe }: { probe: ProbeResponse }) {
+function ProbeResult({ probe, t }: { probe: ProbeResponse; t: Translator["t"] }) {
   if (probe.ok && probe.will_create_db) {
     // Target DB doesn't exist yet, but "Create database" is ticked and
     // the probe verified the server + credentials + CREATEDB privilege
@@ -982,7 +996,7 @@ function ProbeResult({ probe }: { probe: ProbeResponse }) {
     // the database is created when the operator saves.
     return (
       <div className="text-sm bg-muted border border-input text-foreground rounded px-3 py-2 space-y-1">
-        <p className="font-medium">Database will be created on save.</p>
+        <p className="font-medium">{t("bootstrap.probe.willCreate")}</p>
         {probe.hint ? <p className="text-xs">{probe.hint}</p> : null}
         {probe.version ? (
           <p className="font-mono text-xs">{probe.version}</p>
@@ -993,7 +1007,7 @@ function ProbeResult({ probe }: { probe: ProbeResponse }) {
   if (probe.ok) {
     return (
       <div className="text-sm bg-primary/10 border border-primary/40 text-primary rounded px-3 py-2 space-y-1">
-        <p className="font-medium">Connection OK.</p>
+        <p className="font-medium">{t("bootstrap.probe.ok")}</p>
         {probe.version ? (
           <p className="font-mono text-xs">{probe.version}</p>
         ) : null}
@@ -1007,30 +1021,29 @@ function ProbeResult({ probe }: { probe: ProbeResponse }) {
   }
   return (
     <div className="text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded px-3 py-2 space-y-1">
-      <p className="font-medium">Connection failed.</p>
+      <p className="font-medium">{t("bootstrap.probe.failed")}</p>
       {probe.error ? <p className="font-mono text-xs">{probe.error}</p> : null}
-      {probe.hint ? <p className="text-xs">Hint: {probe.hint}</p> : null}
+      {probe.hint ? <p className="text-xs">{t("bootstrap.probe.hintPrefix")} {probe.hint}</p> : null}
     </div>
   );
 }
 
-function SaveResult({ save }: { save: SaveResponse }) {
+function SaveResult({ save, t }: { save: SaveResponse; t: Translator["t"] }) {
   if (!save.ok) {
     return (
       <div className="text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded px-3 py-2">
-        <p className="font-medium">Save failed.</p>
+        <p className="font-medium">{t("bootstrap.save.failed")}</p>
         <p className="text-xs">{save.note}</p>
       </div>
     );
   }
   return (
     <div className="text-sm bg-primary/10 border border-primary/40 text-primary rounded px-3 py-2 space-y-1">
-      <p className="font-medium">Configuration saved.</p>
+      <p className="font-medium">{t("bootstrap.save.ok")}</p>
       <p className="text-xs">{save.note}</p>
       {save.restart_required ? (
         <p className="text-xs">
-          After saving, restart railbase. The next boot will use your
-          PostgreSQL instead of embedded.
+          {t("bootstrap.save.afterRestart")}
         </p>
       ) : null}
     </div>
@@ -1040,11 +1053,13 @@ function SaveResult({ save }: { save: SaveResponse }) {
 // AdminStep — second wizard step, owns its own useForm. Submits to
 // /_bootstrap and on success seeds the session token, refreshes the
 // auth context, and redirects to /.
-function AdminStep({ onBack }: { onBack: () => void }) {
+function AdminStep({ onBack, t }: { onBack: () => void; t: Translator["t"] }) {
   const { refresh } = useAuth();
   const [, navigate] = useLocation();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  const adminStepSchema = useMemo(() => makeAdminStepSchema(t), [t]);
 
   const form = useForm<AdminStepValues>({
     resolver: zodResolver(adminStepSchema),
@@ -1071,7 +1086,7 @@ function AdminStep({ onBack }: { onBack: () => void }) {
       await refresh();
       navigate("/");
     } catch (e) {
-      setErr(isAPIError(e) ? e.message : "Bootstrap failed.");
+      setErr(isAPIError(e) ? e.message : t("bootstrap.adminStep.failed"));
     } finally {
       setBusy(false);
     }
@@ -1082,13 +1097,13 @@ function AdminStep({ onBack }: { onBack: () => void }) {
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
           <header className="space-y-1">
-            <h1 className="text-xl font-semibold">Create the first admin</h1>
+            <h1 className="text-xl font-semibold">{t("bootstrap.adminStep.title")}</h1>
             <p className="text-sm text-muted-foreground">
-              Subsequent admins are created via{" "}
+              {t("bootstrap.adminStep.descPart1")}{" "}
               <code className="font-mono px-1 py-0.5 bg-muted rounded">
                 railbase admin create
               </code>
-              .
+              {t("bootstrap.adminStep.descPart2")}
             </p>
           </header>
 
@@ -1097,7 +1112,7 @@ function AdminStep({ onBack }: { onBack: () => void }) {
             name="email"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Email</FormLabel>
+                <FormLabel>{t("login.email")}</FormLabel>
                 <FormControl>
                   <Input
                     type="email"
@@ -1120,7 +1135,7 @@ function AdminStep({ onBack }: { onBack: () => void }) {
             name="password"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Password</FormLabel>
+                <FormLabel>{t("login.password")}</FormLabel>
                 <FormControl>
                   <PasswordInput
                     showGenerate
@@ -1141,7 +1156,7 @@ function AdminStep({ onBack }: { onBack: () => void }) {
                   />
                 </FormControl>
                 <FormDescription>
-                  Minimum 8 characters. Use the dice to generate a strong one.
+                  {t("bootstrap.adminStep.passwordHelp")}
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -1153,7 +1168,7 @@ function AdminStep({ onBack }: { onBack: () => void }) {
             name="confirm"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Confirm password</FormLabel>
+                <FormLabel>{t("passwordReset.confirmPassword")}</FormLabel>
                 <FormControl>
                   <PasswordInput
                     autoComplete="new-password"
@@ -1178,13 +1193,13 @@ function AdminStep({ onBack }: { onBack: () => void }) {
 
           <div className="flex items-center gap-2">
             <Button type="button" variant="outline" onClick={onBack}>
-              ← Back
+              {t("bootstrap.back")}
             </Button>
             <Button
               type="submit"
               disabled={busy || form.formState.isSubmitting}
             >
-              {busy ? "Creating…" : "Create admin & sign in"}
+              {busy ? t("bootstrap.adminStep.creating") : t("bootstrap.adminStep.submit")}
             </Button>
           </div>
         </form>

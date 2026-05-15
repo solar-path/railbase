@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import type { CollectionSpec } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 import { Badge } from "@/lib/ui/badge.ui";
 import { Button } from "@/lib/ui/button.ui";
 import { FileText, Folder } from "@/lib/ui/icons";
@@ -24,6 +25,7 @@ import {
 // address bar stays honest.
 
 export function SchemaScreen() {
+  const { t } = useT();
   const [, navigate] = useLocation();
   const [newMatch] = useRoute("/collections/new");
   const [editMatch, editParams] = useRoute("/collections/:name/edit");
@@ -51,71 +53,20 @@ export function SchemaScreen() {
   const collections = q.data?.collections ?? [];
   const editableSet = new Set(q.data?.editable ?? []);
 
-  const columns: ColumnDef<CollectionSpec>[] = [
-    {
-      id: "name",
-      header: "name",
-      accessor: "name",
-      sortable: true,
-      cell: (c) => <span className="font-mono font-medium">{c.name}</span>,
-    },
-    {
-      id: "kind",
-      header: "kind",
-      cell: (c) => (
-        <span className="flex items-center gap-1">
-          {c.auth ? <Badge variant="secondary">auth</Badge> : null}
-          {c.tenant ? <Badge variant="outline">tenant</Badge> : null}
-          {!c.auth && !c.tenant ? (
-            <span className="text-muted-foreground text-xs">—</span>
-          ) : null}
-        </span>
-      ),
-    },
-    {
-      id: "fields",
-      header: "fields",
-      align: "right",
-      accessor: (c) => c.fields.length,
-      sortable: true,
-      cell: (c) => (
-        <span className="text-muted-foreground tabular-nums">
-          {c.fields.length}
-        </span>
-      ),
-    },
-    {
-      id: "source",
-      header: "source",
-      accessor: (c) => (editableSet.has(c.name) ? "admin-managed" : "code-defined"),
-      cell: (c) =>
-        editableSet.has(c.name) ? (
-          <Badge variant="outline">admin-managed</Badge>
-        ) : (
-          <span className="text-muted-foreground text-xs">code-defined</span>
-        ),
-    },
-  ];
+  const columns = buildSchemaColumns(t, editableSet);
 
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Schemas"
-        description={
-          <>
-            {collections.length} collection
-            {collections.length === 1 ? "" : "s"} registered. Admin-managed
-            collections can be edited here; code-defined ones live in your
-            app&apos;s source.
-          </>
-        }
+        title={t("schema.title")}
+        description={t("schema.description", { count: collections.length })}
       />
 
       <AdminPage.Body>
         {q.isError ? (
           <AdminPage.Error
             message={
-              q.error instanceof Error ? q.error.message : "Failed to load schema."
+              q.error instanceof Error ? q.error.message : t("schema.loadFailed")
             }
             retry={() => void q.refetch()}
           />
@@ -126,25 +77,25 @@ export function SchemaScreen() {
             loading={q.isLoading}
             rowKey="name"
             search
-            searchPlaceholder="Search collections…"
-            emptyMessage="No collections yet. Click “+ New collection” to create one."
+            searchPlaceholder={t("schema.searchPlaceholder")}
+            emptyMessage={t("schema.empty")}
             toolbarSlot={
               <Button size="sm" onClick={() => setTarget("new")}>
-                + New collection
+                {t("schema.action.newCollection")}
               </Button>
             }
             rowActions={(c) => [
               ...(editableSet.has(c.name)
                 ? [
                     {
-                      label: "Edit schema",
+                      label: t("schema.action.editSchema"),
                       icon: <FileText className="size-4" />,
                       onSelect: () => setTarget(c.name),
                     },
                   ]
                 : []),
               {
-                label: "View records",
+                label: t("schema.action.viewRecords"),
                 icon: <Folder className="size-4" />,
                 onSelect: () => navigate(`/data/${c.name}`),
               },
@@ -162,4 +113,57 @@ export function SchemaScreen() {
       />
     </AdminPage>
   );
+}
+
+function buildSchemaColumns(
+  t: Translator["t"],
+  editableSet: Set<string>,
+): ColumnDef<CollectionSpec>[] {
+  return [
+    {
+      id: "name",
+      header: t("schema.col.name"),
+      accessor: "name",
+      sortable: true,
+      cell: (c) => <span className="font-mono font-medium">{c.name}</span>,
+    },
+    {
+      id: "kind",
+      header: t("schema.col.kind"),
+      cell: (c) => (
+        <span className="flex items-center gap-1">
+          {c.auth ? <Badge variant="secondary">{t("schema.kind.auth")}</Badge> : null}
+          {c.tenant ? <Badge variant="outline">{t("schema.kind.tenant")}</Badge> : null}
+          {!c.auth && !c.tenant ? (
+            <span className="text-muted-foreground text-xs">—</span>
+          ) : null}
+        </span>
+      ),
+    },
+    {
+      id: "fields",
+      header: t("schema.col.fields"),
+      align: "right",
+      accessor: (c) => c.fields.length,
+      sortable: true,
+      cell: (c) => (
+        <span className="text-muted-foreground tabular-nums">
+          {c.fields.length}
+        </span>
+      ),
+    },
+    {
+      id: "source",
+      header: t("schema.col.source"),
+      accessor: (c) => (editableSet.has(c.name) ? "admin-managed" : "code-defined"),
+      cell: (c) =>
+        editableSet.has(c.name) ? (
+          <Badge variant="outline">{t("schema.source.adminManaged")}</Badge>
+        ) : (
+          <span className="text-muted-foreground text-xs">
+            {t("schema.source.codeDefined")}
+          </span>
+        ),
+    },
+  ];
 }

@@ -6,6 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { adminAPI } from "../api/admin";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 
 // Monaco is huge (~3 MB raw / 600 KB gzip on its own — most of admin's
 // pre-Preact bundle bulk). Lazy-loading it cuts the initial admin bundle
@@ -68,6 +69,7 @@ const NEW_FILE_TEMPLATE = `// $app.onRecordBeforeCreate("collection_name", (e) =
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 export function HooksScreen() {
+  const { t } = useT();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<string | null>(null);
   const [editorValue, setEditorValue] = useState<string>("");
@@ -154,18 +156,18 @@ export function HooksScreen() {
         debounceRef.current = null;
       }
     };
-     
+
   }, [editorValue, selected, savedValue]);
 
   const handleNewFile = useCallback(() => {
     const name = window.prompt(
-      "New hook filename (must end in .js; nested paths like sub/foo.js are fine):",
+      t("hooks.prompt.newFile"),
       "on_record_create.js",
     );
     if (!name) return;
     const trimmed = name.trim();
     if (!trimmed.endsWith(".js")) {
-      window.alert("Filename must end in .js");
+      window.alert(t("hooks.alert.mustEndJs"));
       return;
     }
     // Pre-flight check: refuse if already exists. The PUT would happily
@@ -173,7 +175,7 @@ export function HooksScreen() {
     // as distinct actions.
     const exists = (listQ.data?.items ?? []).some((f) => f.path === trimmed);
     if (exists) {
-      if (!window.confirm(`File "${trimmed}" already exists — open it instead?`)) {
+      if (!window.confirm(t("hooks.confirm.exists", { name: trimmed }))) {
         return;
       }
       setSelected(trimmed);
@@ -189,7 +191,7 @@ export function HooksScreen() {
         },
       },
     );
-  }, [listQ.data, saveM]);
+  }, [listQ.data, saveM, t]);
 
   const handleSelect = useCallback(
     (path: string) => {
@@ -212,19 +214,19 @@ export function HooksScreen() {
 
   const handleDelete = useCallback(
     (path: string) => {
-      if (!window.confirm(`Delete hook "${path}"? This cannot be undone.`)) return;
+      if (!window.confirm(t("hooks.confirm.delete", { name: path }))) return;
       deleteM.mutate(path);
     },
-    [deleteM],
+    [deleteM, t],
   );
 
   const handleReload = useCallback(() => {
     if (selected === null) return;
     if (editorValue !== savedValue) {
-      if (!window.confirm("Discard unsaved changes and reload from disk?")) return;
+      if (!window.confirm(t("hooks.confirm.discard"))) return;
     }
     void qc.invalidateQueries({ queryKey: ["hooks-file", selected] });
-  }, [selected, editorValue, savedValue, qc]);
+  }, [selected, editorValue, savedValue, qc, t]);
 
   const handleFormat = useCallback(() => {
     const ed = monacoRef.current;
@@ -243,7 +245,7 @@ export function HooksScreen() {
     listQ.error instanceof APIError && listQ.error.code === "unavailable";
 
   if (isUnavailable) {
-    return <UnavailableState />;
+    return <UnavailableState tr={t} />;
   }
 
   return (
@@ -252,10 +254,10 @@ export function HooksScreen() {
       <div className="px-6 pt-4">
         <header className="flex items-baseline justify-between">
           <div>
-            <h1 className="text-2xl font-semibold">Hooks</h1>
+            <h1 className="text-2xl font-semibold">{t("hooks.title")}</h1>
             <p className="text-sm text-muted-foreground">
-              JavaScript hook files in <span className="font-mono">pb_hooks/</span>.
-              Changes hot-reload within 1s.
+              {t("hooks.descriptionPrefix")} <span className="font-mono">pb_hooks/</span>.
+              {" "}{t("hooks.descriptionSuffix")}
             </p>
           </div>
         </header>
@@ -263,6 +265,7 @@ export function HooksScreen() {
 
       <div className="flex flex-1 min-h-0 border-t">
         <FileTree
+          tr={t}
           items={listQ.data?.items ?? []}
           loading={listQ.isLoading}
           selected={selected}
@@ -272,10 +275,11 @@ export function HooksScreen() {
         />
         <div className="flex-1 min-w-0 flex flex-col">
           {selected === null ? (
-            <EmptyEditorState />
+            <EmptyEditorState tr={t} />
           ) : (
             <>
               <EditorToolbar
+                tr={t}
                 filename={selected}
                 status={status}
                 statusDetail={statusDetail}
@@ -286,12 +290,12 @@ export function HooksScreen() {
               />
               <div className="flex-1 min-h-0">
                 {fileQ.isLoading ? (
-                  <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+                  <div className="p-6 text-sm text-muted-foreground">{t("common.loading")}</div>
                 ) : (
                   <Suspense
                     fallback={
                       <div className="p-6 text-sm text-muted-foreground">
-                        Loading editor…
+                        {t("hooks.loadingEditor")}
                       </div>
                     }
                   >
@@ -354,40 +358,46 @@ const DEFAULT_RECORD_JSON = `{
   "title": "Sample record"
 }`;
 
-// zod schema for the hook test-runner form. recordJson stays as a
-// string in the form (textarea-friendly) and is parsed on submit via
-// `.refine` — that gives us "object-shaped JSON or rejection" in one
-// step without splitting validation across paths.
-const testPanelSchema = z.object({
-  event: z.enum([
-    "BeforeCreate",
-    "AfterCreate",
-    "BeforeUpdate",
-    "AfterUpdate",
-    "BeforeDelete",
-    "AfterDelete",
-  ]),
-  collection: z.string(), // empty = wildcard match, ok
-  recordJson: z
-    .string()
-    .min(1, "Record JSON required")
-    .refine(
-      (s) => {
-        try {
-          const parsed = JSON.parse(s);
-          return (
-            typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-          );
-        } catch {
-          return false;
-        }
-      },
-      { message: "Must be a valid JSON object" },
-    ),
-});
-type TestPanelValues = z.infer<typeof testPanelSchema>;
+// zod schema factory — built with the translator so error messages
+// follow the active locale. We rebuild on language change via the
+// useMemo in TestPanel.
+function buildTestPanelSchema(t: Translator["t"]) {
+  return z.object({
+    event: z.enum([
+      "BeforeCreate",
+      "AfterCreate",
+      "BeforeUpdate",
+      "AfterUpdate",
+      "BeforeDelete",
+      "AfterDelete",
+    ]),
+    collection: z.string(), // empty = wildcard match, ok
+    recordJson: z
+      .string()
+      .min(1, t("hooks.testPanel.error.recordRequired"))
+      .refine(
+        (s) => {
+          try {
+            const parsed = JSON.parse(s);
+            return (
+              typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+            );
+          } catch {
+            return false;
+          }
+        },
+        { message: t("hooks.testPanel.error.recordObject") },
+      ),
+  });
+}
+type TestPanelValues = {
+  event: HookEventName;
+  collection: string;
+  recordJson: string;
+};
 
 function TestPanel() {
+  const { t } = useT();
   // Transient UI state — NOT in the form schema. expanded toggles the
   // collapsible; result/requestError surface the server response.
   // Form values (event/collection/recordJson) live in RHF.
@@ -395,8 +405,9 @@ function TestPanel() {
   const [result, setResult] = useState<HookTestRunResult | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
 
+  const schema = useMemo(() => buildTestPanelSchema(t), [t]);
   const form = useForm<TestPanelValues>({
-    resolver: zodResolver(testPanelSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       event: "BeforeCreate",
       collection: "",
@@ -433,16 +444,16 @@ function TestPanel() {
     <Collapsible open={expanded} onOpenChange={setExpanded} className="border-t bg-muted">
       <div className="flex items-center justify-between px-4 py-2 border-b">
         <CollapsibleTrigger className="text-xs text-foreground hover:text-foreground flex items-center gap-1">
-          <span aria-hidden>{expanded ? "▾" : "▸"}</span> Test panel
+          <span aria-hidden>{expanded ? "▾" : "▸"}</span> {t("hooks.testPanel.title")}
           {!expanded ? (
             <span className="text-muted-foreground ml-2">
-              Fire a hook against a synthetic record (no DB writes)
+              {t("hooks.testPanel.subtitle")}
             </span>
           ) : null}
         </CollapsibleTrigger>
         {expanded ? (
           <div className="text-[11px] text-muted-foreground">
-            Fires the runtime against a synthetic record. No DB side effects.
+            {t("hooks.testPanel.note")}
           </div>
         ) : null}
       </div>
@@ -465,7 +476,7 @@ function TestPanel() {
                 name="event"
                 render={({ field }) => (
                   <FormItem className="flex items-center gap-2 space-y-0">
-                    <FormLabel className="text-xs w-20 m-0">Event</FormLabel>
+                    <FormLabel className="text-xs w-20 m-0">{t("hooks.testPanel.label.event")}</FormLabel>
                     <FormControl>
                       <select
                         {...field}
@@ -486,11 +497,11 @@ function TestPanel() {
                 name="collection"
                 render={({ field }) => (
                   <FormItem className="flex items-center gap-2 space-y-0">
-                    <FormLabel className="text-xs w-20 m-0">Collection</FormLabel>
+                    <FormLabel className="text-xs w-20 m-0">{t("hooks.testPanel.label.collection")}</FormLabel>
                     <FormControl>
                       <Input
                         type="text"
-                        placeholder='"posts" or empty for wildcard'
+                        placeholder={t("hooks.testPanel.placeholder.collection")}
                         className="flex-1 h-8 font-mono text-xs"
                         {...field}
                       />
@@ -503,7 +514,7 @@ function TestPanel() {
                 name="recordJson"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="text-xs block mb-1">Record JSON</FormLabel>
+                    <FormLabel className="text-xs block mb-1">{t("hooks.testPanel.label.recordJson")}</FormLabel>
                     <FormControl>
                       <Textarea
                         rows={8}
@@ -522,7 +533,7 @@ function TestPanel() {
                   size="sm"
                   disabled={runM.isPending || form.formState.isSubmitting}
                 >
-                  {runM.isPending ? "Running…" : "Run test"}
+                  {runM.isPending ? t("hooks.testPanel.running") : t("hooks.testPanel.run")}
                 </Button>
                 {requestError && (
                   <span className="text-[11px] text-destructive">{requestError}</span>
@@ -535,14 +546,14 @@ function TestPanel() {
           <div className="w-[50%] p-3 overflow-auto">
             {result === null && !runM.isPending && (
               <div className="text-xs text-muted-foreground italic">
-                No run yet. Configure the inputs on the left and click{" "}
-                <span className="font-mono">Run test</span>.
+                {t("hooks.testPanel.noRunPrefix")}{" "}
+                <span className="font-mono">{t("hooks.testPanel.run")}</span>.
               </div>
             )}
             {runM.isPending && (
-              <div className="text-xs text-muted-foreground">Firing handler…</div>
+              <div className="text-xs text-muted-foreground">{t("hooks.testPanel.firing")}</div>
             )}
-            {result !== null && <TestResultPanel result={result} />}
+            {result !== null && <TestResultPanel result={result} tr={t} />}
           </div>
         </div>
       </CollapsibleContent>
@@ -550,7 +561,7 @@ function TestPanel() {
   );
 }
 
-function TestResultPanel({ result }: { result: HookTestRunResult }) {
+function TestResultPanel({ result, tr }: { result: HookTestRunResult; tr: Translator["t"] }) {
   // Map outcome → Badge tone. We DON'T use kit Badge variants here
   // because the outcome palette (ok / rejected / error) doesn't map
   // 1:1 onto default / secondary / destructive — emerald for "ok",
@@ -575,7 +586,7 @@ function TestResultPanel({ result }: { result: HookTestRunResult }) {
           {result.outcome}
         </span>
         <span className="text-[11px] text-muted-foreground">
-          {result.duration_ms} ms
+          {tr("hooks.testPanel.durationMs", { ms: result.duration_ms })}
         </span>
       </div>
       {result.error && (
@@ -585,10 +596,10 @@ function TestResultPanel({ result }: { result: HookTestRunResult }) {
       )}
       <div>
         <div className="text-[11px] font-medium text-foreground mb-1">
-          console ({result.console.length})
+          {tr("hooks.testPanel.consoleCount", { count: result.console.length })}
         </div>
         {result.console.length === 0 ? (
-          <div className="text-[11px] text-muted-foreground italic">(no output)</div>
+          <div className="text-[11px] text-muted-foreground italic">{tr("hooks.testPanel.noOutput")}</div>
         ) : (
           <div className="rounded border border-input bg-foreground text-background p-2 font-mono text-[11px] space-y-0.5 max-h-40 overflow-auto">
             {result.console.map((line, i) => (
@@ -610,6 +621,7 @@ function TestResultPanel({ result }: { result: HookTestRunResult }) {
 }
 
 function FileTree({
+  tr,
   items,
   loading,
   selected,
@@ -617,6 +629,7 @@ function FileTree({
   onNew,
   onDelete,
 }: {
+  tr: Translator["t"];
   items: HooksFile[];
   loading: boolean;
   selected: string | null;
@@ -646,18 +659,18 @@ function FileTree({
           variant="outline"
           size="sm"
           onClick={onNew}
-          title="New hook file"
+          title={tr("hooks.tree.newTitle")}
           className="h-6 px-1.5 text-xs"
         >
-          + new
+          {tr("hooks.tree.new")}
         </Button>
       </div>
       <div className="flex-1 overflow-auto py-1">
         {loading ? (
-          <div className="px-3 py-2 text-xs text-muted-foreground">Loading…</div>
+          <div className="px-3 py-2 text-xs text-muted-foreground">{tr("common.loading")}</div>
         ) : rendered.length === 0 ? (
           <div className="px-3 py-2 text-xs text-muted-foreground">
-            No hooks yet. Click <span className="font-mono">+ new</span> to create one.
+            {tr("hooks.tree.emptyPrefix")} <span className="font-mono">{tr("hooks.tree.new")}</span> {tr("hooks.tree.emptySuffix")}
           </div>
         ) : (
           rendered.map((f) => {
@@ -687,7 +700,7 @@ function FileTree({
                     e.stopPropagation();
                     onDelete(f.path);
                   }}
-                  title="Delete"
+                  title={tr("hooks.tree.deleteTitle")}
                   className={
                     "opacity-0 group-hover:opacity-100 px-1 text-xs " +
                     (active ? "text-background hover:text-destructive-foreground" : "text-muted-foreground hover:text-destructive")
@@ -705,6 +718,7 @@ function FileTree({
 }
 
 function EditorToolbar({
+  tr,
   filename,
   status,
   statusDetail,
@@ -713,6 +727,7 @@ function EditorToolbar({
   onReload,
   dirty,
 }: {
+  tr: Translator["t"];
   filename: string;
   status: SaveStatus;
   statusDetail: string | null;
@@ -727,7 +742,7 @@ function EditorToolbar({
         <span className="font-mono text-sm text-foreground truncate" title={filename}>
           {filename}
         </span>
-        <StatusPill status={status} pending={pending} detail={statusDetail} dirty={dirty} />
+        <StatusPill tr={tr} status={status} pending={pending} detail={statusDetail} dirty={dirty} />
       </div>
       <div className="flex items-center gap-2">
         <Button
@@ -736,16 +751,16 @@ function EditorToolbar({
           size="sm"
           onClick={onFormat}
         >
-          Format
+          {tr("hooks.toolbar.format")}
         </Button>
         <Button
           type="button"
           variant="outline"
           size="sm"
           onClick={onReload}
-          title="Re-read the file from disk"
+          title={tr("hooks.toolbar.reloadTitle")}
         >
-          Reload from disk
+          {tr("hooks.toolbar.reload")}
         </Button>
       </div>
     </div>
@@ -753,11 +768,13 @@ function EditorToolbar({
 }
 
 function StatusPill({
+  tr,
   status,
   pending,
   detail,
   dirty,
 }: {
+  tr: Translator["t"];
   status: SaveStatus;
   pending: boolean;
   detail: string | null;
@@ -772,7 +789,7 @@ function StatusPill({
         variant="outline"
         className="text-[11px] border-input bg-muted text-foreground"
       >
-        saving…
+        {tr("hooks.status.saving")}
       </Badge>
     );
   }
@@ -783,14 +800,14 @@ function StatusPill({
         title={detail ?? ""}
         className="text-[11px] border-destructive/30 bg-destructive/10 text-destructive"
       >
-        save failed
+        {tr("hooks.status.saveFailed")}
       </Badge>
     );
   }
   if (dirty) {
     return (
       <Badge variant="secondary" className="text-[11px]">
-        unsaved
+        {tr("hooks.status.unsaved")}
       </Badge>
     );
   }
@@ -800,30 +817,28 @@ function StatusPill({
         variant="outline"
         className="text-[11px] border-primary/40 bg-primary/10 text-primary"
       >
-        saved
+        {tr("hooks.status.saved")}
       </Badge>
     );
   }
   return (
     <Badge variant="outline" className="text-[11px] text-muted-foreground">
-      idle
+      {tr("hooks.status.idle")}
     </Badge>
   );
 }
 
-function EmptyEditorState() {
+function EmptyEditorState({ tr }: { tr: Translator["t"] }) {
   return (
     <div className="p-6 max-w-2xl">
       <div className="rounded-lg border-2 border-dashed border-input bg-muted p-6">
-        <div className="text-sm font-medium text-foreground">No file selected.</div>
+        <div className="text-sm font-medium text-foreground">{tr("hooks.empty.title")}</div>
         <div className="text-xs text-muted-foreground mt-2 leading-relaxed">
-          Pick a file from the sidebar, or click{" "}
-          <span className="font-mono">+ new</span> to create one. Files are stored
-          on disk in <span className="font-mono">pb_hooks/</span> and the runtime
-          hot-reloads them within ~1 s of every save.
+          {tr("hooks.empty.line1Prefix")}{" "}
+          <span className="font-mono">{tr("hooks.tree.new")}</span> {tr("hooks.empty.line1Suffix")}
         </div>
         <div className="mt-3 text-xs text-muted-foreground">
-          <div className="font-medium text-foreground mb-1">Available bindings:</div>
+          <div className="font-medium text-foreground mb-1">{tr("hooks.empty.bindings")}</div>
           <ul className="font-mono space-y-0.5 text-[12px]">
             <li>$app.onRecordBeforeCreate("collection", (e) =&gt; …)</li>
             <li>$app.onRecordAfterCreate / Before|AfterUpdate / Before|AfterDelete</li>
@@ -837,25 +852,24 @@ function EmptyEditorState() {
   );
 }
 
-function UnavailableState() {
+function UnavailableState({ tr }: { tr: Translator["t"] }) {
   return (
     <div className="space-y-4">
       <header>
-        <h1 className="text-2xl font-semibold">Hooks</h1>
+        <h1 className="text-2xl font-semibold">{tr("hooks.title")}</h1>
         <p className="text-sm text-muted-foreground">
-          JavaScript hook files in <span className="font-mono">pb_hooks/</span>.
+          {tr("hooks.descriptionPrefix")} <span className="font-mono">pb_hooks/</span>.
         </p>
       </header>
       <div className="rounded-lg border-2 border-dashed border-input bg-muted p-6 max-w-2xl">
         <div className="text-sm font-medium text-foreground">
-          Hooks directory not configured.
+          {tr("hooks.unavailable.title")}
         </div>
         <div className="text-xs text-muted-foreground mt-2 leading-relaxed">
-          The admin API has no <span className="font-mono">HooksDir</span> wired up.
-          Set the <span className="font-mono">RAILBASE_HOOKS_DIR</span> environment
-          variable (or pass <span className="font-mono">--hooks-dir</span> on the
-          CLI) and restart the server. The editor will pick up your
-          <span className="font-mono"> pb_hooks/*.js</span> files on next load.
+          {tr("hooks.unavailable.line1Prefix")} <span className="font-mono">HooksDir</span> {tr("hooks.unavailable.line1Mid")}{" "}
+          <span className="font-mono">RAILBASE_HOOKS_DIR</span> {tr("hooks.unavailable.line1Mid2")}{" "}
+          <span className="font-mono">--hooks-dir</span> {tr("hooks.unavailable.line1Mid3")}
+          <span className="font-mono"> pb_hooks/*.js</span> {tr("hooks.unavailable.line1Suffix")}
         </div>
       </div>
     </div>

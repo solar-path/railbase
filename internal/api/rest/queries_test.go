@@ -157,6 +157,62 @@ func TestCoerceForPG_Number(t *testing.T) {
 	}
 }
 
+// FEEDBACK #28 — Min/Max bounds are enforced at the application
+// layer so violations surface as a typed validation error (cleanly
+// mapped to 422 by the rest handler) BEFORE the DB CHECK
+// constraint fires. The CHECK is still there as defense in depth,
+// but operators see the friendly error first.
+func TestCoerceForPG_NumberBounds(t *testing.T) {
+	c := builder.NewCollection("prices").
+		Field("amount_cents", builder.NewNumber().Int().Min(1).Max(1_000_000))
+	spec := c.Spec()
+
+	// Below Min → reject.
+	if _, err := coerceForPG(spec, "amount_cents", float64(0)); err == nil {
+		t.Error("expected error for value below Min(1)")
+	} else if !strings.Contains(err.Error(), "below Min") {
+		t.Errorf("error should mention Min bound, got: %v", err)
+	}
+
+	// Above Max → reject.
+	if _, err := coerceForPG(spec, "amount_cents", float64(1_000_001)); err == nil {
+		t.Error("expected error for value above Max(1_000_000)")
+	} else if !strings.Contains(err.Error(), "above Max") {
+		t.Errorf("error should mention Max bound, got: %v", err)
+	}
+
+	// Inside bounds → pass.
+	if _, err := coerceForPG(spec, "amount_cents", float64(19_990)); err != nil {
+		t.Errorf("19_990 should be accepted (inside [1,1_000_000]): %v", err)
+	}
+
+	// Boundary values — Min and Max inclusive.
+	if _, err := coerceForPG(spec, "amount_cents", float64(1)); err != nil {
+		t.Errorf("Min boundary (1) should be accepted: %v", err)
+	}
+	if _, err := coerceForPG(spec, "amount_cents", float64(1_000_000)); err != nil {
+		t.Errorf("Max boundary (1_000_000) should be accepted: %v", err)
+	}
+}
+
+// Float bounds (no .Int() on the number field) — same behaviour as
+// integer bounds but using float comparison.
+func TestCoerceForPG_NumberBounds_Float(t *testing.T) {
+	c := builder.NewCollection("temps").
+		Field("celsius", builder.NewNumber().Min(-273.15).Max(1000))
+	spec := c.Spec()
+
+	if _, err := coerceForPG(spec, "celsius", float64(-300)); err == nil {
+		t.Error("expected error for value below Min(-273.15)")
+	}
+	if _, err := coerceForPG(spec, "celsius", float64(1500)); err == nil {
+		t.Error("expected error for value above Max(1000)")
+	}
+	if _, err := coerceForPG(spec, "celsius", float64(20.5)); err != nil {
+		t.Errorf("20.5 should be accepted: %v", err)
+	}
+}
+
 func TestCoerceForPG_MultiSelect(t *testing.T) {
 	spec := samplePostsSpec()
 	v, err := coerceForPG(spec, "tags", []any{"a", "b"})

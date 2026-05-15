@@ -79,6 +79,55 @@ var sqlReservedKeywords = map[string]struct{}{
 	"when": {}, "where": {}, "window": {}, "with": {},
 }
 
+// reservedKeywordRenames maps a tripped reserved word to the rename
+// most embedders end up choosing. Populated for the keywords that
+// appear in domain models often enough to be worth a hand-curated
+// suggestion. Falls through to the generic "_id / _ref suffix" hint
+// for keywords that aren't in this table.
+//
+// Conservative on purpose — we'd rather omit a guess than send the
+// operator down the wrong rename. See FEEDBACK #2: `user` → "customer"
+// was the embedder's pick AND the most common rail/air convention.
+var reservedKeywordRenames = map[string]string{
+	"user":       "customer",   // FEEDBACK #2
+	"order":      "order_ref",  // FEEDBACK #2 (shopper used this verbatim)
+	"group":      "team",
+	"primary":    "primary_id",
+	"references": "ref",
+	"window":     "panel",
+	"with":       "extras",
+	"check":      "verification",
+	"default":    "fallback",
+	"end":        "ends_at",
+	"start":      "starts_at",
+	"select":     "selection",
+	"limit":      "max",
+	"offset":     "skip",
+	"distinct":   "is_distinct",
+	"unique":     "is_unique",
+	"in":         "inside",
+	"on":         "active",
+	"to":         "target",
+	"from":       "source",
+	"null":       "is_null",
+	"true":       "is_true",
+	"false":      "is_false",
+	"column":     "col_name",
+	"table":      "table_name",
+	"create":     "created_by",
+	"grant":      "grant_kind",
+	"role":       "actor_role",
+	"session_user": "session_actor",
+	"current_user": "current_actor",
+}
+
+// suggestRename returns the curated rename for a reserved word, or
+// "" when no curated suggestion exists. Callers fall back to a
+// generic "<name>_id / <name>_ref" hint.
+func suggestRename(reserved string) string {
+	return reservedKeywordRenames[reserved]
+}
+
 // Validate checks invariants that must hold for the migration
 // generator to produce sane SQL. Returns the first error found —
 // callers fix one thing at a time and re-run.
@@ -111,7 +160,24 @@ func (b *CollectionBuilder) Validate() error {
 			return fmt.Errorf("collection %q: field name %q is reserved on auth collections (auto-injected)", s.Name, f.Name)
 		}
 		if _, reserved := sqlReservedKeywords[f.Name]; reserved {
-			return fmt.Errorf("collection %q: field name %q is a SQL reserved keyword — pick a different name", s.Name, f.Name)
+			// FEEDBACK #2 — the bare "pick a different name" error makes
+			// the operator stare at the keyword list to figure out what
+			// to use. Embedders who tried `user` / `order` (the two most
+			// natural domain names in any web app) hit this within minutes.
+			// We don't auto-quote identifiers (the SQL generator would need
+			// blanket re-audit; see ADR), so the next-best DX is to suggest
+			// the common rename for the keyword they hit.
+			suggestion := suggestRename(f.Name)
+			if suggestion != "" {
+				return fmt.Errorf(
+					"collection %q: field name %q is a SQL reserved keyword — try %q instead (or any non-reserved synonym; see docs/03-schema.md#reserved-keywords)",
+					s.Name, f.Name, suggestion,
+				)
+			}
+			return fmt.Errorf(
+				"collection %q: field name %q is a SQL reserved keyword — pick a different name (e.g. add a noun suffix like %q_id or %q_ref; see docs/03-schema.md#reserved-keywords)",
+				s.Name, f.Name, f.Name, f.Name,
+			)
 		}
 		if _, dup := seen[f.Name]; dup {
 			return fmt.Errorf("collection %q: duplicate field name %q", s.Name, f.Name)

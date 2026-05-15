@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { adminAPI } from "../api/admin";
 import type { LogEvent } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
@@ -28,61 +29,64 @@ import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 
 type LevelFilter = "" | "debug" | "info" | "warn" | "error";
 
-const columns: ColumnDef<LogEvent>[] = [
-  {
-    id: "at",
-    header: "at",
-    accessor: "created",
-    cell: (e) => (
-      <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">
-        {e.created}
-      </span>
-    ),
-  },
-  {
-    id: "level",
-    header: "level",
-    accessor: "level",
-    cell: (e) => <Badge variant={levelVariant(e.level)}>{e.level}</Badge>,
-  },
-  {
-    id: "message",
-    header: "message",
-    accessor: "message",
-    cell: (e) => <span className="block max-w-md truncate">{e.message}</span>,
-  },
-  {
-    id: "attrs",
-    header: "attrs",
-    cell: (e) => (
-      <span className="font-mono text-xs text-muted-foreground block max-w-xs truncate">
-        {attrsPreview(e.attrs)}
-      </span>
-    ),
-  },
-  {
-    id: "request",
-    header: "request",
-    accessor: "request_id",
-    cell: (e) => (
-      <span className="font-mono text-xs" title={e.request_id ?? ""}>
-        {e.request_id ? e.request_id.slice(0, 8) + "…" : "—"}
-      </span>
-    ),
-  },
-  {
-    id: "user",
-    header: "user",
-    accessor: "user_id",
-    cell: (e) => (
-      <span className="font-mono text-xs" title={e.user_id ?? ""}>
-        {e.user_id ? e.user_id.slice(0, 8) + "…" : "—"}
-      </span>
-    ),
-  },
-];
+function buildLogAppColumns(t: Translator["t"]): ColumnDef<LogEvent>[] {
+  return [
+    {
+      id: "at",
+      header: t("logApp.col.at"),
+      accessor: "created",
+      cell: (e) => (
+        <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">
+          {e.created}
+        </span>
+      ),
+    },
+    {
+      id: "level",
+      header: t("logApp.col.level"),
+      accessor: "level",
+      cell: (e) => <Badge variant={levelVariant(e.level)}>{e.level}</Badge>,
+    },
+    {
+      id: "message",
+      header: t("logApp.col.message"),
+      accessor: "message",
+      cell: (e) => <span className="block max-w-md truncate">{e.message}</span>,
+    },
+    {
+      id: "attrs",
+      header: t("logApp.col.attrs"),
+      cell: (e) => (
+        <span className="font-mono text-xs text-muted-foreground block max-w-xs truncate">
+          {attrsPreview(e.attrs)}
+        </span>
+      ),
+    },
+    {
+      id: "request",
+      header: t("logApp.col.request"),
+      accessor: "request_id",
+      cell: (e) => (
+        <span className="font-mono text-xs" title={e.request_id ?? ""}>
+          {e.request_id ? e.request_id.slice(0, 8) + "…" : "—"}
+        </span>
+      ),
+    },
+    {
+      id: "user",
+      header: t("logApp.col.user"),
+      accessor: "user_id",
+      cell: (e) => (
+        <span className="font-mono text-xs" title={e.user_id ?? ""}>
+          {e.user_id ? e.user_id.slice(0, 8) + "…" : "—"}
+        </span>
+      ),
+    },
+  ];
+}
 
 export function AppLogPanel() {
+  const { t } = useT();
   const [total, setTotal] = useState(0);
 
   const [level, setLevel] = useState<LevelFilter>("");
@@ -112,44 +116,41 @@ export function AppLogPanel() {
   return (
     <>
       <p className="text-sm text-muted-foreground">
-        {total} event{total === 1 ? "" : "s"} total. Showing newest first. Past 14
-        days by default (configurable via{" "}
-        <code className="font-mono">logs.retention_days</code>). Debug surface — for
-        compliance / forensic review, see the Audit category.
+        {t("logApp.summary", { count: total, setting: "logs.retention_days" })}
       </p>
 
       <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">level</span>
+          <span className="text-muted-foreground">{t("logApp.filter.level")}</span>
           <select
             value={level}
             onChange={(e) => setLevel(e.currentTarget.value as LevelFilter)}
             className="rounded border border-input px-2 py-1 bg-transparent"
           >
-            <option value="">all</option>
-            <option value="debug">debug</option>
-            <option value="info">info</option>
-            <option value="warn">warn</option>
-            <option value="error">error</option>
+            <option value="">{t("logApp.filter.all")}</option>
+            <option value="debug">{t("logApp.level.debug")}</option>
+            <option value="info">{t("logApp.level.info")}</option>
+            <option value="warn">{t("logApp.level.warn")}</option>
+            <option value="error">{t("logApp.level.error")}</option>
           </select>
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">search</span>
+          <span className="text-muted-foreground">{t("logApp.filter.search")}</span>
           <Input
             type="text"
             value={searchInput}
             onInput={(e) => setSearchInput(e.currentTarget.value)}
-            placeholder="message substring"
+            placeholder={t("logApp.filter.searchPlaceholder")}
             className="w-56 h-8"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">request_id</span>
+          <span className="text-muted-foreground">{t("logApp.filter.requestId")}</span>
           <Input
             type="text"
             value={requestId}
             onInput={(e) => setRequestId(e.currentTarget.value)}
-            placeholder="exact match"
+            placeholder={t("logApp.filter.requestIdPlaceholder")}
             className="w-64 h-8 font-mono text-xs"
           />
         </label>
@@ -158,23 +159,23 @@ export function AppLogPanel() {
             checked={liveTail}
             onCheckedChange={(c) => setLiveTail(c === true)}
           />
-          <span className="text-muted-foreground">live tail</span>
+          <span className="text-muted-foreground">{t("logApp.filter.liveTail")}</span>
         </label>
         {liveTail ? (
           <span
             key={tick}
             className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-primary"
-            title="Live tail — refetches every 10s"
+            title={t("logApp.filter.liveTitle")}
           >
             <LivePulseDot />
-            live
+            {t("logApp.filter.live")}
           </span>
         ) : (
           <Badge
             variant="outline"
             className="font-mono text-[10px] uppercase tracking-wide"
           >
-            paused
+            {t("logApp.filter.paused")}
           </Badge>
         )}
         {level || search || requestId ? (
@@ -188,17 +189,17 @@ export function AppLogPanel() {
               setRequestId("");
             }}
           >
-            clear
+            {t("logApp.filter.clear")}
           </Button>
         ) : null}
       </AdminPage.Toolbar>
 
       <AdminPage.Body>
         <QDatatable
-          columns={columns}
+          columns={buildLogAppColumns(t)}
           rowKey="id"
           pageSize={50}
-          emptyMessage="No log events."
+          emptyMessage={t("logApp.empty")}
           deps={[level, search, requestId, tick]}
           fetch={async (params) => {
             const r = await adminAPI.logs({

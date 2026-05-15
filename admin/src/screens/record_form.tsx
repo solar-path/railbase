@@ -5,6 +5,7 @@ import { isAPIError } from "../api/client";
 import { FieldEditor } from "../fields/editor";
 import { hasDomainRenderer, renderCell } from "../fields/registry";
 import type { FieldSpec } from "../api/types";
+import { useT, type Translator } from "../i18n";
 import {
   QEditableForm,
   type QEditableField,
@@ -44,9 +45,9 @@ function isAuthSystemField(name: string): boolean {
   );
 }
 
-function defaultDisplay(value: unknown): string {
+function defaultDisplay(t: Translator["t"], value: unknown): string {
   if (value == null || value === "") return "—";
-  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "boolean") return value ? t("record.form.yes") : t("record.form.no");
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
@@ -68,6 +69,7 @@ export function RecordFormBody({
    */
   onChanged: () => void;
 }) {
+  const { t } = useT();
   const qc = useQueryClient();
   const isNew = recordId === "new";
 
@@ -115,16 +117,16 @@ export function RecordFormBody({
   });
 
   if (schemaQ.isLoading) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <p className="text-sm text-muted-foreground">{t("common.loading")}</p>;
   }
   if (!spec) {
-    return <p className="text-sm text-destructive">Collection not found.</p>;
+    return <p className="text-sm text-destructive">{t("record.form.collectionNotFound")}</p>;
   }
   if (!isNew && recordQ.isLoading) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <p className="text-sm text-muted-foreground">{t("common.loading")}</p>;
   }
   if (!isNew && recordQ.isError) {
-    return <p className="text-sm text-destructive">Failed to load record.</p>;
+    return <p className="text-sm text-destructive">{t("record.form.loadFailed")}</p>;
   }
 
   // values — seed defaults for create, the loaded record for edit.
@@ -149,7 +151,7 @@ export function RecordFormBody({
   const renderDisplay = (qf: QEditableField, value: unknown) => {
     const fs = specByName.get(qf.key);
     if (fs && hasDomainRenderer(fs)) return renderCell(fs, value);
-    return defaultDisplay(value);
+    return defaultDisplay(t, value);
   };
 
   // Map a server 422's field-level errors back onto the form. If
@@ -172,7 +174,7 @@ export function RecordFormBody({
       }
       setFormError(e.message);
     } else {
-      setFormError("Save failed.");
+      setFormError(t("record.form.saveFailed"));
     }
   }
 
@@ -224,11 +226,11 @@ export function RecordFormBody({
   const authCreateBlocked = spec.auth && isNew;
   const notice = authCreateBlocked ? (
     <p className="text-sm text-foreground bg-muted border border-input rounded px-3 py-2">
-      Auth collections do not accept generic POST. Use{" "}
+      {t("record.form.authCreateBlocked.prefix")}{" "}
       <code className="font-mono">
         /api/collections/{spec.name}/auth-signup
       </code>{" "}
-      instead.
+      {t("record.form.authCreateBlocked.suffix")}
     </p>
   ) : null;
 

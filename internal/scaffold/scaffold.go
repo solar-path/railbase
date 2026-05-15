@@ -42,6 +42,17 @@ const (
 	// Uses the generated TS SDK as its HTTP client — no hand-written
 	// API wrapper, no drift from the backend contract.
 	TemplateAuthStarter Template = "auth-starter"
+	// TemplateFullstack overlays auth-starter with the full
+	// public/private app shell rail/air ship:
+	//
+	//   PUBLIC  : landing, pricing, contact, docs/{index,privacy,terms,cookies}
+	//   PRIVATE : dashboard, tenants list, tenant settings
+	//             (Members / Activity / RBAC tabs), account
+	//
+	// Powered by the v0.4.3 tenants + members + logs + rbac + contact
+	// endpoints. The router lives in app.tsx; public/private branches
+	// are picked by the user signal (refreshMe on boot).
+	TemplateFullstack Template = "fullstack"
 )
 
 // templateChain returns the ordered list of template directories that
@@ -53,6 +64,10 @@ func templateChain(t Template) []string {
 	switch t {
 	case TemplateAuthStarter:
 		return []string{"templates/basic", "templates/auth-starter"}
+	case TemplateFullstack:
+		// Fullstack overlays auth-starter (which itself overlays basic),
+		// then drops its own router + public/private pages on top.
+		return []string{"templates/basic", "templates/auth-starter", "templates/fullstack"}
 	default:
 		return []string{"templates/" + string(t)}
 	}

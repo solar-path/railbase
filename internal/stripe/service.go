@@ -294,7 +294,40 @@ type CheckoutResult struct {
 // CreateCatalogPayment starts a one-time purchase of a fixed catalog
 // price. email/name are optional (guest checkout). Returns the local
 // payment row + the client secret the frontend confirms with Elements.
+// CheckoutOptions carries optional fields that the original
+// Create*Payment signatures didn't expose. Pass an empty struct
+// (or use CreateCatalogPayment / CreateAdhocPayment) when none are
+// needed.
+//
+// FEEDBACK #4 — Metadata is the original embedder gripe: shopper
+// had to encode an order_id into Description (`"order:<uuid>"`)
+// because there was no other channel to round-trip a domain id to
+// Stripe and back via the webhook. The metadata map is the right
+// place: Stripe stores up to 50 key=value pairs per object, and
+// every webhook event carries them back verbatim.
+//
+// Reserved keys: `railbase_kind` and `railbase_price_id` are
+// emitted by the service itself; embedder-supplied keys with those
+// names are silently overridden. Use a `app_` or domain-specific
+// prefix for your own keys.
+type CheckoutOptions struct {
+	Email    string
+	Name     string
+	Metadata map[string]string
+}
+
+// CreateCatalogPaymentWithOptions is the metadata-aware twin of
+// CreateCatalogPayment. The shorter form forwards here with an
+// empty options struct.
+func (svc *Service) CreateCatalogPaymentWithOptions(ctx context.Context, priceID uuid.UUID, opts CheckoutOptions) (*CheckoutResult, error) {
+	return svc.createCatalogPayment(ctx, priceID, opts)
+}
+
 func (svc *Service) CreateCatalogPayment(ctx context.Context, priceID uuid.UUID, email, name string) (*CheckoutResult, error) {
+	return svc.createCatalogPayment(ctx, priceID, CheckoutOptions{Email: email, Name: name})
+}
+
+func (svc *Service) createCatalogPayment(ctx context.Context, priceID uuid.UUID, opts CheckoutOptions) (*CheckoutResult, error) {
 	cl, cfg, err := svc.client(ctx)
 	if err != nil {
 		return nil, err
@@ -312,7 +345,7 @@ func (svc *Service) CreateCatalogPayment(ctx context.Context, priceID uuid.UUID,
 	if !price.Active {
 		return nil, fmt.Errorf("stripe: price %s is archived", priceID)
 	}
-	cust, err := svc.ensureCustomer(ctx, cl, email, name)
+	cust, err := svc.ensureCustomer(ctx, cl, opts.Email, opts.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -327,10 +360,17 @@ func (svc *Service) CreateCatalogPayment(ctx context.Context, priceID uuid.UUID,
 	if prod != nil {
 		desc = prod.Name
 	}
-	pi, err := cl.CreatePaymentIntent(price.UnitAmount, price.Currency, custStripeID, desc, map[string]string{
-		"railbase_price_id": price.ID.String(),
-		"railbase_kind":     PaymentCatalog,
-	})
+	// FEEDBACK #4 — merge embedder metadata with built-in keys.
+	// Caller-supplied entries land first; the two railbase_* keys
+	// overwrite if the embedder happened to pick the same name
+	// (defence-in-depth so our routing logic still works).
+	metadata := map[string]string{}
+	for k, v := range opts.Metadata {
+		metadata[k] = v
+	}
+	metadata["railbase_price_id"] = price.ID.String()
+	metadata["railbase_kind"] = PaymentCatalog
+	pi, err := cl.CreatePaymentIntent(price.UnitAmount, price.Currency, custStripeID, desc, metadata)
 	if err != nil {
 		return nil, fmt.Errorf("stripe: create payment intent: %w", err)
 	}
@@ -355,6 +395,16 @@ func (svc *Service) CreateCatalogPayment(ctx context.Context, priceID uuid.UUID,
 // amount (minor units) and description — invoices, custom orders, etc.
 // — not tied to a catalog price.
 func (svc *Service) CreateAdhocPayment(ctx context.Context, amount int64, currency, description, email, name string) (*CheckoutResult, error) {
+	return svc.createAdhocPayment(ctx, amount, currency, description, CheckoutOptions{Email: email, Name: name})
+}
+
+// CreateAdhocPaymentWithOptions is the metadata-aware twin. See
+// CheckoutOptions docstring + FEEDBACK #4 for the rationale.
+func (svc *Service) CreateAdhocPaymentWithOptions(ctx context.Context, amount int64, currency, description string, opts CheckoutOptions) (*CheckoutResult, error) {
+	return svc.createAdhocPayment(ctx, amount, currency, description, opts)
+}
+
+func (svc *Service) createAdhocPayment(ctx context.Context, amount int64, currency, description string, opts CheckoutOptions) (*CheckoutResult, error) {
 	cl, cfg, err := svc.client(ctx)
 	if err != nil {
 		return nil, err
@@ -368,7 +418,7 @@ func (svc *Service) CreateAdhocPayment(ctx context.Context, amount int64, curren
 	if currency == "" {
 		currency = "usd"
 	}
-	cust, err := svc.ensureCustomer(ctx, cl, email, name)
+	cust, err := svc.ensureCustomer(ctx, cl, opts.Email, opts.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -378,9 +428,13 @@ func (svc *Service) CreateAdhocPayment(ctx context.Context, amount int64, curren
 		custStripeID = cust.StripeCustomerID
 		custLocalID = &cust.ID
 	}
-	pi, err := cl.CreatePaymentIntent(amount, currency, custStripeID, description, map[string]string{
-		"railbase_kind": PaymentAdhoc,
-	})
+	// FEEDBACK #4 — merge embedder metadata + built-in routing key.
+	metadata := map[string]string{}
+	for k, v := range opts.Metadata {
+		metadata[k] = v
+	}
+	metadata["railbase_kind"] = PaymentAdhoc
+	pi, err := cl.CreatePaymentIntent(amount, currency, custStripeID, description, metadata)
 	if err != nil {
 		return nil, fmt.Errorf("stripe: create payment intent: %w", err)
 	}

@@ -121,6 +121,22 @@ func DropCollectionSQL(name string) string {
 // existing table named coll. Constraints are inlined; CHECK clauses
 // for length / range / pattern are emitted as separate ALTER TABLE
 // ADD CONSTRAINT statements so they have their own names.
+//
+// FEEDBACK #19 — when the new field is NOT NULL but has no DEFAULT,
+// emitting `ADD COLUMN x NOT NULL` against a non-empty table fails
+// at apply time with `column "x" contains null values`. The diff
+// generator can't know whether the target table is empty (it's a
+// static-analysis tool, not a connected client), so we switch to a
+// three-step pattern that ALWAYS applies:
+//
+//	1. ADD COLUMN nullable
+//	2. UPDATE … SET x = /* TODO: backfill */ WHERE x IS NULL
+//	3. ALTER COLUMN x SET NOT NULL
+//
+// The operator reviews the generated SQL, fills in the backfill
+// expression, and runs `migrate up`. The previous single-line form is
+// still emitted when the field carries a DEFAULT (Postgres backfills
+// existing rows from the default) — that path is safe.
 func AddColumnSQL(coll string, f builder.FieldSpec) string {
 	var b strings.Builder
 	// SequentialCode needs its sequence created before the ALTER TABLE
@@ -128,11 +144,45 @@ func AddColumnSQL(coll string, f builder.FieldSpec) string {
 	if f.Type == builder.TypeSequentialCode {
 		b.WriteString(createSequence(coll, f))
 	}
-	b.WriteString("ALTER TABLE ")
-	b.WriteString(quoteIdent(coll))
-	b.WriteString(" ADD COLUMN ")
-	b.WriteString(columnDef(coll, f, false))
-	b.WriteString(";\n")
+
+	needsBackfillPattern := needsBackfillSplit(f)
+
+	if needsBackfillPattern {
+		// Step 1: ADD nullable column (clone of the spec with Required=false
+		// so columnDef omits the NOT NULL clause).
+		nullableSpec := f
+		nullableSpec.Required = false
+		b.WriteString("-- FEEDBACK #19 — NOT NULL without DEFAULT split into three steps so existing rows can be backfilled.\n")
+		b.WriteString("-- REVIEW: replace the TODO backfill expression below before running `migrate up`.\n")
+		b.WriteString("ALTER TABLE ")
+		b.WriteString(quoteIdent(coll))
+		b.WriteString(" ADD COLUMN ")
+		b.WriteString(columnDef(coll, nullableSpec, false))
+		b.WriteString(";\n")
+		// Step 2: backfill placeholder. The expression itself is a TODO —
+		// migrate up will fail on the SET NOT NULL step until the
+		// operator fills in a concrete value.
+		b.WriteString("UPDATE ")
+		b.WriteString(quoteIdent(coll))
+		b.WriteString(" SET ")
+		b.WriteString(quoteIdent(f.Name))
+		b.WriteString(" = /* TODO: backfill expression */ NULL WHERE ")
+		b.WriteString(quoteIdent(f.Name))
+		b.WriteString(" IS NULL;\n")
+		// Step 3: flip to NOT NULL.
+		b.WriteString("ALTER TABLE ")
+		b.WriteString(quoteIdent(coll))
+		b.WriteString(" ALTER COLUMN ")
+		b.WriteString(quoteIdent(f.Name))
+		b.WriteString(" SET NOT NULL;\n")
+	} else {
+		b.WriteString("ALTER TABLE ")
+		b.WriteString(quoteIdent(coll))
+		b.WriteString(" ADD COLUMN ")
+		b.WriteString(columnDef(coll, f, false))
+		b.WriteString(";\n")
+	}
+
 	if f.Type == builder.TypeSequentialCode {
 		b.WriteString(ownSequence(coll, f))
 	}
@@ -151,6 +201,46 @@ func AddColumnSQL(coll string, f builder.FieldSpec) string {
 	return b.String()
 }
 
+// needsBackfillSplit decides whether AddColumnSQL must emit the
+// three-step nullable→backfill→NOT-NULL pattern instead of a single
+// ALTER TABLE … ADD COLUMN … NOT NULL line.
+//
+// Triggered iff:
+//   - field is Required (NOT NULL), AND
+//   - field has no usable default value at the SQL layer.
+//
+// Several field types CARRY their own server-side default even when
+// the embedder didn't set `.Default(...)` — those are safe under a
+// single-line ALTER and the helper returns false for them:
+//
+//   - TypeDate + AutoCreate → DEFAULT now()
+//   - TypeSequentialCode    → DEFAULT nextval(...)
+//   - TypeStatus            → DEFAULT '<first declared status>'
+//   - Computed (GENERATED)  → backfill is the expression itself
+//
+// Everything else where Required && !HasDefault gets the safe pattern.
+func needsBackfillSplit(f builder.FieldSpec) bool {
+	if !f.Required {
+		return false
+	}
+	if f.HasDefault {
+		return false
+	}
+	if f.Computed != "" {
+		return false
+	}
+	if f.Type == builder.TypeDate && f.AutoCreate {
+		return false
+	}
+	if f.Type == builder.TypeSequentialCode {
+		return false
+	}
+	if f.Type == builder.TypeStatus && len(f.StatusValues) > 0 {
+		return false
+	}
+	return true
+}
+
 // DropColumnSQL emits ALTER TABLE ... DROP COLUMN.
 // Note: drops are destructive. The migrate runner runs migrations in
 // a tx; a botched diff is rolled back. But once committed, the data
@@ -158,6 +248,83 @@ func AddColumnSQL(coll string, f builder.FieldSpec) string {
 func DropColumnSQL(coll, field string) string {
 	return fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s CASCADE;\n",
 		quoteIdent(coll), quoteIdent(field))
+}
+
+// authInjectedColumns returns the columns that AuthCollection adds on
+// top of a regular collection (mirror of the inline emission in
+// CreateCollectionSQL). The order matters for migration readability
+// but not for correctness.
+func authInjectedColumns() []struct{ name, baseType, defaultVal string } {
+	return []struct{ name, baseType, defaultVal string }{
+		{"email", "TEXT", ""},
+		{"password_hash", "TEXT", ""},
+		{"verified", "BOOLEAN", "FALSE"}, // has a real default — single-step
+		{"token_key", "TEXT", ""},
+		// last_login_at is nullable in CreateCollectionSQL — single-step ADD.
+		{"last_login_at", "TIMESTAMPTZ NULL", ""},
+	}
+}
+
+// AuthToggleSQL renders the ALTER TABLE statements needed when a
+// collection toggles between Collection and AuthCollection.
+//
+// On toggle-on (newState=true) we emit a three-step ADD for each NOT
+// NULL column without a default (email/password_hash/token_key), so
+// the migration can be safely applied to a non-empty table:
+//
+//  1. ADD COLUMN ... nullable (allows ALTER to succeed against existing rows)
+//  2. UPDATE ... SET col = /* TODO: backfill */ NULL  (operator fills in)
+//  3. ALTER COLUMN ... SET NOT NULL  (after the backfill)
+//
+// `verified` has a real DEFAULT, `last_login_at` is nullable — both
+// emit as a single-line ADD COLUMN.
+//
+// On toggle-off (newState=false) we DROP the injected columns. Cascade
+// is included so any inbound FK/index gets dropped with them.
+//
+// FEEDBACK #B1.
+func AuthToggleSQL(coll string, newState bool) string {
+	q := quoteIdent(coll)
+	var b strings.Builder
+
+	if newState {
+		fmt.Fprintf(&b, "-- AuthCollection toggle: adding auth-system columns to %s.\n", q)
+		fmt.Fprintf(&b, "-- IMPORTANT: this migration is generated empty-backfill. After\n")
+		fmt.Fprintf(&b, "-- applying steps 1+2 you MUST run the backfill UPDATEs (marked\n")
+		fmt.Fprintf(&b, "-- with `TODO: backfill`) BEFORE the SET NOT NULL step succeeds.\n")
+		fmt.Fprintf(&b, "-- For password_hash specifically: existing rows have no password —\n")
+		fmt.Fprintf(&b, "-- operators typically email everyone to set one via the standard\n")
+		fmt.Fprintf(&b, "-- /auth-with-password reset flow rather than backfilling a value.\n\n")
+		for _, c := range authInjectedColumns() {
+			fmt.Fprintf(&b, "-- auth column: %s\n", c.name)
+			if c.defaultVal != "" {
+				// `verified BOOLEAN DEFAULT FALSE` — single-step.
+				fmt.Fprintf(&b, "ALTER TABLE %s ADD COLUMN %s %s NOT NULL DEFAULT %s;\n",
+					q, c.name, c.baseType, c.defaultVal)
+				continue
+			}
+			if strings.Contains(strings.ToUpper(c.baseType), "NULL") {
+				// `last_login_at TIMESTAMPTZ NULL` — explicitly nullable, single-step.
+				fmt.Fprintf(&b, "ALTER TABLE %s ADD COLUMN %s %s;\n", q, c.name, c.baseType)
+				continue
+			}
+			// Three-step pattern: nullable add → backfill TODO → SET NOT NULL.
+			fmt.Fprintf(&b, "ALTER TABLE %s ADD COLUMN %s %s;\n", q, c.name, c.baseType)
+			fmt.Fprintf(&b, "UPDATE %s SET %s = /* TODO: backfill expression */ NULL WHERE %s IS NULL;\n",
+				q, c.name, c.name)
+			fmt.Fprintf(&b, "ALTER TABLE %s ALTER COLUMN %s SET NOT NULL;\n", q, c.name)
+		}
+		return b.String()
+	}
+
+	// Toggle OFF — drop the injected columns. CASCADE handles auxiliary
+	// objects (auth-related indexes/FKs) the application layer added.
+	fmt.Fprintf(&b, "-- AuthCollection toggle: dropping auth-system columns from %s.\n", q)
+	fmt.Fprintf(&b, "-- This removes the ability for users to authenticate against this collection.\n")
+	for _, c := range authInjectedColumns() {
+		fmt.Fprintf(&b, "ALTER TABLE %s DROP COLUMN IF EXISTS %s CASCADE;\n", q, c.name)
+	}
+	return b.String()
 }
 
 // --- internal helpers ---
@@ -446,6 +613,23 @@ func sqlLiteral(v any) string {
 	}
 }
 
+// patternCheck wraps a single CHECK predicate to also accept the
+// empty string when the field is OPTIONAL (not Required). FEEDBACK #B7:
+// the blogger project hit this exactly — a JSON form sends `hero_image: ""`
+// (rather than `null`), the column's URL CHECK rejects it, the embedder
+// gets `400 "check constraint failed"`. NULL is already accepted by
+// virtue of the column being nullable; we additionally accept ''.
+//
+// For Required fields the old strict regex is preserved — an empty
+// string in a required field is a real validation failure.
+func patternCheck(f builder.FieldSpec, predicate string) string {
+	if f.Required {
+		return fmt.Sprintf("CHECK (%s)", predicate)
+	}
+	return fmt.Sprintf("CHECK (%s = '' OR %s)",
+		quoteIdent(f.Name), predicate)
+}
+
 // checkClauses returns the inline-CHECK fragments for a field.
 func checkClauses(f builder.FieldSpec) []string {
 	var out []string
@@ -471,8 +655,8 @@ func checkClauses(f builder.FieldSpec) []string {
 				quoteIdent(f.Name), *f.MaxLen))
 		}
 		if f.Pattern != "" {
-			out = append(out, fmt.Sprintf("CHECK (%s ~ %s)",
-				quoteIdent(f.Name), sqlLiteral(f.Pattern)))
+			out = append(out, patternCheck(f, fmt.Sprintf("%s ~ %s",
+				quoteIdent(f.Name), sqlLiteral(f.Pattern))))
 		}
 	case builder.TypeNumber:
 		if f.Min != nil {
@@ -487,28 +671,28 @@ func checkClauses(f builder.FieldSpec) []string {
 		// Lightweight RFC5322 shape — keep it simple, avoid the
 		// pathological full-grammar regex. v0.3 may upgrade to a
 		// CITEXT column with a proper validator.
-		out = append(out, fmt.Sprintf("CHECK (%s ~* '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')",
-			quoteIdent(f.Name)))
+		out = append(out, patternCheck(f, fmt.Sprintf(
+			"%s ~* '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$'", quoteIdent(f.Name))))
 	case builder.TypeURL:
-		out = append(out, fmt.Sprintf("CHECK (%s ~* '^https?://')",
-			quoteIdent(f.Name)))
+		out = append(out, patternCheck(f, fmt.Sprintf(
+			"%s ~* '^https?://'", quoteIdent(f.Name))))
 	case builder.TypeTel:
 		// E.164 canonical: leading '+', 1-15 digits, no separators.
 		// REST layer normalises display forms before insert.
-		out = append(out, fmt.Sprintf("CHECK (%s ~ '^\\+[1-9][0-9]{1,14}$')",
-			quoteIdent(f.Name)))
+		out = append(out, patternCheck(f, fmt.Sprintf(
+			"%s ~ '^\\+[1-9][0-9]{1,14}$'", quoteIdent(f.Name))))
 	case builder.TypeSlug:
 		// URL-safe canonical: lowercase ASCII + digits, hyphens only
 		// between alnum runs. No leading/trailing/consecutive hyphens.
 		// REST layer normalises (lowercase, strip non-ASCII, collapse
 		// non-alnum to single hyphens) before insert.
-		out = append(out, fmt.Sprintf("CHECK (%s ~ '^[a-z0-9]+(-[a-z0-9]+)*$')",
-			quoteIdent(f.Name)))
+		out = append(out, patternCheck(f, fmt.Sprintf(
+			"%s ~ '^[a-z0-9]+(-[a-z0-9]+)*$'", quoteIdent(f.Name))))
 	case builder.TypeColor:
 		// Canonical hex: '#' + 6 lowercase hex digits. REST normalises
 		// shorthand (#FFF → #ffffff) and uppercase before insert.
-		out = append(out, fmt.Sprintf("CHECK (%s ~ '^#[0-9a-f]{6}$')",
-			quoteIdent(f.Name)))
+		out = append(out, patternCheck(f, fmt.Sprintf(
+			"%s ~ '^#[0-9a-f]{6}$'", quoteIdent(f.Name))))
 	case builder.TypeMarkdown:
 		// Same min/max-length CHECK pattern as Text. Cron has no DB
 		// CHECK — the parser is richer than a regex can express.

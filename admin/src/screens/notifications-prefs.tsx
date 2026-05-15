@@ -4,6 +4,7 @@ import { adminAPI } from "../api/admin";
 import { isAPIError } from "../api/client";
 import { useAuth } from "../auth/context";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 import type {
   DigestPreviewResponse,
   NotificationPrefRow,
@@ -57,10 +58,20 @@ import {
 // stable across renders even when the source array's order varies.
 const CHANNELS: Array<NotificationPrefRow["channel"]> = ["inapp", "email", "push"];
 
-// DOW_LABELS pairs the digest_dow integer (0=Sun..6=Sat) with a
-// short label for the dropdown. Matches Postgres EXTRACT(dow) — see
-// docs in internal/notifications/quiet_digest.go.
-const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// Day-of-week labels. The DOW values follow Postgres EXTRACT(dow):
+// 0=Sun..6=Sat. Wrapped as a factory so labels are localised through
+// the active translator.
+function dowLabels(t: Translator["t"]): string[] {
+  return [
+    t("notificationsPrefs.dow.sun"),
+    t("notificationsPrefs.dow.mon"),
+    t("notificationsPrefs.dow.tue"),
+    t("notificationsPrefs.dow.wed"),
+    t("notificationsPrefs.dow.thu"),
+    t("notificationsPrefs.dow.fri"),
+    t("notificationsPrefs.dow.sat"),
+  ];
+}
 
 // Common IANA tzs surfaced as quick-picks. The input is freeform
 // (the backend validates via time.LoadLocation) so any IANA id works;
@@ -130,12 +141,13 @@ function gridToPrefs(grid: PrefsGridRow[]): NotificationPrefRow[] {
 }
 
 export function NotificationsPrefsScreen() {
+  const { t } = useT();
   const [selectedUserID, setSelectedUserID] = useState<string | null>(null);
 
   const columns: ColumnDef<NotificationPrefsUser>[] = [
     {
       id: "email",
-      header: "Email",
+      header: t("notificationsPrefs.col.email"),
       accessor: (u) => u.email,
       cell: (u) =>
         u.email ? (
@@ -148,7 +160,7 @@ export function NotificationsPrefsScreen() {
     },
     {
       id: "user_id",
-      header: "User ID",
+      header: t("notificationsPrefs.col.userId"),
       cell: (u) => (
         <span className="font-mono text-xs text-muted-foreground">
           {u.user_id}
@@ -157,7 +169,7 @@ export function NotificationsPrefsScreen() {
     },
     {
       id: "collection",
-      header: "Collection",
+      header: t("notificationsPrefs.col.collection"),
       cell: (u) =>
         u.collection ? (
           <span className="font-mono text-xs">{u.collection}</span>
@@ -167,17 +179,17 @@ export function NotificationsPrefsScreen() {
     },
     {
       id: "state",
-      header: "State",
+      header: t("notificationsPrefs.col.state"),
       cell: (u) => (
         <span className="flex gap-1">
           {u.has_prefs ? (
             <Badge variant="secondary" className="text-[10px]">
-              prefs
+              {t("notificationsPrefs.state.prefs")}
             </Badge>
           ) : null}
           {u.has_settings ? (
             <Badge variant="secondary" className="text-[10px]">
-              settings
+              {t("notificationsPrefs.state.settings")}
             </Badge>
           ) : null}
         </span>
@@ -188,14 +200,10 @@ export function NotificationsPrefsScreen() {
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Notification preferences"
-        description={
-          <>
-            Edit per-user notification posture: per-kind/per-channel toggles
-            plus quiet hours and digest mode. Changes are audited as{" "}
-            <span className="font-mono">notifications.admin_prefs_changed</span>.
-          </>
-        }
+        title={t("notificationsPrefs.title")}
+        description={t("notificationsPrefs.description", {
+          event: "notifications.admin_prefs_changed",
+        })}
       />
 
       <AdminPage.Body>
@@ -203,9 +211,9 @@ export function NotificationsPrefsScreen() {
           columns={columns}
           rowKey={(u) => u.user_id}
           search
-          searchPlaceholder="Filter by email…"
+          searchPlaceholder={t("notificationsPrefs.filterPlaceholder")}
           onRowClick={(u) => setSelectedUserID(u.user_id)}
-          emptyMessage="No users have notification preferences yet."
+          emptyMessage={t("notificationsPrefs.empty")}
           fetch={async (params) => {
             const res = await adminAPI.notificationsPrefsUsersList({
               page: params.page,
@@ -220,6 +228,7 @@ export function NotificationsPrefsScreen() {
       <PrefsEditorDrawer
         userID={selectedUserID}
         onClose={() => setSelectedUserID(null)}
+        t={t}
       />
     </AdminPage>
   );
@@ -231,9 +240,11 @@ export function NotificationsPrefsScreen() {
 function PrefsEditorDrawer({
   userID,
   onClose,
+  t,
 }: {
   userID: string | null;
   onClose: () => void;
+  t: Translator["t"];
 }) {
   return (
     <Drawer
@@ -245,15 +256,14 @@ function PrefsEditorDrawer({
     >
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-xl">
         <DrawerHeader>
-          <DrawerTitle>Notification preferences</DrawerTitle>
+          <DrawerTitle>{t("notificationsPrefs.drawer.title")}</DrawerTitle>
           <DrawerDescription>
-            Per-kind channel toggles plus quiet hours and digest mode. Save
-            PUTs the full envelope back.
+            {t("notificationsPrefs.drawer.description")}
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
           {userID !== null ? (
-            <PrefsEditorBody key={userID} userID={userID} onClose={onClose} />
+            <PrefsEditorBody key={userID} userID={userID} onClose={onClose} t={t} />
           ) : null}
         </div>
       </DrawerContent>
@@ -266,9 +276,11 @@ function PrefsEditorDrawer({
 function PrefsEditorBody({
   userID,
   onClose,
+  t,
 }: {
   userID: string;
   onClose: () => void;
+  t: Translator["t"];
 }) {
   const envQ = useQuery({
     queryKey: ["notifications-prefs", userID],
@@ -277,7 +289,7 @@ function PrefsEditorBody({
   });
 
   if (envQ.isLoading) {
-    return <p className="text-sm text-muted-foreground">Loading prefs…</p>;
+    return <p className="text-sm text-muted-foreground">{t("notificationsPrefs.loading")}</p>;
   }
   if (envQ.error) {
     const err = envQ.error as Error & { code?: string };
@@ -286,8 +298,8 @@ function PrefsEditorBody({
       <div className="rounded border border-input bg-muted p-4 text-sm text-foreground">
         <div className="font-medium">
           {is404
-            ? "No preferences yet for this user."
-            : "Failed to load prefs."}
+            ? t("notificationsPrefs.error.none")
+            : t("notificationsPrefs.error.load")}
         </div>
         <div className="text-xs mt-1">{err.message}</div>
       </div>
@@ -299,6 +311,7 @@ function PrefsEditorBody({
       userID={userID}
       envelope={envQ.data!}
       onClose={onClose}
+      t={t}
     />
   );
 }
@@ -325,10 +338,12 @@ function PrefsEditorForm({
   userID,
   envelope,
   onClose,
+  t,
 }: {
   userID: string;
   envelope: NotificationPrefsEnvelope;
   onClose: () => void;
+  t: Translator["t"];
 }) {
   const qc = useQueryClient();
   const settings = envelope.settings ?? SETTINGS_DEFAULTS;
@@ -357,36 +372,42 @@ function PrefsEditorForm({
   const prefsColumns: QEditableColumn<PrefsGridRow>[] = [
     {
       key: "kind",
-      header: "kind",
+      header: t("notificationsPrefs.grid.col.kind"),
       type: "text",
       width: 220,
       required: true,
-      placeholder: "invite_received",
+      placeholder: t("notificationsPrefs.grid.kindPlaceholder"),
     },
-    { key: "inapp", header: "inapp", type: "checkbox", width: 80 },
-    { key: "email", header: "email", type: "checkbox", width: 80 },
-    { key: "push", header: "push", type: "checkbox", width: 80 },
+    { key: "inapp", header: t("notificationsPrefs.grid.col.inapp"), type: "checkbox", width: 80 },
+    { key: "email", header: t("notificationsPrefs.grid.col.email"), type: "checkbox", width: 80 },
+    { key: "push", header: t("notificationsPrefs.grid.col.push"), type: "checkbox", width: 80 },
   ];
 
   const fields: QEditableField[] = [
-    { key: "prefs", label: "Per-kind preferences" },
+    { key: "prefs", label: t("notificationsPrefs.field.prefs") },
     {
       key: "quiet_hours_start",
-      label: "Quiet hours start",
-      helpText: "HH:MM, e.g. 22:00. Blank disables quiet hours.",
+      label: t("notificationsPrefs.field.quietStart"),
+      helpText: t("notificationsPrefs.field.quietStart.help"),
     },
-    { key: "quiet_hours_end", label: "Quiet hours end", helpText: "HH:MM, e.g. 07:00." },
-    { key: "quiet_hours_tz", label: "Quiet hours timezone (IANA)" },
-    { key: "digest_hour", label: "Digest hour (0-23, local to digest tz)" },
+    {
+      key: "quiet_hours_end",
+      label: t("notificationsPrefs.field.quietEnd"),
+      helpText: t("notificationsPrefs.field.quietEnd.help"),
+    },
+    { key: "quiet_hours_tz", label: t("notificationsPrefs.field.quietTz") },
+    { key: "digest_hour", label: t("notificationsPrefs.field.digestHour") },
     ...(digestMode === "weekly"
-      ? [{ key: "digest_dow", label: "Digest day of week" } as QEditableField]
+      ? [{ key: "digest_dow", label: t("notificationsPrefs.field.digestDow") } as QEditableField]
       : []),
     {
       key: "digest_tz",
-      label: "Digest timezone (IANA)",
-      helpText: "Leave blank to inherit the quiet-hours timezone.",
+      label: t("notificationsPrefs.field.digestTz"),
+      helpText: t("notificationsPrefs.field.digestTz.help"),
     },
   ];
+
+  const labels = dowLabels(t);
 
   const renderInput = (
     f: QEditableField,
@@ -408,7 +429,7 @@ function PrefsEditorForm({
             })}
             minRows={0}
             showAddButton
-            addLabel="Add kind"
+            addLabel={t("notificationsPrefs.grid.addKind")}
           />
         );
       case "quiet_hours_start":
@@ -427,6 +448,7 @@ function PrefsEditorForm({
           <TZInput
             value={(value as string) ?? ""}
             onChange={(v) => onChange(v)}
+            placeholder={t("notificationsPrefs.tzPlaceholder")}
           />
         );
       case "digest_hour":
@@ -450,7 +472,7 @@ function PrefsEditorForm({
             value={String(value ?? 1)}
             onChange={(e) => onChange(parseInt(e.currentTarget.value, 10))}
           >
-            {DOW_LABELS.map((label, idx) => (
+            {labels.map((label, idx) => (
               <option key={label} value={idx}>
                 {label}
               </option>
@@ -467,14 +489,14 @@ function PrefsEditorForm({
     const qs = String(d.quiet_hours_start ?? "");
     const qe = String(d.quiet_hours_end ?? "");
     if (qs !== "" && !TIME_REGEX.test(qs)) {
-      fe.quiet_hours_start = "Use HH:MM (e.g. 22:00)";
+      fe.quiet_hours_start = t("notificationsPrefs.validation.quietStart");
     }
     if (qe !== "" && !TIME_REGEX.test(qe)) {
-      fe.quiet_hours_end = "Use HH:MM (e.g. 07:00)";
+      fe.quiet_hours_end = t("notificationsPrefs.validation.quietEnd");
     }
     const h = Number(d.digest_hour);
     if (!Number.isInteger(h) || h < 0 || h > 23) {
-      fe.digest_hour = "Must be an integer 0-23";
+      fe.digest_hour = t("notificationsPrefs.validation.digestHour");
     }
     return fe;
   };
@@ -527,7 +549,7 @@ function PrefsEditorForm({
           }
         }
       }
-      setFormError(err instanceof Error ? err.message : "Save failed.");
+      setFormError(err instanceof Error ? err.message : t("notificationsPrefs.save.failed"));
     }
   };
 
@@ -546,16 +568,16 @@ function PrefsEditorForm({
 
       <div className="space-y-1.5">
         <span className="font-mono text-xs font-medium text-muted-foreground">
-          Digest mode
+          {t("notificationsPrefs.digestMode")}
         </span>
         <select
           className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
           value={digestMode}
           onChange={(e) => setDigestMode(e.currentTarget.value as DigestMode)}
         >
-          <option value="off">off</option>
-          <option value="daily">daily</option>
-          <option value="weekly">weekly</option>
+          <option value="off">{t("notificationsPrefs.digestMode.off")}</option>
+          <option value="daily">{t("notificationsPrefs.digestMode.daily")}</option>
+          <option value="weekly">{t("notificationsPrefs.digestMode.weekly")}</option>
         </select>
       </div>
 
@@ -565,13 +587,13 @@ function PrefsEditorForm({
         values={seed}
         renderInput={renderInput}
         onCreate={handleSave}
-        submitLabel="Save"
+        submitLabel={t("notificationsPrefs.submit")}
         onCancel={onClose}
         fieldErrors={fieldErrors}
         formError={formError}
       />
 
-      <DigestPreviewControls userID={userID} digestMode={digestMode} />
+      <DigestPreviewControls userID={userID} digestMode={digestMode} t={t} />
     </div>
   );
 }
@@ -583,9 +605,11 @@ function PrefsEditorForm({
 function DigestPreviewControls({
   userID,
   digestMode,
+  t,
 }: {
   userID: string;
   digestMode: string;
+  t: Translator["t"];
 }) {
   const { state } = useAuth();
   const adminEmail = state.kind === "signed-in" ? state.me.email : "";
@@ -608,14 +632,14 @@ function DigestPreviewControls({
   return (
     <div className="rounded border bg-muted/40 px-3 py-3 space-y-2 text-sm">
       <span className="text-xs font-medium text-foreground">
-        Send a sample digest to:
+        {t("notificationsPrefs.preview.label")}
       </span>
       <div className="flex items-center gap-2">
         <Input
           type="email"
           value={recipient}
           onInput={(e) => setRecipient(e.currentTarget.value)}
-          placeholder={adminEmail || "operator@example.com"}
+          placeholder={adminEmail || t("notificationsPrefs.preview.recipientPlaceholder")}
           className="h-8 flex-1 text-xs font-mono"
           spellcheck={false}
           autoComplete="off"
@@ -628,20 +652,21 @@ function DigestPreviewControls({
           disabled={disabled}
           title={
             digestMode === "off"
-              ? "Set a digest mode (daily or weekly) to enable preview"
-              : "Render and email a sample digest for this user"
+              ? t("notificationsPrefs.preview.disabledOff")
+              : t("notificationsPrefs.preview.enabledTitle")
           }
         >
-          {previewM.isPending ? "Sending…" : "Send preview"}
+          {previewM.isPending
+            ? t("notificationsPrefs.preview.sending")
+            : t("notificationsPrefs.preview.send")}
         </Button>
       </div>
       {previewM.isSuccess && previewM.data ? (
         <span className="text-xs text-primary">
-          Sent to{" "}
-          <span className="font-mono">{previewM.data.recipient}</span>
-          {" · "}
-          {previewM.data.kind_count} item
-          {previewM.data.kind_count === 1 ? "" : "s"}
+          {t("notificationsPrefs.preview.sent", {
+            recipient: previewM.data.recipient,
+            count: previewM.data.kind_count,
+          })}
         </span>
       ) : null}
       {previewM.error ? (
@@ -659,9 +684,11 @@ function DigestPreviewControls({
 function TZInput({
   value,
   onChange,
+  placeholder,
 }: {
   value: string;
   onChange: (v: string) => void;
+  placeholder?: string;
 }) {
   return (
     <>
@@ -669,7 +696,7 @@ function TZInput({
         type="text"
         value={value}
         onInput={(e) => onChange(e.currentTarget.value)}
-        placeholder="UTC"
+        placeholder={placeholder ?? "UTC"}
         list="iana-tz-quickpicks"
         className="font-mono"
       />

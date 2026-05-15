@@ -26,11 +26,28 @@ type Diff struct {
 	// not tracked here.
 	IndexChanges []IndexChange
 
+	// AuthToggles captures Collection ↔ AuthCollection transitions.
+	// FEEDBACK #B1 — the auth-injected columns (email, password_hash,
+	// verified, token_key, last_login_at) live on the spec.Auth flag
+	// rather than spec.Fields, so a plain field-by-field diff missed
+	// the toggle entirely. The migration now emits the three-step
+	// backfill pattern for each auth column on toggle-on, and DROP
+	// COLUMN statements on toggle-off.
+	AuthToggles []AuthToggle
+
 	// IncompatibleChanges are diff hits we refuse to auto-handle in
 	// v0.2 (column type change, .Tenant() toggle, FK action change,
 	// etc.). The CLI prints them and aborts so the user can write a
 	// hand-rolled migration.
 	IncompatibleChanges []string
+}
+
+// AuthToggle records a Collection ↔ AuthCollection transition on a
+// pre-existing collection. NewState == true means the collection
+// became Auth; false means it lost Auth.
+type AuthToggle struct {
+	Collection string
+	NewState   bool
 }
 
 // FieldChange enumerates the per-column adds/drops on one collection.
@@ -55,6 +72,7 @@ func (d Diff) Empty() bool {
 		len(d.DroppedCollections) == 0 &&
 		len(d.FieldChanges) == 0 &&
 		len(d.IndexChanges) == 0 &&
+		len(d.AuthToggles) == 0 &&
 		len(d.IncompatibleChanges) == 0
 }
 
@@ -105,6 +123,18 @@ func Compute(prev, curr Snapshot) Diff {
 				fmt.Sprintf("collection %q: .Tenant() toggle is not auto-migratable in v0.2 (RLS policies + tenant_id column would need a hand-rolled migration)",
 					currColl.Name))
 		}
+		// FEEDBACK #B1 — detect Collection ↔ AuthCollection toggle.
+		// The auth-injected system columns aren't in spec.Fields, so a
+		// plain field diff missed the change silently and `migrate diff`
+		// reported "schema unchanged". The blogger project hit this
+		// exactly: schema.Collection("authors") → schema.AuthCollection
+		// produced no migration, the embedder had to hand-roll one.
+		if prevColl.Auth != currColl.Auth {
+			d.AuthToggles = append(d.AuthToggles, AuthToggle{
+				Collection: currColl.Name,
+				NewState:   currColl.Auth,
+			})
+		}
 	}
 
 	// Determinism for testing / human review.
@@ -131,6 +161,9 @@ func Compute(prev, curr Snapshot) Diff {
 	sort.Slice(d.IndexChanges, func(i, j int) bool {
 		return d.IndexChanges[i].Collection < d.IndexChanges[j].Collection
 	})
+	sort.Slice(d.AuthToggles, func(i, j int) bool {
+		return d.AuthToggles[i].Collection < d.AuthToggles[j].Collection
+	})
 	sort.Strings(d.IncompatibleChanges)
 	return d
 }
@@ -150,6 +183,16 @@ func (d Diff) SQL() string {
 	for _, c := range d.NewCollections {
 		fmt.Fprintf(&b, "-- create collection %q\n", c.Name)
 		b.WriteString(CreateCollectionSQL(c))
+		b.WriteString("\n")
+	}
+
+	// Auth-flag toggles are emitted BEFORE the field diff for that
+	// collection so the three-step ALTER for `email`/`password_hash`/…
+	// lands first. Field additions on the same collection (e.g. a new
+	// `display_name` column) follow afterwards.
+	for _, at := range d.AuthToggles {
+		fmt.Fprintf(&b, "-- toggle auth on %q: NewState=%v\n", at.Collection, at.NewState)
+		b.WriteString(AuthToggleSQL(at.Collection, at.NewState))
 		b.WriteString("\n")
 	}
 

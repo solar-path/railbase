@@ -36,6 +36,7 @@ import type {
   SettingsCatalogResponse,
 } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 
 import { Badge } from "@/lib/ui/badge.ui";
 import { Card, CardContent } from "@/lib/ui/card.ui";
@@ -57,6 +58,7 @@ import {
 import { AdvancedSettingsTable } from "./settings_advanced";
 
 export function SettingsScreen() {
+  const { t } = useT();
   const qc = useQueryClient();
   const catalogQ = useQuery({
     queryKey: ["settings", "catalog"],
@@ -67,11 +69,11 @@ export function SettingsScreen() {
     return (
       <AdminPage>
         <AdminPage.Header
-          title="Settings"
-          description="Configuration values that drive the running server."
+          title={t("settings.title")}
+          description={t("settings.description")}
         />
         <AdminPage.Body>
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
         </AdminPage.Body>
       </AdminPage>
     );
@@ -79,11 +81,11 @@ export function SettingsScreen() {
   if (catalogQ.error) {
     return (
       <AdminPage>
-        <AdminPage.Header title="Settings" />
+        <AdminPage.Header title={t("settings.title")} />
         <AdminPage.Body>
           <Card>
             <CardContent className="p-4 text-sm text-destructive">
-              Failed to load settings: {errMessage(catalogQ.error)}
+              {t("settings.loadFailed", { message: errMessage(catalogQ.error) })}
             </CardContent>
           </Card>
         </AdminPage.Body>
@@ -106,8 +108,8 @@ export function SettingsScreen() {
   return (
     <AdminPage className="space-y-6 max-w-3xl">
       <AdminPage.Header
-        title="Settings"
-        description="Configuration values the running server reads. Click a row to edit; each section maps to a subsystem and unset values fall back to the implicit default."
+        title={t("settings.title")}
+        description={t("settings.descriptionLong")}
       />
       <AdminPage.Body className="space-y-6">
         {data.groups.map((group) => {
@@ -116,6 +118,7 @@ export function SettingsScreen() {
           return (
             <SettingsGroupCard
               key={group}
+              t={t}
               group={group}
               entries={entries}
               onMutated={invalidate}
@@ -124,6 +127,7 @@ export function SettingsScreen() {
         })}
 
         <AdvancedSection
+          t={t}
           unknownKeys={data.unknown_keys}
           onMutated={invalidate}
         />
@@ -144,10 +148,12 @@ export function SettingsScreen() {
 //     rejecting the promise pins the row in edit mode and shows the
 //     server's error message under the input.
 function SettingsGroupCard({
+  t,
   group,
   entries,
   onMutated,
 }: {
+  t: Translator["t"];
   group: string;
   entries: SettingsCatalogEntry[];
   onMutated: () => void;
@@ -179,14 +185,14 @@ function SettingsGroupCard({
     mutationFn: ({ key, value }: { key: string; value: unknown }) =>
       adminAPI.settingsSet(key, value),
     onSuccess: (_data, vars) => {
-      toast.success(`${vars.key} saved.`);
+      toast.success(t("settings.toast.saved", { key: vars.key }));
       onMutated();
     },
   });
   const resetM = useMutation({
     mutationFn: (key: string) => adminAPI.settingsDelete(key),
     onSuccess: (_data, key) => {
-      toast.success(`${key} reset to default.`);
+      toast.success(t("settings.toast.reset", { key }));
       onMutated();
     },
     onError: (err) => toast.error(errMessage(err)),
@@ -220,17 +226,17 @@ function SettingsGroupCard({
             <Badge
               variant="outline"
               className="text-[10px] border-amber-500/40 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
-              title="Save persists the value, but the running server keeps the boot-time copy. Restart railbase to apply."
+              title={t("settings.reload.restartTitle")}
             >
-              restart required
+              {t("settings.reload.restart")}
             </Badge>
           ) : (
             <Badge
               variant="outline"
               className="text-[10px] border-emerald-500/40 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"
-              title="Change takes effect immediately. No restart needed."
+              title={t("settings.reload.liveTitle")}
             >
-              live
+              {t("settings.reload.live")}
             </Badge>
           )}
           <code className="font-mono">{e.def.key}</code>
@@ -243,7 +249,7 @@ function SettingsGroupCard({
               onClick={() => {
                 if (
                   window.confirm(
-                    `Reset "${e.def.key}" to its default? The persisted override will be deleted.`,
+                    t("settings.confirm.reset", { key: e.def.key }),
                   )
                 ) {
                   resetM.mutate(e.def.key);
@@ -252,7 +258,7 @@ function SettingsGroupCard({
               disabled={resetM.isPending}
               className="underline underline-offset-2 hover:text-foreground"
             >
-              Reset to default
+              {t("settings.action.resetToDefault")}
             </button>
           ) : null}
         </span>
@@ -283,10 +289,10 @@ function SettingsGroupCard({
               : "text-[10px] text-muted-foreground"
           }
         >
-          {set ? "set" : "default"}
+          {set ? t("settings.badge.set") : t("settings.badge.default")}
         </Badge>
         <span className="font-mono text-xs break-all">
-          {formatDisplayValue(def, value)}
+          {formatDisplayValue(t, def, value)}
         </span>
       </span>
     );
@@ -417,7 +423,7 @@ function SettingControl({
 // "compact + truthful": bool reads as Yes/No, an empty string reads
 // as the placeholder so the row doesn't look broken, secrets are
 // always masked, JSON collapses to a one-line preview.
-function formatDisplayValue(def: SettingDef | undefined, value: unknown) {
+function formatDisplayValue(t: Translator["t"], def: SettingDef | undefined, value: unknown) {
   if (def?.secret && value) return "•••••••";
   if (value == null || value === "") {
     return (
@@ -426,7 +432,7 @@ function formatDisplayValue(def: SettingDef | undefined, value: unknown) {
       </span>
     );
   }
-  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "boolean") return value ? t("settings.value.yes") : t("settings.value.no");
   if (typeof value === "object") {
     try {
       return JSON.stringify(value);
@@ -442,9 +448,11 @@ function formatDisplayValue(def: SettingDef | undefined, value: unknown) {
 // uncatalogued key OR the operator explicitly opens it (so a brand-
 // new deployment with zero advanced overrides doesn't surface noise).
 function AdvancedSection({
+  t,
   unknownKeys,
   onMutated,
 }: {
+  t: Translator["t"];
   unknownKeys: string[];
   onMutated: () => void;
 }) {
@@ -452,8 +460,8 @@ function AdvancedSection({
 
   const summary =
     unknownKeys.length === 0
-      ? "Advanced (raw key/value editor — no overrides outside the catalog)"
-      : `Advanced — ${unknownKeys.length} key(s) outside the catalog`;
+      ? t("settings.advanced.summaryEmpty")
+      : t("settings.advanced.summaryCount", { count: unknownKeys.length });
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -463,7 +471,7 @@ function AdvancedSection({
             <div>
               <h2 className="text-sm font-medium">{summary}</h2>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Add or edit arbitrary keys persisted in <code className="font-mono">_settings</code>. Catalog-known settings are managed in the typed forms above.
+                {t("settings.advanced.description")}
               </p>
             </div>
             <ChevronRight

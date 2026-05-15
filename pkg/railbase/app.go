@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/go-chi/chi/v5"
 
@@ -16,10 +17,12 @@ import (
 	"github.com/railbase/railbase/internal/admins"
 	"github.com/railbase/railbase/internal/api/adminapi"
 	authapi "github.com/railbase/railbase/internal/api/auth"
+	contactapi "github.com/railbase/railbase/internal/api/contact"
 	notifapi "github.com/railbase/railbase/internal/api/notifications"
 	"github.com/railbase/railbase/internal/api/rest"
 	scimapi "github.com/railbase/railbase/internal/api/scim"
 	stripeapi "github.com/railbase/railbase/internal/api/stripeapi"
+	tenantsapi "github.com/railbase/railbase/internal/api/tenants"
 	"github.com/railbase/railbase/internal/api/uiapi"
 	"github.com/railbase/railbase/internal/audit"
 	"github.com/railbase/railbase/internal/auth/apitoken"
@@ -46,6 +49,7 @@ import (
 	"github.com/railbase/railbase/internal/i18n"
 	i18nembed "github.com/railbase/railbase/internal/i18n/embed"
 	"github.com/railbase/railbase/internal/jobs"
+	"github.com/railbase/railbase/internal/mailer"
 	"github.com/railbase/railbase/internal/logger"
 	"github.com/railbase/railbase/internal/logs"
 	"github.com/railbase/railbase/internal/maintenance"
@@ -129,6 +133,26 @@ type App struct {
 	// registry instance.
 	goHooks *hooks.GoHooks
 
+	// FEEDBACK Class A — internal-service publishing. Run() constructs
+	// each of these once and stores them here. The atomic.Pointer
+	// gives wait-free reads + a happens-before relationship between
+	// the publish (in Run, right after construction) and any
+	// embedder access (most commonly from inside an OnBeforeServe
+	// callback, which fires at the end of Run after every field below
+	// has been published).
+	//
+	// Getters are exported below — Mailer(), Stripe(), Jobs(),
+	// Realtime(), Settings(), Audit(). Each returns nil pre-Run so
+	// embedders can detect "not ready yet" without a panic — typical
+	// pattern is to nil-check inside OnBeforeServe (which never sees
+	// nil in correct lifecycles).
+	mailer   atomic.Pointer[mailer.Mailer]
+	stripe   atomic.Pointer[stripe.Service]
+	jobs     atomic.Pointer[jobs.Registry]
+	realtime atomic.Pointer[realtime.Broker]
+	settings atomic.Pointer[settings.Manager]
+	audit    atomic.Pointer[audit.Writer]
+
 	// Metrics is the process-wide in-process metric registry that backs
 	// the /api/_admin/metrics endpoint. Constructed lazily on first
 	// MetricsRegistry() call so embedders that wrap the app for tests
@@ -161,11 +185,103 @@ type App struct {
 // hooks runtime it attaches THIS registry so Go hooks fire on every
 // CRUD event alongside any JS handlers in <dataDir>/hooks/*.js.
 func (a *App) GoHooks() *hooks.GoHooks {
+	a.ensureGoHooks()
+	return a.goHooks
+}
+
+// ensureGoHooks is the idempotent initialiser for a.goHooks. Called
+// both by GoHooks() (embedder path) and by Run() (eager-init guard
+// for FEEDBACK #16). Kept separate so the unit test can exercise the
+// invariant without spinning up the full server lifecycle.
+//
+// Goroutine-safety: Run() calls this once before constructing the
+// hooks Runtime, then GoHooks() callers all see the same pointer.
+// Two embedders racing on GoHooks() pre-Run is the only contended
+// path, and that's a programmer error (one place should own the
+// hook wiring) — we don't lock here.
+func (a *App) ensureGoHooks() {
 	if a.goHooks == nil {
 		a.goHooks = hooks.NewGoHooks()
 	}
-	return a.goHooks
 }
+
+// FEEDBACK Class A — internal-service accessors.
+//
+// Each of the methods below returns the corresponding service that
+// Run() constructed. They return nil pre-Run (so a test that
+// instantiates App without running it doesn't panic) and a live
+// pointer once Run() has reached the publish point for that
+// service — typically a few hundred lines into Run, BEFORE any
+// OnBeforeServe callback fires. Embedders almost always access
+// these from inside OnBeforeServe, where they're guaranteed
+// non-nil.
+//
+// Why concrete-typed returns (not interfaces): the internal
+// packages can't be imported by external embedders (Go's internal/
+// rule), but methods on exported types are callable through method
+// expressions. So `app.Mailer().SendDirect(...)` compiles in
+// userland without an interface shim, mirroring the pre-existing
+// `app.GoHooks().OnRecordBeforeCreate(...)` pattern. Embedders who
+// want a typed variable can import the corresponding shim package
+// from pkg/railbase/<service>/ (added incrementally as embedder
+// projects need them).
+
+// Mailer returns the constructed mailer service. Use to send
+// transactional email through the configured driver (SMTP / SendGrid
+// / console) with built-in template rendering, rate limiting, and
+// `_email_events` persistence. Replaces every "I built my own
+// net/smtp client" workaround from FEEDBACK #18.
+//
+// Returns nil pre-Run; non-nil from inside OnBeforeServe onwards.
+func (a *App) Mailer() *mailer.Mailer { return a.mailer.Load() }
+
+// Stripe returns the constructed stripe service. Use to create
+// PaymentIntents / Subscriptions from custom routes WITHOUT making
+// the frontend round-trip through the public stripe endpoints.
+// FEEDBACK #3 — shopper had to bounce through three round-trips
+// because this surface was unreachable.
+//
+// Returns nil pre-Run / pre-config (no Stripe API key wired).
+func (a *App) Stripe() *stripe.Service { return a.stripe.Load() }
+
+// Jobs returns the in-process job registry. Use to register custom
+// job kinds your code processes, then enqueue them via
+// `app.Jobs().Enqueue(...)`. FEEDBACK #17 — the registry was
+// internal; embedders had to fall back to bespoke `time.Ticker`
+// loops with no retry / dead-letter / observability.
+//
+// Returns nil pre-Run.
+func (a *App) Jobs() *jobs.Registry { return a.jobs.Load() }
+
+// Realtime returns the broker the SSE / WebSocket endpoints fan
+// out from. Publish a topic event with `app.Realtime().Publish(...)`
+// to push to subscribed clients without going through the CRUD
+// layer. FEEDBACK #20 — auth/authorization for SSE on user
+// collections is documented in docs/12-admin-ui.md#realtime.
+//
+// Returns nil pre-Run.
+func (a *App) Realtime() *realtime.Broker { return a.realtime.Load() }
+
+// Settings returns the runtime settings manager backing the
+// `_settings` table + admin /api/_admin/config endpoint. Use to
+// read operator-configured values (mailer host, contact recipient,
+// flag toggles, …) from custom code. FEEDBACK #21 — shopper was
+// reading `_settings` via raw SQL and stripping JSON quotes by
+// hand because the manager wasn't exposed.
+//
+// Returns nil pre-Run.
+func (a *App) Settings() *settings.Manager { return a.settings.Load() }
+
+// Audit returns the audit writer the platform uses for built-in
+// events (auth.*, admin.*, record.*). Use to record domain events
+// alongside platform events with `app.Audit().Write(...)`. The
+// per-tenant query API (v0.4.3 Sprint 3, mounted at
+// /api/tenants/{id}/logs) reads from the same chain — so writing
+// here automatically surfaces in tenant Activity tabs that scope
+// by tenant_id. FEEDBACK #24.
+//
+// Returns nil pre-Run.
+func (a *App) Audit() *audit.Writer { return a.audit.Load() }
 
 // OnBeforeServe registers a callback that receives the live HTTP
 // router AFTER Railbase has mounted every built-in route (REST CRUD,
@@ -487,6 +603,18 @@ func buildLogOptions(cfg config.Config) logger.Options {
 // underlying http.Server returns an error. Cancelling ctx triggers
 // a graceful shutdown bounded by cfg.ShutdownGrace.
 func (a *App) Run(ctx context.Context) error {
+	// FEEDBACK #16 — force-eager GoHooks() init BEFORE the hooks Runtime
+	// is built later in Run(). The Runtime captures `a.goHooks` by
+	// value into hooks.Options{}; if it's still nil at that point
+	// (e.g. the embedder only calls app.GoHooks() inside their
+	// OnBeforeServe callback, which fires AFTER Runtime construction),
+	// the Runtime forever sees nil and silently drops every Go hook
+	// the embedder registers. The symptom — POST returns 200, audit
+	// row appears, but the user-collection OnRecordAfterCreate hook
+	// never fires — is debuggable only by reading our source. Forcing
+	// the lazy-init here makes the field stable for the rest of Run.
+	a.ensureGoHooks()
+
 	a.log.Info("starting railbase",
 		"version", buildinfo.String(),
 		"data_dir", a.cfg.DataDir,
@@ -665,6 +793,7 @@ func (a *App) Run(ctx context.Context) error {
 	// manager reads from `_settings` lazily on first access.
 	bus := eventbus.New(a.log)
 	defer bus.Close()
+	// FEEDBACK #21 (settings) — publish below right after construction.
 	settingsMgr := settings.New(settings.Options{
 		Pool: p.Pool,
 		Bus:  bus,
@@ -673,6 +802,8 @@ func (a *App) Run(ctx context.Context) error {
 		// leaves it empty — every key returns false until a row is
 		// inserted via the admin API or `railbase config set`.
 	})
+	// FEEDBACK Class A — publish for app.Settings() consumers.
+	a.settings.Store(settingsMgr)
 
 	// v1.x — process-wide live config handle. Every UI-mutable setting
 	// in the admin catalog goes through here. The dispatcher below
@@ -702,6 +833,8 @@ func (a *App) Run(ctx context.Context) error {
 	if err := auditWriter.Bootstrap(ctx); err != nil {
 		return fmt.Errorf("audit bootstrap: %w", err)
 	}
+	// FEEDBACK Class A — publish for app.Audit() consumers.
+	a.audit.Store(auditWriter)
 
 	// v3.x unified audit Store. AttachStore wires it as a TRANSPARENT
 	// dual-write sink on the legacy Writer — every existing
@@ -813,6 +946,8 @@ func (a *App) Run(ctx context.Context) error {
 	// In dev (no `mailer.driver` configured) we default to the console
 	// driver — emails print to stdout, no SMTP needed.
 	mailerSvc := buildMailer(ctx, settingsMgr, bus, p.Pool, a.log, filepath.Join(a.cfg.DataDir, "email_templates"))
+	// FEEDBACK Class A / #18 — publish for app.Mailer() consumers.
+	a.mailer.Store(mailerSvc)
 
 	// v1.1 record tokens — short-lived single-use credentials for
 	// email verification, password reset, email change, OTP, magic
@@ -879,6 +1014,8 @@ func (a *App) Run(ctx context.Context) error {
 	realtimeBroker := realtime.NewBroker(bus, a.log)
 	realtimeBroker.Start()
 	defer realtimeBroker.Stop()
+	// FEEDBACK Class A / #20 — publish for app.Realtime() consumers.
+	a.realtime.Store(realtimeBroker)
 	adminDeps.Realtime = realtimeBroker
 	// v1.7.38 — wire the mailer adapter onto the admin Deps so the
 	// digest-preview endpoint (POST /api/_admin/notifications/users/
@@ -917,6 +1054,10 @@ func (a *App) Run(ctx context.Context) error {
 	cronStore := jobs.NewCronStore(p.Pool)
 	jobsReg := jobs.NewRegistry(a.log)
 	jobs.RegisterBuiltins(jobsReg, p.Pool, a.log)
+	// FEEDBACK Class A / #17 — publish for app.Jobs() consumers. Embedders
+	// can now Register("shop.abandoned_cart", handler) instead of
+	// running bespoke time.Ticker loops outside the jobs/cron system.
+	a.jobs.Store(jobsReg)
 	// v1.7.30 — `send_email_async` builtin lets cron schedules / Go hooks
 	// fire-and-forget through the mailer. Adapter bridges the two
 	// near-identical Address shapes (jobs.MailerAddress vs mailer.Address)
@@ -1049,6 +1190,10 @@ func (a *App) Run(ctx context.Context) error {
 	// surface here; the public checkout + webhook routes mount in the
 	// /api group below via stripeapi.Mount.
 	stripeService := stripe.NewService(stripe.NewStore(p.Pool), settingsMgr, a.log)
+	// FEEDBACK Class A / #3 — publish for app.Stripe() consumers. Embedders
+	// can now CreateCatalogPayment / CreateAdhocPayment from custom routes
+	// directly, skipping the three-round-trip workaround shopper had to use.
+	a.stripe.Store(stripeService)
 	adminDeps.Stripe = stripeService
 
 	jobsRunner := jobs.NewRunner(jobsStore, jobsReg, a.log, jobs.RunnerOptions{Workers: 4})
@@ -1441,6 +1586,20 @@ func (a *App) Run(ctx context.Context) error {
 		// expect). Sibling to v1.7.0 auth-methods discovery.
 		r.Get("/api/_compat-mode", compat.Handler(compatResolver))
 
+		// v0.4.3 Sprint 5 — public Contact-form. Anonymous (the form
+		// is on the marketing site); rate-limited per IP server-side
+		// (5/min) + a hidden honeypot field for trivial bots. The
+		// destination address is read from `contact.recipient` setting
+		// or the RAILBASE_CONTACT_RECIPIENT env var. When EITHER the
+		// mailer or recipient is missing, the handler 503s so dev
+		// environments don't silently swallow submissions.
+		contactapi.Mount(r, &contactapi.Deps{
+			Mailer:         mailerSvc,
+			RecipientEmail: readSetting(ctx, settingsMgr, "contact.recipient", "RAILBASE_CONTACT_RECIPIENT", ""),
+			SiteName:       readSetting(ctx, settingsMgr, "site.name", "RAILBASE_SITE_NAME", "Railbase"),
+			Log:            a.log,
+		})
+
 		authDeps := &authapi.Deps{
 			Pool:       a.pool.Pool,
 			Sessions:   sessions,
@@ -1604,6 +1763,29 @@ func (a *App) Run(ctx context.Context) error {
 			Service: stripeService,
 			Log:     a.log,
 		})
+
+		// v0.4.3 — Tenants/workspaces CRUD + per-tenant members + logs.
+		// Backs the fullstack scaffold's `/t/<slug>` shell. Distinct
+		// from the per-request `tenant.Middleware` (X-Tenant header →
+		// RLS) above: this is the metadata surface that says WHICH
+		// tenants the user is allowed to send in that header. Auth
+		// middleware upstream gates the routes; per-handler MyRole
+		// calls authorise the owner/admin actions.
+		//
+		// Audit is threaded in so the per-tenant /logs endpoint can
+		// serve a tenant-scoped slice of `_audit_log` to non-admin
+		// members.
+		tenantsDeps := &tenantsapi.Deps{
+			Pool:    a.pool.Pool,
+			Tenants: tenant.NewStore(a.pool.Pool),
+			Audit:   auditWriter,
+			Log:     a.log,
+		}
+		// Sprint 4 — wire the rbac store so the per-tenant role
+		// assign/list endpoints work. SetRBAC keeps Deps's struct
+		// literal stable across sprints.
+		tenantsDeps.SetRBAC(rbacStore)
+		tenantsapi.Mount(r, tenantsDeps)
 
 		// v1.3.0 realtime: SSE endpoint at /api/realtime. Mounted
 		// inside the auth-middleware group because subscriptions

@@ -4,6 +4,7 @@ import { adminAPI } from "../api/admin";
 import { Link } from "wouter-preact";
 import { AdminPage } from "../layout/admin_page";
 import { useMetricBuffer, useMetricRate } from "../hooks/use_metric_buffer";
+import { useT, type Translator } from "../i18n";
 
 // Lazy: keeps Recharts in its own chunk shared with HealthScreen.
 const TrendChart = lazy(() => import("../components/trend_chart"));
@@ -24,6 +25,8 @@ import type { AuditEvent } from "../api/types";
 // with the metrics endpoint.
 
 export function DashboardScreen() {
+  const tr = useT();
+  const { t } = tr;
   const schemaQ = useQuery({ queryKey: ["schema"], queryFn: () => adminAPI.schema() });
   const auditQ = useQuery({
     queryKey: ["audit", { perPage: 10 }],
@@ -77,16 +80,16 @@ export function DashboardScreen() {
   return (
     <AdminPage className="space-y-6">
       <AdminPage.Header
-        title="Dashboard"
-        description="Quick health overview."
+        title={t("dashboard.title")}
+        description={t("dashboard.subtitle")}
       />
 
       <AdminPage.Body className="space-y-6">
       <section class="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="Collections" value={schemaQ.data?.count ?? "—"} href="/schema" />
-        <StatCard label="Audit events" value={auditQ.data?.totalItems ?? "—"} href="/logs/audit" />
-        <StatCard label="Settings" value="↗" href="/settings" />
-        <StatCard label="Docs" value="↗" href="https://github.com/railbase/railbase" external />
+        <StatCard label={t("dashboard.collections")} value={schemaQ.data?.count ?? "—"} href="/schema" />
+        <StatCard label={t("dashboard.auditEvents")} value={auditQ.data?.totalItems ?? "—"} href="/logs/audit" />
+        <StatCard label={t("dashboard.settings")} value="↗" href="/settings" />
+        <StatCard label={t("dashboard.docs")} value="↗" href="https://github.com/railbase/railbase" external />
       </section>
 
       {/* Live trend strip — last ~4 min (16 polls × 15s). Trend-first
@@ -99,28 +102,32 @@ export function DashboardScreen() {
           chunk with the Health screen. */}
       <section class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <TrendStripCard
-          title="Requests/min"
+          tr={tr}
+          title={t("dashboard.requestsPerMin")}
           value={reqRate.rate != null ? reqRate.rate.toFixed(0) : "—"}
           data={reqRate.samples}
           href="/logs/health"
           intent="primary"
         />
         <TrendStripCard
-          title="Errors/min"
+          tr={tr}
+          title={t("dashboard.errorsPerMin")}
           value={errRate.rate != null ? errRate.rate.toFixed(1) : "—"}
           data={errRate.samples}
           href="/logs/health"
           intent={errRate.rate != null && errRate.rate > 0 ? "warn" : "neutral"}
         />
         <TrendStripCard
-          title="Audit events (24h)"
+          tr={tr}
+          title={t("dashboard.auditEvents24h")}
           value={healthQ.data?.audit.last_24h ?? "—"}
           data={auditTrend}
           href="/logs/audit"
           intent="info"
         />
         <TrendStripCard
-          title="Jobs in flight"
+          tr={tr}
+          title={t("dashboard.jobsInFlight")}
           value={
             healthQ.data
               ? healthQ.data.jobs.pending + healthQ.data.jobs.running
@@ -133,14 +140,14 @@ export function DashboardScreen() {
       </section>
 
       <section class="space-y-2">
-        <h2 class="text-sm font-medium text-foreground">Recent audit events</h2>
+        <h2 class="text-sm font-medium text-foreground">{t("dashboard.recentAuditEvents")}</h2>
         <QDatatable
-          columns={recentAuditColumns}
+          columns={buildRecentAuditColumns(t)}
           data={(auditQ.data?.items ?? []).slice(0, 10)}
           loading={auditQ.isLoading}
           rowKey="seq"
           pageSize={10}
-          emptyMessage="No events yet."
+          emptyMessage={t("dashboard.noEvents")}
         />
       </section>
       </AdminPage.Body>
@@ -149,12 +156,14 @@ export function DashboardScreen() {
 }
 
 function TrendStripCard({
+  tr,
   title,
   value,
   data,
   href,
   intent,
 }: {
+  tr: Translator;
   title: string;
   value: number | string;
   data: ReadonlyArray<{ t: number; v: number }>;
@@ -176,7 +185,7 @@ function TrendStripCard({
               <Suspense
                 fallback={
                   <div class="h-full flex items-center justify-center text-[10px] text-muted-foreground">
-                    loading chart…
+                    {tr.t("dashboard.loadingChart")}
                   </div>
                 }
               >
@@ -184,7 +193,7 @@ function TrendStripCard({
               </Suspense>
             ) : (
               <div class="h-full flex items-center justify-center text-[10px] text-muted-foreground">
-                warming up… ({data.length}/2 samples)
+                {tr.t("dashboard.warmingUp", { have: data.length, need: 2 })}
               </div>
             )}
           </div>
@@ -225,32 +234,39 @@ function StatCard({
   return <Link href={href}>{inner}</Link>;
 }
 
-const recentAuditColumns: ColumnDef<AuditEvent>[] = [
-  {
-    id: "seq",
-    header: "seq",
-    accessor: "seq",
-    cell: (e) => <span class="font-mono">{e.seq}</span>,
-  },
-  {
-    id: "event",
-    header: "event",
-    accessor: "event",
-    cell: (e) => <span class="font-mono">{e.event}</span>,
-  },
-  {
-    id: "outcome",
-    header: "outcome",
-    accessor: "outcome",
-    cell: (e) => <Badge variant={outcomeVariant(e.outcome)}>{e.outcome}</Badge>,
-  },
-  {
-    id: "at",
-    header: "at",
-    accessor: "at",
-    cell: (e) => <span class="font-mono text-muted-foreground">{e.at}</span>,
-  },
-];
+// buildRecentAuditColumns is a factory (not a module-level const)
+// because column headers go through useT's `t` and have to capture
+// the active locale per render. The function is cheap and the array
+// shape doesn't churn between renders for the same locale, so
+// QDatatable's identity-based memo is unaffected in practice.
+function buildRecentAuditColumns(t: Translator["t"]): ColumnDef<AuditEvent>[] {
+  return [
+    {
+      id: "seq",
+      header: t("dashboard.col.seq"),
+      accessor: "seq",
+      cell: (e) => <span class="font-mono">{e.seq}</span>,
+    },
+    {
+      id: "event",
+      header: t("dashboard.col.event"),
+      accessor: "event",
+      cell: (e) => <span class="font-mono">{e.event}</span>,
+    },
+    {
+      id: "outcome",
+      header: t("dashboard.col.outcome"),
+      accessor: "outcome",
+      cell: (e) => <Badge variant={outcomeVariant(e.outcome)}>{e.outcome}</Badge>,
+    },
+    {
+      id: "at",
+      header: t("dashboard.col.at"),
+      accessor: "at",
+      cell: (e) => <span class="font-mono text-muted-foreground">{e.at}</span>,
+    },
+  ];
+}
 
 function outcomeVariant(o: string): "default" | "secondary" | "destructive" | "outline" {
   switch (o) {

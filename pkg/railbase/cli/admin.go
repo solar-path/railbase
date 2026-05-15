@@ -103,6 +103,15 @@ func newAdminCreateCmd() *cobra.Command {
 				fmt.Println("note: --no-email set — no welcome / broadcast emails enqueued")
 				return nil
 			}
+			// FEEDBACK #10 — surface "mailer not configured" up-front so
+			// the operator running `admin create` on a fresh box doesn't
+			// wonder why the welcome email never arrives. We don't FAIL
+			// — the welcome email is best-effort — but we do tell them
+			// what to do next (configure or skip).
+			if mailerUnconfiguredCLI(cmd.Context(), rt) {
+				fmt.Println("note: mailer not configured — welcome email will be enqueued but won't deliver " +
+					"until you set `mailer.from`. Pass --no-email to suppress, or finish setup in /_/settings/mailer.")
+			}
 			if err := enqueueAdminEmailsCLI(cmd.Context(), rt, a, "CLI (`railbase admin create`)", "operator-cli"); err != nil {
 				// Best-effort — log + continue. The admin was created;
 				// failing the command because of an email-queue error

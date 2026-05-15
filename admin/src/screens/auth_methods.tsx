@@ -27,6 +27,7 @@ import {
   QEditableForm,
   type QEditableField,
 } from "@/lib/ui/QEditableForm.ui";
+import { useT, type Translator } from "../i18n";
 
 // AuthMethodsScreen — Settings → Auth methods. Configures which
 // authentication mechanisms the install offers to app users. The page
@@ -41,35 +42,41 @@ import {
 // adminAPI so the bearer token rides along. LDAP / SAML config changes
 // require a server restart to take effect.
 
-const OAUTH_PROVIDERS = [
-  { id: "google", label: "Google" },
-  { id: "github", label: "GitHub" },
-  { id: "apple", label: "Apple" },
-  { id: "oidc", label: "Generic OIDC" },
-] as const;
+function buildOAuthProviders(t: Translator["t"]) {
+  return [
+    { id: "google", label: t("auth_methods.oauth.google") },
+    { id: "github", label: t("auth_methods.oauth.github") },
+    { id: "apple", label: t("auth_methods.oauth.apple") },
+    { id: "oidc", label: t("auth_methods.oauth.oidc") },
+  ] as const;
+}
 
-const METHOD_LABELS: Record<string, { title: string; hint: string }> = {
-  password: {
-    title: "Password",
-    hint: "Classic email + password sign-in. Recommended baseline.",
-  },
-  magic_link: {
-    title: "Magic link",
-    hint: "Passwordless: emailed one-tap link. Requires the mailer.",
-  },
-  otp: {
-    title: "Email OTP",
-    hint: "6-digit code emailed to the user. Useful as a backup factor.",
-  },
-  totp: {
-    title: "TOTP 2FA",
-    hint: "Authenticator-app codes (Google Authenticator, 1Password, etc.). Optional second factor.",
-  },
-  webauthn: {
-    title: "Passkeys (WebAuthn)",
-    hint: "Hardware-key / platform-authenticator sign-in. Optional alternative to passwords.",
-  },
-};
+function buildMethodLabels(
+  t: Translator["t"],
+): Record<string, { title: string; hint: string }> {
+  return {
+    password: {
+      title: t("auth_methods.method.password"),
+      hint: t("auth_methods.method.passwordHint"),
+    },
+    magic_link: {
+      title: t("auth_methods.method.magic_link"),
+      hint: t("auth_methods.method.magic_linkHint"),
+    },
+    otp: {
+      title: t("auth_methods.method.otp"),
+      hint: t("auth_methods.method.otpHint"),
+    },
+    totp: {
+      title: t("auth_methods.method.totp"),
+      hint: t("auth_methods.method.totpHint"),
+    },
+    webauthn: {
+      title: t("auth_methods.method.webauthn"),
+      hint: t("auth_methods.method.webauthnHint"),
+    },
+  };
+}
 
 // Local draft shapes — the snapshot plus the local-only secret fields
 // (bind_password / sp_key_pem) the UI never echoes back: empty means
@@ -86,6 +93,7 @@ interface AuthDraft {
 }
 
 export function AuthMethodsScreen() {
+  const { t } = useT();
   const [editing, setEditing] = useState(false);
   const statusQ = useQuery({
     queryKey: ["auth-status"],
@@ -102,31 +110,34 @@ export function AuthMethodsScreen() {
         .map(([k]) => k)
     : [];
 
+  const METHOD_LABELS = buildMethodLabels(t);
+  const OAUTH_PROVIDERS = buildOAuthProviders(t);
+
   return (
     <AdminPage className="max-w-3xl">
       <AdminPage.Header
-        title="Auth methods"
-        description="Choose how end-users sign in. Admin sign-in (this UI) is always password-based and unaffected by these toggles."
+        title={t("auth_methods.title")}
+        description={t("auth_methods.subtitle")}
         actions={
           <Button onClick={() => setEditing(true)} disabled={statusQ.isLoading}>
-            Edit auth methods
+            {t("auth_methods.edit")}
           </Button>
         }
       />
 
       <AdminPage.Body className="space-y-4">
         {statusQ.isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
         ) : (
           <>
             {status?.configured_at ? (
               <p className="text-sm text-muted-foreground">
-                Last configured{" "}
+                {t("auth_methods.lastConfigured")}{" "}
                 <code className="font-mono">{status.configured_at}</code>.
               </p>
             ) : null}
             <dl className="divide-y rounded-md border text-sm">
-              <SummaryRow label="Built-in methods">
+              <SummaryRow label={t("auth_methods.summary.builtin")}>
                 {enabledMethods.length ? (
                   <span className="flex flex-wrap gap-1">
                     {enabledMethods.map((m) => (
@@ -136,10 +147,10 @@ export function AuthMethodsScreen() {
                     ))}
                   </span>
                 ) : (
-                  <span className="text-muted-foreground">none enabled</span>
+                  <span className="text-muted-foreground">{t("auth_methods.noneEnabled")}</span>
                 )}
               </SummaryRow>
-              <SummaryRow label="OAuth / SSO">
+              <SummaryRow label={t("auth_methods.summary.oauth")}>
                 {enabledOAuth.length ? (
                   <span className="flex flex-wrap gap-1">
                     {enabledOAuth.map((p) => (
@@ -149,28 +160,26 @@ export function AuthMethodsScreen() {
                     ))}
                   </span>
                 ) : (
-                  <span className="text-muted-foreground">none enabled</span>
+                  <span className="text-muted-foreground">{t("auth_methods.noneEnabled")}</span>
                 )}
               </SummaryRow>
-              <SummaryRow label="LDAP / AD">
-                {status?.ldap?.enabled ? "enabled" : "disabled"}
+              <SummaryRow label={t("auth_methods.summary.ldap")}>
+                {status?.ldap?.enabled ? t("auth_methods.enabled") : t("auth_methods.disabled")}
               </SummaryRow>
-              <SummaryRow label="SAML 2.0">
-                {status?.saml?.enabled ? "enabled" : "disabled"}
+              <SummaryRow label={t("auth_methods.summary.saml")}>
+                {status?.saml?.enabled ? t("auth_methods.enabled") : t("auth_methods.disabled")}
               </SummaryRow>
-              <SummaryRow label="SCIM 2.0">
+              <SummaryRow label={t("auth_methods.summary.scim")}>
                 {status?.scim?.enabled
-                  ? `enabled (${status.scim.tokens_active} active token${
-                      status.scim.tokens_active === 1 ? "" : "s"
-                    })`
-                  : "disabled"}
+                  ? t("auth_methods.scimEnabled", { count: status.scim.tokens_active })
+                  : t("auth_methods.disabled")}
               </SummaryRow>
             </dl>
 
             {status?.plugin_gated?.length ? (
               <section className="space-y-2">
                 <h2 className="text-sm font-medium">
-                  Enterprise SSO (coming in core)
+                  {t("auth_methods.enterprise")}
                 </h2>
                 <div className="grid gap-2">
                   {status.plugin_gated.map((p) => (
@@ -180,7 +189,7 @@ export function AuthMethodsScreen() {
                     >
                       <span>{p.display_name}</span>
                       <span className="text-xs text-muted-foreground">
-                        arrives in{" "}
+                        {t("auth_methods.arrivesIn")}{" "}
                         <code className="font-mono px-1 py-0.5 bg-background rounded">
                           {p.available_in}
                         </code>
@@ -202,6 +211,7 @@ export function AuthMethodsScreen() {
           void statusQ.refetch();
           setEditing(false);
         }}
+        t={t}
       />
     </AdminPage>
   );
@@ -229,11 +239,13 @@ function AuthMethodsDrawer({
   status,
   onClose,
   onSaved,
+  t,
 }: {
   open: boolean;
   status: AuthMethodsStatus | null;
   onClose: () => void;
   onSaved: () => void;
+  t: Translator["t"];
 }) {
   return (
     <Drawer
@@ -245,10 +257,9 @@ function AuthMethodsDrawer({
     >
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-2xl">
         <DrawerHeader>
-          <DrawerTitle>Auth methods</DrawerTitle>
+          <DrawerTitle>{t("auth_methods.title")}</DrawerTitle>
           <DrawerDescription>
-            Toggle and configure how end-users sign in. LDAP / SAML changes
-            take effect after a server restart.
+            {t("auth_methods.drawerDesc")}
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
@@ -257,6 +268,7 @@ function AuthMethodsDrawer({
               status={status}
               onClose={onClose}
               onSaved={onSaved}
+              t={t}
             />
           ) : null}
         </div>
@@ -272,10 +284,12 @@ function AuthMethodsBody({
   status,
   onClose,
   onSaved,
+  t,
 }: {
   status: AuthMethodsStatus;
   onClose: () => void;
   onSaved: () => void;
+  t: Translator["t"];
 }) {
   const qc = useQueryClient();
   const [formError, setFormError] = useState<string | null>(null);
@@ -300,23 +314,25 @@ function AuthMethodsBody({
   });
 
   const fields: QEditableField[] = [
-    { key: "methods", label: "Built-in methods" },
+    { key: "methods", label: t("auth_methods.summary.builtin") },
     {
       key: "oauth",
-      label: "OAuth / SSO providers",
-      helpText: `Redirect URI base: ${status.redirect_base || "—"} (per-provider: {base}/{provider}/callback).`,
+      label: t("auth_methods.oauthProviders"),
+      helpText: t("auth_methods.redirectBase", {
+        base: status.redirect_base || "—",
+      }),
     },
     {
       key: "ldap",
-      label: "LDAP / Active Directory",
-      helpText: "Config changes take effect after a server restart.",
+      label: t("auth_methods.ldapTitle"),
+      helpText: t("auth_methods.restartHint"),
     },
     {
       key: "saml",
-      label: "SAML 2.0 (SSO)",
-      helpText: "Config changes take effect after a server restart.",
+      label: t("auth_methods.samlTitle"),
+      helpText: t("auth_methods.restartHint"),
     },
-    { key: "scim", label: "SCIM 2.0 (inbound provisioning)" },
+    { key: "scim", label: t("auth_methods.scimTitle") },
   ];
 
   const renderInput = (
@@ -330,6 +346,7 @@ function AuthMethodsBody({
           <MethodsSection
             value={value as Record<string, boolean>}
             onChange={onChange}
+            t={t}
           />
         );
       case "oauth":
@@ -338,21 +355,23 @@ function AuthMethodsBody({
             value={value as Record<string, AuthOAuthSnapshot>}
             stored={status.oauth ?? {}}
             onChange={onChange}
+            t={t}
           />
         );
       case "ldap":
         return (
-          <LdapSection value={value as LdapDraft} onChange={onChange} />
+          <LdapSection value={value as LdapDraft} onChange={onChange} t={t} />
         );
       case "saml":
         return (
-          <SamlSection value={value as SamlDraft} onChange={onChange} />
+          <SamlSection value={value as SamlDraft} onChange={onChange} t={t} />
         );
       case "scim":
         return (
           <ScimSection
             value={value as AuthSCIMSnapshot}
             onChange={onChange}
+            t={t}
           />
         );
       default:
@@ -412,13 +431,13 @@ function AuthMethodsBody({
         scim: scimBody,
       });
       if (res?.ok === false) {
-        setFormError(res.note ?? "Save failed.");
+        setFormError(res.note ?? t("auth_methods.saveFailed"));
         return;
       }
       void qc.invalidateQueries({ queryKey: ["auth-status"] });
       onSaved();
     } catch (e) {
-      setFormError(isAPIError(e) ? e.message : "Save failed.");
+      setFormError(isAPIError(e) ? e.message : t("auth_methods.saveFailed"));
     }
   };
 
@@ -429,7 +448,7 @@ function AuthMethodsBody({
       values={seed as unknown as Record<string, unknown>}
       renderInput={renderInput}
       onCreate={handleSave}
-      submitLabel="Save"
+      submitLabel={t("common.save")}
       onCancel={onClose}
       formError={formError}
     />
@@ -443,10 +462,13 @@ function AuthMethodsBody({
 function MethodsSection({
   value,
   onChange,
+  t,
 }: {
   value: Record<string, boolean>;
   onChange: (v: Record<string, boolean>) => void;
+  t: Translator["t"];
 }) {
+  const METHOD_LABELS = buildMethodLabels(t);
   return (
     <div className="grid gap-2">
       {Object.entries(METHOD_LABELS).map(([key, meta]) => (
@@ -472,11 +494,14 @@ function OAuthSection({
   value,
   stored,
   onChange,
+  t,
 }: {
   value: Record<string, AuthOAuthSnapshot>;
   stored: Record<string, AuthOAuthSnapshot>;
   onChange: (v: Record<string, AuthOAuthSnapshot>) => void;
+  t: Translator["t"];
 }) {
+  const OAUTH_PROVIDERS = buildOAuthProviders(t);
   const patch = (id: string, p: Partial<AuthOAuthSnapshot>) =>
     onChange({
       ...value,
@@ -500,13 +525,13 @@ function OAuthSection({
               <span className="text-sm font-medium">{p.label}</span>
               {secretStored ? (
                 <span className="ml-auto text-xs text-muted-foreground">
-                  secret stored
+                  {t("auth_methods.secretStored")}
                 </span>
               ) : null}
             </label>
             {cfg.enabled ? (
               <div className="space-y-2 pl-7">
-                <Field label="Client ID">
+                <Field label={t("auth_methods.clientId")}>
                   <Input
                     value={cfg.client_id ?? ""}
                     onInput={(e) =>
@@ -517,8 +542,8 @@ function OAuthSection({
                 <Field
                   label={
                     secretStored
-                      ? "Client secret (leave blank to keep stored)"
-                      : "Client secret"
+                      ? t("auth_methods.clientSecretKeep")
+                      : t("auth_methods.clientSecret")
                   }
                 >
                   <PasswordInput
@@ -530,7 +555,7 @@ function OAuthSection({
                   />
                 </Field>
                 {p.id === "oidc" ? (
-                  <Field label="Issuer URL">
+                  <Field label={t("auth_methods.issuerUrl")}>
                     <Input
                       type="url"
                       placeholder="https://accounts.example.com"
@@ -553,9 +578,11 @@ function OAuthSection({
 function LdapSection({
   value,
   onChange,
+  t,
 }: {
   value: LdapDraft;
   onChange: (v: LdapDraft) => void;
+  t: Translator["t"];
 }) {
   const patch = (p: Partial<LdapDraft>) => onChange({ ...value, ...p });
   return (
@@ -565,31 +592,31 @@ function LdapSection({
           checked={value.enabled}
           onCheckedChange={(v) => patch({ enabled: v === true })}
         />
-        <span className="text-sm font-medium">Enable LDAP sign-in</span>
+        <span className="text-sm font-medium">{t("auth_methods.ldap.enable")}</span>
         {value.bind_password_set ? (
           <span className="ml-auto text-xs text-muted-foreground">
-            bind password stored
+            {t("auth_methods.ldap.bindStored")}
           </span>
         ) : null}
       </label>
       {value.enabled ? (
         <div className="space-y-2 pl-7">
-          <Field label="Server URL">
+          <Field label={t("auth_methods.ldap.serverUrl")}>
             <Input
               placeholder="ldaps://ad.example.com:636"
               value={value.url ?? ""}
               onInput={(e) => patch({ url: e.currentTarget.value })}
             />
           </Field>
-          <Field label="TLS mode">
+          <Field label={t("auth_methods.ldap.tlsMode")}>
             <select
               className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
               value={value.tls_mode ?? "starttls"}
               onChange={(e) => patch({ tls_mode: e.currentTarget.value })}
             >
-              <option value="starttls">STARTTLS (upgrade plain → TLS)</option>
-              <option value="tls">TLS (ldaps://)</option>
-              <option value="off">Off (plain — insecure)</option>
+              <option value="starttls">{t("auth_methods.ldap.tls.starttls")}</option>
+              <option value="tls">{t("auth_methods.ldap.tls.tls")}</option>
+              <option value="off">{t("auth_methods.ldap.tls.off")}</option>
             </select>
           </Field>
           <label className="flex items-center gap-2 text-xs">
@@ -600,10 +627,10 @@ function LdapSection({
               }
             />
             <span className="text-destructive">
-              Skip TLS certificate verification (dev only)
+              {t("auth_methods.ldap.skipTls")}
             </span>
           </label>
-          <Field label="Service-account bind DN">
+          <Field label={t("auth_methods.ldap.bindDn")}>
             <Input
               placeholder="cn=railbase,ou=ServiceAccounts,dc=example,dc=com"
               value={value.bind_dn ?? ""}
@@ -613,8 +640,8 @@ function LdapSection({
           <Field
             label={
               value.bind_password_set
-                ? "Service-account password (leave blank to keep stored)"
-                : "Service-account password"
+                ? t("auth_methods.ldap.bindPasswordKeep")
+                : t("auth_methods.ldap.bindPassword")
             }
           >
             <PasswordInput
@@ -623,14 +650,14 @@ function LdapSection({
               autoComplete="new-password"
             />
           </Field>
-          <Field label="User search base DN">
+          <Field label={t("auth_methods.ldap.userBaseDn")}>
             <Input
               placeholder="ou=Users,dc=example,dc=com"
               value={value.user_base_dn ?? ""}
               onInput={(e) => patch({ user_base_dn: e.currentTarget.value })}
             />
           </Field>
-          <Field label="User search filter (use %s for username)">
+          <Field label={t("auth_methods.ldap.userFilter")}>
             <Input
               placeholder="(&(objectClass=person)(|(uid=%s)(mail=%s)(sAMAccountName=%s)))"
               value={value.user_filter ?? ""}
@@ -638,14 +665,14 @@ function LdapSection({
             />
           </Field>
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Email attribute">
+            <Field label={t("auth_methods.ldap.emailAttr")}>
               <Input
                 placeholder="mail"
                 value={value.email_attr ?? ""}
                 onInput={(e) => patch({ email_attr: e.currentTarget.value })}
               />
             </Field>
-            <Field label="Name attribute">
+            <Field label={t("auth_methods.ldap.nameAttr")}>
               <Input
                 placeholder="cn"
                 value={value.name_attr ?? ""}
@@ -662,9 +689,11 @@ function LdapSection({
 function SamlSection({
   value,
   onChange,
+  t,
 }: {
   value: SamlDraft;
   onChange: (v: SamlDraft) => void;
+  t: Translator["t"];
 }) {
   const patch = (p: Partial<SamlDraft>) => onChange({ ...value, ...p });
   return (
@@ -674,11 +703,11 @@ function SamlSection({
           checked={value.enabled}
           onCheckedChange={(v) => patch({ enabled: v === true })}
         />
-        <span className="text-sm font-medium">Enable SAML sign-in</span>
+        <span className="text-sm font-medium">{t("auth_methods.saml.enable")}</span>
       </label>
       {value.enabled ? (
         <div className="space-y-2 pl-7">
-          <Field label="IdP metadata URL (preferred)">
+          <Field label={t("auth_methods.saml.idpMetadataUrl")}>
             <Input
               type="url"
               placeholder="https://idp.example.com/saml/metadata"
@@ -686,7 +715,7 @@ function SamlSection({
               onInput={(e) => patch({ idp_metadata_url: e.currentTarget.value })}
             />
           </Field>
-          <Field label="IdP metadata XML (alternative — paste raw)">
+          <Field label={t("auth_methods.saml.idpMetadataXml")}>
             <Textarea
               rows={4}
               className="font-mono text-xs"
@@ -694,14 +723,14 @@ function SamlSection({
               onInput={(e) => patch({ idp_metadata_xml: e.currentTarget.value })}
             />
           </Field>
-          <Field label="SP Entity ID">
+          <Field label={t("auth_methods.saml.spEntityId")}>
             <Input
               placeholder="https://railbase.example.com/saml/sp"
               value={value.sp_entity_id ?? ""}
               onInput={(e) => patch({ sp_entity_id: e.currentTarget.value })}
             />
           </Field>
-          <Field label="ACS URL (Assertion Consumer Service)">
+          <Field label={t("auth_methods.saml.acsUrl")}>
             <Input
               type="url"
               placeholder="https://railbase.example.com/api/collections/users/auth-with-saml/acs"
@@ -709,7 +738,7 @@ function SamlSection({
               onInput={(e) => patch({ sp_acs_url: e.currentTarget.value })}
             />
           </Field>
-          <Field label="SLO URL (Single Logout) — optional">
+          <Field label={t("auth_methods.saml.sloUrl")}>
             <Input
               type="url"
               placeholder="https://railbase.example.com/api/collections/users/auth-with-saml/slo"
@@ -718,7 +747,7 @@ function SamlSection({
             />
           </Field>
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Email attribute">
+            <Field label={t("auth_methods.saml.emailAttribute")}>
               <Input
                 placeholder="email"
                 value={value.email_attribute ?? ""}
@@ -727,7 +756,7 @@ function SamlSection({
                 }
               />
             </Field>
-            <Field label="Name attribute">
+            <Field label={t("auth_methods.saml.nameAttribute")}>
               <Input
                 placeholder="name"
                 value={value.name_attribute ?? ""}
@@ -745,11 +774,10 @@ function SamlSection({
               }
             />
             <span>
-              Allow IdP-initiated sign-in
+              {t("auth_methods.saml.idpInitiated")}
               <span className="text-muted-foreground">
                 {" "}
-                — opens a CSRF-shaped attack surface; enable only if your
-                threat model accepts it.
+                {t("auth_methods.saml.idpInitiatedHint")}
               </span>
             </span>
           </label>
@@ -762,11 +790,11 @@ function SamlSection({
                   patch({ sign_authn_requests: v === true })
                 }
               />
-              <span className="font-medium">Sign AuthnRequests</span>
+              <span className="font-medium">{t("auth_methods.saml.signAuthn")}</span>
             </label>
             {value.sign_authn_requests ? (
               <>
-                <Field label="SP Certificate (PEM) — not secret">
+                <Field label={t("auth_methods.saml.spCert")}>
                   <Textarea
                     rows={4}
                     className="font-mono text-xs"
@@ -779,8 +807,8 @@ function SamlSection({
                 <Field
                   label={
                     value.sp_key_pem_set
-                      ? "SP Private Key (PEM) — stored; type to rotate"
-                      : "SP Private Key (PEM) — secret"
+                      ? t("auth_methods.saml.spKeyStored")
+                      : t("auth_methods.saml.spKey")
                   }
                 >
                   <Textarea
@@ -788,7 +816,7 @@ function SamlSection({
                     className="font-mono text-xs"
                     placeholder={
                       value.sp_key_pem_set
-                        ? "Leave blank to keep the stored key."
+                        ? t("auth_methods.saml.spKeyKeep")
                         : "-----BEGIN PRIVATE KEY-----"
                     }
                     value={value.sp_key_pem}
@@ -801,9 +829,9 @@ function SamlSection({
 
           <div className="space-y-2 rounded-md border border-dashed bg-muted/30 p-3">
             <h3 className="text-xs font-medium">
-              Group → role mapping (optional)
+              {t("auth_methods.saml.groupMapping")}
             </h3>
-            <Field label="Group attribute name">
+            <Field label={t("auth_methods.saml.groupAttribute")}>
               <Input
                 placeholder="groups"
                 value={value.group_attribute ?? ""}
@@ -812,7 +840,7 @@ function SamlSection({
                 }
               />
             </Field>
-            <Field label="Role mapping (JSON)">
+            <Field label={t("auth_methods.saml.roleMapping")}>
               <Textarea
                 rows={4}
                 className="font-mono text-xs"
@@ -833,9 +861,11 @@ function SamlSection({
 function ScimSection({
   value,
   onChange,
+  t,
 }: {
   value: AuthSCIMSnapshot;
   onChange: (v: AuthSCIMSnapshot) => void;
+  t: Translator["t"];
 }) {
   return (
     <div className="rounded-md border bg-background p-3 space-y-2">
@@ -844,17 +874,16 @@ function ScimSection({
           checked={!!value.enabled}
           onCheckedChange={(v) => onChange({ ...value, enabled: v === true })}
         />
-        <span className="text-sm font-medium">Enable SCIM provisioning</span>
+        <span className="text-sm font-medium">{t("auth_methods.scim.enable")}</span>
         {value.tokens_active > 0 ? (
           <span className="ml-auto text-xs text-muted-foreground">
-            {value.tokens_active} active token
-            {value.tokens_active === 1 ? "" : "s"}
+            {t("auth_methods.scim.activeTokens", { count: value.tokens_active })}
           </span>
         ) : null}
       </label>
       {value.enabled ? (
         <div className="space-y-2 pt-1">
-          <Field label="Target auth-collection">
+          <Field label={t("auth_methods.scim.collection")}>
             <Input
               placeholder="users"
               value={value.collection ?? "users"}
@@ -866,7 +895,7 @@ function ScimSection({
           {value.endpoint_url ? (
             <div className="rounded-md bg-muted/40 p-2 text-xs">
               <div className="text-muted-foreground">
-                SCIM endpoint URL (paste into your IdP):
+                {t("auth_methods.scim.endpoint")}
               </div>
               <div className="font-mono mt-0.5 break-all">
                 {value.endpoint_url}
@@ -874,12 +903,12 @@ function ScimSection({
             </div>
           ) : null}
           <p className="text-xs text-muted-foreground">
-            Mint a bearer credential with{" "}
+            {t("auth_methods.scim.mintLead")}{" "}
             <code className="font-mono px-1 py-0.5 bg-muted rounded">
               railbase scim token create --collection{" "}
               {value.collection ?? "users"}
             </code>{" "}
-            — the CLI prints it once.
+            {t("auth_methods.scim.mintTail")}
           </p>
         </div>
       ) : null}

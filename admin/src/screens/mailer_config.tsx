@@ -18,6 +18,7 @@ import {
   QEditableForm,
   type QEditableField,
 } from "@/lib/ui/QEditableForm.ui";
+import { useT, type Translator } from "../i18n";
 
 // MailerConfigScreen — Settings → Mailer. Configures outbound email
 // delivery (SMTP or console driver). The page shows a read-only summary
@@ -69,6 +70,7 @@ function bodyForBackend(
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function MailerConfigScreen() {
+  const { t } = useT();
   const [editing, setEditing] = useState(false);
   const statusQ = useQuery({
     queryKey: ["mailer-status"],
@@ -82,60 +84,59 @@ export function MailerConfigScreen() {
   return (
     <AdminPage className="max-w-3xl">
       <AdminPage.Header
-        title="Mailer"
-        description="Configure outbound email delivery — SMTP or console driver. Railbase sends welcome notifications and compromise-detection broadcasts when an administrator account is created."
+        title={t("mailer_config.title")}
+        description={t("mailer_config.subtitle")}
         actions={
           <Button onClick={() => setEditing(true)} disabled={statusQ.isLoading}>
-            {configured ? "Edit configuration" : "Configure mailer"}
+            {configured ? t("mailer_config.editConfig") : t("mailer_config.configureMailer")}
           </Button>
         }
       />
 
       <AdminPage.Body>
         {statusQ.isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
         ) : (
           <div className="space-y-3 text-sm">
             {configured ? (
               <p className="bg-primary/10 border border-primary/40 text-primary rounded px-3 py-2">
-                Mailer was configured on{" "}
+                {t("mailer_config.configuredOn")}{" "}
                 <code className="font-mono">{status?.configured_at}</code>.
               </p>
             ) : (
               <p className="bg-muted border rounded px-3 py-2 text-muted-foreground">
-                Mailer is not configured yet. Outbound email won&apos;t be
-                delivered until you set a driver.
+                {t("mailer_config.notConfigured")}
               </p>
             )}
             <dl className="divide-y rounded-md border">
-              <SummaryRow label="Driver">
+              <SummaryRow label={t("mailer_config.driver")}>
                 {cfg?.driver ? (
                   <Badge variant="outline">{cfg.driver}</Badge>
                 ) : (
                   "—"
                 )}
               </SummaryRow>
-              <SummaryRow label="From address">
+              <SummaryRow label={t("mailer_config.fromAddress")}>
                 <span className="font-mono">{cfg?.from_address || "—"}</span>
               </SummaryRow>
-              <SummaryRow label="From name">
+              <SummaryRow label={t("mailer_config.fromName")}>
                 {cfg?.from_name || "—"}
               </SummaryRow>
               {cfg?.driver === "smtp" ? (
                 <>
-                  <SummaryRow label="SMTP host">
+                  <SummaryRow label={t("mailer_config.smtpHost")}>
                     <span className="font-mono">
                       {cfg.smtp_host || "—"}
                       {cfg.smtp_port ? `:${cfg.smtp_port}` : ""}
                     </span>
                   </SummaryRow>
-                  <SummaryRow label="Username">
+                  <SummaryRow label={t("mailer_config.username")}>
                     <span className="font-mono">{cfg.smtp_user || "—"}</span>
                   </SummaryRow>
-                  <SummaryRow label="Password">
-                    {cfg.smtp_password_set ? "set" : "—"}
+                  <SummaryRow label={t("mailer_config.password")}>
+                    {cfg.smtp_password_set ? t("mailer_config.set") : "—"}
                   </SummaryRow>
-                  <SummaryRow label="Encryption">
+                  <SummaryRow label={t("mailer_config.encryption")}>
                     {cfg.tls || "—"}
                   </SummaryRow>
                 </>
@@ -153,6 +154,7 @@ export function MailerConfigScreen() {
           void statusQ.refetch();
           setEditing(false);
         }}
+        t={t}
       />
     </AdminPage>
   );
@@ -181,11 +183,13 @@ function MailerEditorDrawer({
   status,
   onClose,
   onSaved,
+  t,
 }: {
   open: boolean;
   status: MailerConfigStatus | null;
   onClose: () => void;
   onSaved: () => void;
+  t: Translator["t"];
 }) {
   return (
     <Drawer
@@ -197,10 +201,9 @@ function MailerEditorDrawer({
     >
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-xl">
         <DrawerHeader>
-          <DrawerTitle>Mailer configuration</DrawerTitle>
+          <DrawerTitle>{t("mailer_config.drawerTitle")}</DrawerTitle>
           <DrawerDescription>
-            Pick a delivery driver and fill in the details. “Send test email”
-            probes the values below without saving.
+            {t("mailer_config.drawerDesc")}
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
@@ -209,6 +212,7 @@ function MailerEditorDrawer({
               status={status}
               onClose={onClose}
               onSaved={onSaved}
+              t={t}
             />
           ) : null}
         </div>
@@ -224,10 +228,12 @@ function MailerEditorBody({
   status,
   onClose,
   onSaved,
+  t,
 }: {
   status: MailerConfigStatus | null;
   onClose: () => void;
   onSaved: () => void;
+  t: Translator["t"];
 }) {
   const qc = useQueryClient();
   const cfg = status?.config;
@@ -257,34 +263,33 @@ function MailerEditorBody({
   const COMMON_FIELDS: QEditableField[] = [
     {
       key: "from_address",
-      label: "From address",
+      label: t("mailer_config.fromAddress"),
       required: true,
       helpText: "railbase@yourcompany.com",
     },
-    { key: "from_name", label: "From name" },
+    { key: "from_name", label: t("mailer_config.fromName") },
   ];
   const SMTP_FIELDS: QEditableField[] = [
-    { key: "smtp_host", label: "SMTP host", required: true },
-    { key: "smtp_port", label: "Port", required: true },
-    { key: "smtp_user", label: "Username" },
+    { key: "smtp_host", label: t("mailer_config.smtpHost"), required: true },
+    { key: "smtp_port", label: t("mailer_config.port"), required: true },
+    { key: "smtp_user", label: t("mailer_config.username") },
     {
       key: "smtp_password",
-      label: "Password",
+      label: t("mailer_config.password"),
       helpText: cfg?.smtp_password_set
-        ? "Leave empty to keep the current password. For Gmail-style providers, use an app-specific password."
-        : "For Gmail-style providers, use an app-specific password.",
+        ? t("mailer_config.passwordHintKeep")
+        : t("mailer_config.passwordHint"),
     },
     {
       key: "tls",
-      label: "Encryption",
-      helpText: "STARTTLS = port 587, Implicit TLS = port 465.",
+      label: t("mailer_config.encryption"),
+      helpText: t("mailer_config.tlsHint"),
     },
   ];
   const PROBE_FIELD: QEditableField = {
     key: "probe_to",
-    label: "Probe recipient",
-    helpText:
-      "“Send test email” delivers a small test message here. Doesn't need to be the admin email.",
+    label: t("mailer_config.probeRecipient"),
+    helpText: t("mailer_config.probeHint"),
   };
 
   const fields: QEditableField[] =
@@ -345,7 +350,7 @@ function MailerEditorBody({
             type="email"
             value={(value as string) ?? ""}
             onInput={(e) => onChange(e.currentTarget.value)}
-            placeholder="usually your account email"
+            placeholder={t("mailer_config.usernamePlaceholder")}
             autoComplete="email"
           />
         );
@@ -358,7 +363,7 @@ function MailerEditorBody({
             autoComplete="new-password"
             placeholder={
               cfg?.smtp_password_set
-                ? "(unchanged — leave empty to keep current)"
+                ? t("mailer_config.passwordUnchanged")
                 : ""
             }
           />
@@ -370,9 +375,9 @@ function MailerEditorBody({
             onChange={(e) => onChange(e.currentTarget.value)}
             className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
           >
-            <option value="starttls">STARTTLS (port 587)</option>
-            <option value="implicit">Implicit TLS (port 465)</option>
-            <option value="off">None</option>
+            <option value="starttls">{t("mailer_config.tls.starttls")}</option>
+            <option value="implicit">{t("mailer_config.tls.implicit")}</option>
+            <option value="off">{t("mailer_config.tls.off")}</option>
           </select>
         );
       case "probe_to":
@@ -395,15 +400,15 @@ function MailerEditorBody({
   const validate = (d: Record<string, unknown>): Record<string, string> => {
     const fe: Record<string, string> = {};
     if (!EMAIL_RE.test(String(d.from_address ?? "").trim())) {
-      fe.from_address = "Valid email required";
+      fe.from_address = t("mailer_config.err.email");
     }
     if (driver === "smtp") {
       if (!String(d.smtp_host ?? "").trim()) {
-        fe.smtp_host = "SMTP host required";
+        fe.smtp_host = t("mailer_config.err.smtpHost");
       }
       const port = Number(d.smtp_port);
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
-        fe.smtp_port = "Port must be between 1 and 65535";
+        fe.smtp_port = t("mailer_config.err.port");
       }
     }
     return fe;
@@ -421,13 +426,13 @@ function MailerEditorBody({
     try {
       const data = await adminAPI.mailerSave(bodyForBackend(driver, d));
       if (data?.ok === false) {
-        setFormError(data.note ?? "Save failed.");
+        setFormError(data.note ?? t("mailer_config.err.saveFailed"));
         return;
       }
       void qc.invalidateQueries({ queryKey: ["mailer-status"] });
       onSaved();
     } catch (e) {
-      setFormError(isAPIError(e) ? e.message : "Save failed.");
+      setFormError(isAPIError(e) ? e.message : t("mailer_config.err.saveFailed"));
     }
   };
 
@@ -437,7 +442,7 @@ function MailerEditorBody({
     setProbeResult(null);
     const fe = validate(d);
     if (!EMAIL_RE.test(String(d.probe_to ?? "").trim())) {
-      fe.probe_to = "Valid email required for the probe";
+      fe.probe_to = t("mailer_config.err.probeEmail");
     }
     if (Object.keys(fe).length > 0) {
       setFieldErrors(fe);
@@ -446,7 +451,7 @@ function MailerEditorBody({
     try {
       setProbeResult(await adminAPI.mailerProbe(bodyForBackend(driver, d)));
     } catch (e) {
-      setFormError(isAPIError(e) ? e.message : "Probe failed.");
+      setFormError(isAPIError(e) ? e.message : t("mailer_config.err.probeFailed"));
     }
   };
 
@@ -454,20 +459,20 @@ function MailerEditorBody({
     <div className="space-y-4">
       <div className="space-y-1.5">
         <span className="font-mono text-xs font-medium text-muted-foreground">
-          Delivery driver
+          {t("mailer_config.deliveryDriver")}
         </span>
         <div className="grid gap-2">
           <DriverOption
             checked={driver === "smtp"}
             onSelect={() => setDriver("smtp")}
             title="SMTP"
-            desc="Production-grade. Point at your provider (Gmail, Mailgun, SendGrid, Postmark, …) or self-hosted SMTP."
+            desc={t("mailer_config.smtpDesc")}
           />
           <DriverOption
             checked={driver === "console"}
             onSelect={() => setDriver("console")}
-            title="Console (development)"
-            desc="Emails are printed to the Railbase server logs. Useful for local dev."
+            title={t("mailer_config.consoleTitle")}
+            desc={t("mailer_config.consoleDesc")}
           />
         </div>
       </div>
@@ -478,9 +483,9 @@ function MailerEditorBody({
         values={seed}
         renderInput={renderInput}
         onCreate={handleSave}
-        submitLabel="Save"
+        submitLabel={t("common.save")}
         onSecondaryAction={handleProbe}
-        secondaryActionLabel="Send test email"
+        secondaryActionLabel={t("mailer_config.sendTest")}
         onCancel={onClose}
         fieldErrors={fieldErrors}
         formError={formError}
@@ -488,18 +493,18 @@ function MailerEditorBody({
           probeResult ? (
             probeResult.ok ? (
               <p className="text-sm bg-primary/10 border border-primary/40 text-primary rounded px-3 py-2">
-                Test email dispatched via{" "}
-                <strong>{probeResult.driver}</strong>. Check the recipient
-                inbox (or the Railbase logs for the console driver).
+                {t("mailer_config.probeOkLead")}{" "}
+                <strong>{probeResult.driver}</strong>.{" "}
+                {t("mailer_config.probeOkTail")}
               </p>
             ) : (
               <div className="text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded px-3 py-2 space-y-1">
-                <p className="font-medium">Test send failed.</p>
+                <p className="font-medium">{t("mailer_config.probeFailed")}</p>
                 {probeResult.error ? (
                   <p className="font-mono text-xs">{probeResult.error}</p>
                 ) : null}
                 {probeResult.hint ? (
-                  <p className="text-xs">Hint: {probeResult.hint}</p>
+                  <p className="text-xs">{t("mailer_config.hint")}: {probeResult.hint}</p>
                 ) : null}
               </div>
             )

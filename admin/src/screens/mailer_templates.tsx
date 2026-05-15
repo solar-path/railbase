@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 import { Button } from "@/lib/ui/button.ui";
 import { Badge } from "@/lib/ui/badge.ui";
 import { Card, CardContent, CardHeader, CardTitle } from "@/lib/ui/card.ui";
@@ -21,6 +22,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/lib/ui/card.ui";
 // A v1.1.x slice will add Monaco + save endpoints + validation.
 
 export function MailerTemplatesScreen() {
+  const { t } = useT();
   const listQ = useQuery({
     queryKey: ["mailer-templates"],
     queryFn: () => adminAPI.mailerTemplatesList(),
@@ -31,28 +33,27 @@ export function MailerTemplatesScreen() {
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Mailer templates"
-        description="Read-only viewer for the built-in email templates plus operator overrides."
+        title={t("mailerTpl.title")}
+        description={t("mailerTpl.description")}
       />
 
       <AdminPage.Body className="space-y-4">
       <Card className="border-input bg-muted">
         <CardContent className="px-3 py-2 text-sm text-foreground">
-          Read-only viewer. To override a built-in, write the markdown to{" "}
+          {t("mailerTpl.helpPart1")}{" "}
           <code className="font-mono">pb_data/email_templates/&lt;kind&gt;.md</code>
-          ; the Mailer picks it up on next send (or after restart pending
-          v1.0.1 hot-reload).
+          {t("mailerTpl.helpPart2")}
         </CardContent>
       </Card>
 
       {listQ.isLoading ? (
-        <div className="text-sm text-muted-foreground">Loading…</div>
+        <div className="text-sm text-muted-foreground">{t("common.loading")}</div>
       ) : listQ.isError ? (
         <Card className="border-destructive/30 bg-destructive/10">
           <CardContent className="px-3 py-2 text-sm text-destructive">
-            Failed to load:{" "}
+            {t("mailerTpl.loadFailed")}{" "}
             <span className="font-mono">
-              {(listQ.error as { message?: string } | null)?.message ?? "unknown error"}
+              {(listQ.error as { message?: string } | null)?.message ?? t("mailerTpl.unknownError")}
             </span>
           </CardContent>
         </Card>
@@ -62,8 +63,9 @@ export function MailerTemplatesScreen() {
             items={listQ.data?.templates ?? []}
             selected={selectedKind}
             onSelect={setSelectedKind}
+            t={t}
           />
-          <ViewerPane kind={selectedKind} />
+          <ViewerPane kind={selectedKind} t={t} />
         </div>
       )}
       </AdminPage.Body>
@@ -75,9 +77,10 @@ interface KindListProps {
   items: Array<{ kind: string; override_exists: boolean }>;
   selected: string | null;
   onSelect: (kind: string) => void;
+  t: Translator["t"];
 }
 
-function KindList({ items, selected, onSelect }: KindListProps) {
+function KindList({ items, selected, onSelect, t }: KindListProps) {
   return (
     <aside className="flex flex-col gap-1">
       {items.map((it) => {
@@ -96,7 +99,7 @@ function KindList({ items, selected, onSelect }: KindListProps) {
                 variant="outline"
                 className="border-primary/40 bg-primary/10 text-primary"
               >
-                Override
+                {t("mailerTpl.override")}
               </Badge>
             ) : null}
           </Button>
@@ -108,7 +111,7 @@ function KindList({ items, selected, onSelect }: KindListProps) {
 
 type Mode = "raw" | "preview";
 
-function ViewerPane({ kind }: { kind: string | null }) {
+function ViewerPane({ kind, t }: { kind: string | null; t: Translator["t"] }) {
   const [mode, setMode] = useState<Mode>("raw");
 
   const viewQ = useQuery({
@@ -121,22 +124,22 @@ function ViewerPane({ kind }: { kind: string | null }) {
     return (
       <Card className="border-dashed bg-muted">
         <CardContent className="px-4 py-12 text-center text-sm text-muted-foreground">
-          Pick a template kind from the left to view its current content.
+          {t("mailerTpl.pickKindHint")}
         </CardContent>
       </Card>
     );
   }
 
   if (viewQ.isLoading) {
-    return <div className="text-sm text-muted-foreground">Loading…</div>;
+    return <div className="text-sm text-muted-foreground">{t("common.loading")}</div>;
   }
   if (viewQ.isError || !viewQ.data) {
     return (
       <Card className="border-destructive/30 bg-destructive/10">
         <CardContent className="px-3 py-2 text-sm text-destructive">
-          Failed to load template:{" "}
+          {t("mailerTpl.loadTemplateFailed")}{" "}
           <span className="font-mono">
-            {(viewQ.error as { message?: string } | null)?.message ?? "unknown error"}
+            {(viewQ.error as { message?: string } | null)?.message ?? t("mailerTpl.unknownError")}
           </span>
         </CardContent>
       </Card>
@@ -146,7 +149,7 @@ function ViewerPane({ kind }: { kind: string | null }) {
   const view = viewQ.data;
   const sourceLabel = view.override_exists
     ? `pb_data/email_templates/${view.kind}.md`
-    : "(built-in default)";
+    : t("mailerTpl.builtInDefault");
 
   return (
     <Card className="p-0">
@@ -167,37 +170,37 @@ function ViewerPane({ kind }: { kind: string | null }) {
             {humanSize(view.override_size_bytes)}
             {view.override_modified ? (
               <>
-                {" · modified "}
+                {" "}{t("mailerTpl.modified")}{" "}
                 <span title={view.override_modified}>
-                  {relativeTime(view.override_modified)}
+                  {relativeTime(view.override_modified, t)}
                 </span>
               </>
             ) : null}
           </p>
         ) : (
           <p className="mt-1 text-xs text-muted-foreground">
-            No override on disk — Mailer renders the embedded built-in.
+            {t("mailerTpl.noOverride")}
           </p>
         )}
       </CardHeader>
 
       <div className="flex border-b px-2 pt-2 text-sm">
         <TabButton active={mode === "raw"} onClick={() => setMode("raw")}>
-          Raw markdown
+          {t("mailerTpl.tabRaw")}
         </TabButton>
         <TabButton active={mode === "preview"} onClick={() => setMode("preview")}>
-          Preview
+          {t("mailerTpl.tabPreview")}
         </TabButton>
       </div>
 
       <CardContent className="p-4">
         {mode === "raw" ? (
           <pre className="font-mono text-xs whitespace-pre-wrap text-foreground">
-            {view.source || "(empty)"}
+            {view.source || t("mailerTpl.empty")}
           </pre>
         ) : (
           <>
-            <p className="mb-2 text-xs text-muted-foreground">Rendered HTML</p>
+            <p className="mb-2 text-xs text-muted-foreground">{t("mailerTpl.renderedHtml")}</p>
             <div
               className="prose prose-sm max-w-none bg-background border rounded p-4"
               // Safe: html comes from the trusted built-in markdown
@@ -248,21 +251,21 @@ function humanSize(n: number): string {
   return `${(n / (k * k * k)).toFixed(1)}GB`;
 }
 
-function relativeTime(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  const diffMs = Date.now() - t;
+function relativeTime(iso: string, t: Translator["t"]): string {
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return iso;
+  const diffMs = Date.now() - ts;
   const sec = Math.round(diffMs / 1000);
-  if (sec < 5) return "just now";
-  if (sec < 60) return `${sec}s ago`;
+  if (sec < 5) return t("relative.justNow");
+  if (sec < 60) return t("relative.secondsAgo", { n: sec });
   const min = Math.round(sec / 60);
-  if (min < 60) return `${min} minute${min === 1 ? "" : "s"} ago`;
+  if (min < 60) return t(min === 1 ? "relative.minuteAgo" : "relative.minutesAgo", { n: min });
   const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr} hour${hr === 1 ? "" : "s"} ago`;
+  if (hr < 24) return t(hr === 1 ? "relative.hourAgo" : "relative.hoursAgo", { n: hr });
   const day = Math.round(hr / 24);
-  if (day < 30) return `${day} day${day === 1 ? "" : "s"} ago`;
+  if (day < 30) return t(day === 1 ? "relative.dayAgo" : "relative.daysAgo", { n: day });
   const mo = Math.round(day / 30);
-  if (mo < 12) return `${mo} month${mo === 1 ? "" : "s"} ago`;
+  if (mo < 12) return t(mo === 1 ? "relative.monthAgo" : "relative.monthsAgo", { n: mo });
   const yr = Math.round(mo / 12);
-  return `${yr} year${yr === 1 ? "" : "s"} ago`;
+  return t(yr === 1 ? "relative.yearAgo" : "relative.yearsAgo", { n: yr });
 }

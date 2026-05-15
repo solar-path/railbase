@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/lib/ui/card.ui";
 import { Alert, AlertDescription } from "@/lib/ui/alert.ui";
+import { useT, type Translator } from "../i18n";
 
 // Recharts is heavy (~80 KB gzip including its dependency on
 // d3-shape/d3-scale subsets). We lazy-import it so the Dashboard +
@@ -28,6 +29,7 @@ const TrendChart = lazy(() => import("../components/trend_chart"));
 // subsystem just shows zero counts.
 
 export function HealthScreen() {
+  const { t } = useT();
   const q = useQuery({
     queryKey: ["admin-health"],
     queryFn: () => adminAPI.health(),
@@ -75,13 +77,13 @@ export function HealthScreen() {
   const latTrend = useMetricBuffer(p95Ms, metricsQ.data?.snapshot_at);
 
   if (q.isLoading) {
-    return <div class="text-sm text-muted-foreground">Loading…</div>;
+    return <div class="text-sm text-muted-foreground">{t("common.loading")}</div>;
   }
   if (q.isError || !q.data) {
     return (
       <Alert variant="destructive">
         <AlertDescription>
-          Failed to load health metrics: {String(q.error)}
+          {t("health.loadError", { error: String(q.error) })}
         </AlertDescription>
       </Alert>
     );
@@ -101,39 +103,37 @@ export function HealthScreen() {
   return (
     <AdminPage className="space-y-6">
       <AdminPage.Header
-        title={<>Health &amp; metrics</>}
-        description={
-          <>
-            Live snapshot of runtime, DB pool, jobs, audit, logs, realtime,
-            and backups. Polls every 5&nbsp;s.
-          </>
-        }
+        title={t("health.title")}
+        description={t("health.subtitle")}
       />
 
       <AdminPage.Body className="space-y-6">
       {/* Row 1 — runtime / pool / memory */}
       <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
-          label="Uptime"
-          value={formatDuration(h.uptime_sec)}
-          hint={`Started ${formatRelative(h.started_at)}`}
+          label={t("health.uptime")}
+          value={formatDuration(t, h.uptime_sec)}
+          hint={t("health.startedAt", { when: formatRelative(t, h.started_at) })}
         />
         <StatCard
-          label="Goroutines"
+          label={t("health.goroutines")}
           value={h.memory.goroutines}
           warn={h.memory.goroutines > 10_000}
-          hint={`> 10k may indicate a leak`}
+          hint={t("health.goroutinesHint")}
         />
         <StatCard
-          label="Pool conns"
+          label={t("health.poolConns")}
           value={`${h.pool.acquired}/${h.pool.total}`}
           warn={h.pool.max > 0 && h.pool.acquired >= h.pool.max - 1}
-          hint={`max ${h.pool.max} • idle ${h.pool.idle}`}
+          hint={t("health.poolHint", { max: h.pool.max, idle: h.pool.idle })}
         />
         <StatCard
-          label="Memory"
+          label={t("health.memory")}
           value={`${(h.memory.alloc_bytes / 1024 / 1024).toFixed(1)} MB`}
-          hint={`sys ${(h.memory.sys_bytes / 1024 / 1024).toFixed(0)} MB · ${h.memory.num_gc} GC cycles`}
+          hint={t("health.memoryHint", {
+            sys: (h.memory.sys_bytes / 1024 / 1024).toFixed(0),
+            gc: h.memory.num_gc,
+          })}
         />
       </section>
 
@@ -142,13 +142,15 @@ export function HealthScreen() {
           Recharts. */}
       <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <TrendCard
-          label="Goroutines"
+          t={t}
+          label={t("health.goroutines")}
           value={h.memory.goroutines}
           intent={h.memory.goroutines > 10_000 ? "danger" : "neutral"}
           data={goroutinesTrend}
         />
         <TrendCard
-          label="Pool acquired"
+          t={t}
+          label={t("health.poolAcquired")}
           value={h.pool.acquired}
           intent={
             h.pool.max > 0 && h.pool.acquired >= h.pool.max - 1
@@ -158,7 +160,8 @@ export function HealthScreen() {
           data={poolTrend}
         />
         <TrendCard
-          label="Jobs in flight"
+          t={t}
+          label={t("health.jobsInFlight")}
           value={h.jobs.pending + h.jobs.running}
           intent={
             h.jobs.pending + h.jobs.running > 100 ? "warn" : "info"
@@ -166,7 +169,8 @@ export function HealthScreen() {
           data={jobsTrend}
         />
         <TrendCard
-          label="Memory MB"
+          t={t}
+          label={t("health.memoryMb")}
           value={(h.memory.alloc_bytes / 1024 / 1024).toFixed(1)}
           intent="neutral"
           data={memTrend}
@@ -182,28 +186,32 @@ export function HealthScreen() {
           trend to one sample. */}
       <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <TrendCard
-          label="Requests/sec"
+          t={t}
+          label={t("health.requestsPerSec")}
           value={reqRate.rate != null ? reqRate.rate.toFixed(1) : "—"}
           intent="primary"
           data={reqRate.samples}
           format={(v) => v.toFixed(2) + "/s"}
         />
         <TrendCard
-          label="Errors/min"
+          t={t}
+          label={t("health.errorsPerMin")}
           value={errRate.rate != null ? errRate.rate.toFixed(1) : "—"}
           intent={errRate.rate != null && errRate.rate > 0 ? "warn" : "neutral"}
           data={errRate.samples}
           format={(v) => v.toFixed(1) + "/min"}
         />
         <TrendCard
-          label="p95 latency"
+          t={t}
+          label={t("health.p95Latency")}
           value={p95Ms > 0 ? p95Ms.toFixed(0) + " ms" : "—"}
           intent={p95Ms > 500 ? "warn" : "info"}
           data={latTrend}
           format={(v) => v.toFixed(0) + " ms"}
         />
         <TrendCard
-          label="Hook invocations/sec"
+          t={t}
+          label={t("health.hookInvocationsPerSec")}
           value={hooksRate.rate != null ? hooksRate.rate.toFixed(2) : "—"}
           intent="info"
           data={hooksRate.samples}
@@ -214,45 +222,60 @@ export function HealthScreen() {
       {/* Row 2 — jobs / audit / logs / realtime */}
       <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
-          label="Jobs"
+          label={t("health.jobs")}
           value={`${h.jobs.pending + h.jobs.running}`}
           warn={h.jobs.pending + h.jobs.running > 100}
-          hint={`pending ${h.jobs.pending} · running ${h.jobs.running} · failed ${h.jobs.failed} · completed ${h.jobs.completed}`}
+          hint={t("health.jobsHint", {
+            pending: h.jobs.pending,
+            running: h.jobs.running,
+            failed: h.jobs.failed,
+            completed: h.jobs.completed,
+          })}
         />
         <StatCard
-          label="Audit (24h)"
+          label={t("health.audit24h")}
           value={h.audit.last_24h}
-          hint={`total ${h.audit.total.toLocaleString()}`}
+          hint={t("health.auditHint", { total: h.audit.total.toLocaleString() })}
         />
         <StatCard
-          label="Logs (24h)"
+          label={t("health.logs24h")}
           value={h.logs.last_24h}
           warn={(h.logs.by_level?.error ?? 0) > 0}
-          hint={`error ${h.logs.by_level?.error ?? 0} · warn ${h.logs.by_level?.warn ?? 0} · info ${h.logs.by_level?.info ?? 0}`}
+          hint={t("health.logsHint", {
+            error: h.logs.by_level?.error ?? 0,
+            warn: h.logs.by_level?.warn ?? 0,
+            info: h.logs.by_level?.info ?? 0,
+          })}
         />
         <StatCard
-          label="Realtime"
+          label={t("health.realtime")}
           value={h.realtime.subscriptions}
           warn={h.realtime.events_dropped_total > 0}
-          hint={`events dropped: ${h.realtime.events_dropped_total}`}
+          hint={t("health.realtimeHint", { dropped: h.realtime.events_dropped_total })}
         />
       </section>
 
       {/* Row 3 — backups / schema */}
       <section class="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <StatCard
-          label="Backups"
+          label={t("health.backups")}
           value={h.backups.count}
           hint={
             h.backups.last_completed_at
-              ? `last ${formatRelative(h.backups.last_completed_at)} · ${(h.backups.total_bytes / 1024 / 1024).toFixed(1)} MB total`
-              : "no completed backups yet"
+              ? t("health.backupsHint", {
+                  when: formatRelative(t, h.backups.last_completed_at),
+                  size: (h.backups.total_bytes / 1024 / 1024).toFixed(1),
+                })
+              : t("health.backupsNone")
           }
         />
         <StatCard
-          label="Schema"
-          value={`${h.schema.collections} collections`}
-          hint={`${h.schema.auth_collections} auth · ${h.schema.tenant_collections} tenant`}
+          label={t("health.schema")}
+          value={t("health.schemaValue", { count: h.schema.collections })}
+          hint={t("health.schemaHint", {
+            auth: h.schema.auth_collections,
+            tenant: h.schema.tenant_collections,
+          })}
         />
       </section>
 
@@ -264,8 +287,10 @@ export function HealthScreen() {
             · {h.go_version}
           </div>
           <div class="mt-1">
-            Started at <code class="rounded bg-card px-1 py-0.5">{h.started_at}</code>{" "}
-            · now <code class="rounded bg-card px-1 py-0.5">{h.now}</code>
+            {t("health.startedAtLabel")}{" "}
+            <code class="rounded bg-card px-1 py-0.5">{h.started_at}</code>{" "}
+            · {t("health.nowLabel")}{" "}
+            <code class="rounded bg-card px-1 py-0.5">{h.now}</code>
           </div>
         </CardContent>
       </Card>
@@ -280,12 +305,14 @@ export function HealthScreen() {
 // a "warming up…" hint so the screen doesn't look broken on first
 // render right after page load.
 function TrendCard({
+  t,
   label,
   value,
   intent,
   data,
   format,
 }: {
+  t: Translator["t"];
   label: string;
   value: number | string;
   intent: "neutral" | "primary" | "warn" | "danger" | "info";
@@ -306,7 +333,7 @@ function TrendCard({
             <Suspense
               fallback={
                 <div class="h-full flex items-center justify-center text-[10px] text-muted-foreground">
-                  loading chart…
+                  {t("health.loadingChart")}
                 </div>
               }
             >
@@ -314,7 +341,7 @@ function TrendCard({
             </Suspense>
           ) : (
             <div class="h-full flex items-center justify-center text-[10px] text-muted-foreground">
-              warming up… ({data.length}/2 samples)
+              {t("health.warmingUp", { have: data.length, need: 2 })}
             </div>
           )}
         </div>
@@ -365,7 +392,7 @@ function StatCard({
 // formatDuration turns 3725s into "1h 2m 5s". Anything ≥ 1 day adds the
 // day prefix. Used only for the human-readable display; the raw second
 // count is in the underlying response field.
-function formatDuration(sec: number): string {
+function formatDuration(_t: Translator["t"], sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return "—";
   const days = Math.floor(sec / 86_400);
   const hrs = Math.floor((sec % 86_400) / 3600);
@@ -380,9 +407,9 @@ function formatDuration(sec: number): string {
 // formatRelative renders an ISO timestamp as "Nm/h/d ago" using the
 // elapsed delta. Falls back to the raw string on parse failure. Cheap
 // enough to recompute on every render — no memoization needed.
-function formatRelative(iso: string): string {
+function formatRelative(t: Translator["t"], iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   const secondsAgo = Math.max(0, (Date.now() - d.getTime()) / 1000);
-  return formatDuration(secondsAgo) + " ago";
+  return t("health.ago", { duration: formatDuration(t, secondsAgo) });
 }

@@ -114,10 +114,23 @@ type paymentIntentRequest struct {
 	Description string `json:"description"`
 	Email       string `json:"email"`
 	Name        string `json:"name"`
+	// FEEDBACK #4 — metadata passthrough so embedders can round-trip
+	// a domain id (order_id, cart_id, …) to Stripe and back via the
+	// webhook event. The reserved keys `railbase_kind` /
+	// `railbase_price_id` are emitted by the service itself; client
+	// values for those names are silently overridden server-side.
+	Metadata map[string]string `json:"metadata"`
 }
 
 // createPaymentIntent — POST /api/stripe/payment-intents. Starts a
 // one-time sale and returns the Elements client secret.
+//
+// Order of checks: auth → decode → body validation → service
+// availability. Body validation deliberately runs BEFORE the
+// service availability check so a malformed request gets the same
+// 4xx regardless of whether stripe is configured — operators
+// debugging a 503 don't need to also wonder whether they typed
+// the metadata correctly.
 func (d *Deps) createPaymentIntent(w http.ResponseWriter, r *http.Request) {
 	if !authmw.PrincipalFrom(r.Context()).Authenticated() {
 		writeErr(w, rerr.New(rerr.CodeUnauthorized, "auth required"))
@@ -127,6 +140,38 @@ func (d *Deps) createPaymentIntent(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, rerr.Wrap(err, rerr.CodeValidation, "invalid JSON body"))
 		return
+	}
+	// FEEDBACK #4 — Stripe caps metadata at 50 keys with key ≤ 40 chars
+	// and value ≤ 500 chars. Reject oversize submissions here so a
+	// passthrough call doesn't bounce off Stripe's API with an opaque
+	// 400 the embedder has to debug from raw response text.
+	if len(req.Metadata) > 50 {
+		writeErr(w, rerr.New(rerr.CodeValidation, "metadata: at most 50 keys per Stripe limit"))
+		return
+	}
+	for k, v := range req.Metadata {
+		if len(k) > 40 {
+			writeErr(w, rerr.New(rerr.CodeValidation, "metadata key %q exceeds 40-char Stripe limit", k))
+			return
+		}
+		if len(v) > 500 {
+			writeErr(w, rerr.New(rerr.CodeValidation, "metadata value for %q exceeds 500-char Stripe limit", k))
+			return
+		}
+	}
+	if d == nil || d.Service == nil {
+		// Defence in depth: Mount() short-circuits the route when
+		// Service is nil, so a properly-wired production server
+		// never hits this branch. A direct-mounted test (or a
+		// future refactor that bypasses Mount) gets a clean 503
+		// instead of a nil-deref panic.
+		writeErr(w, rerr.New(rerr.CodeUnavailable, "stripe not configured"))
+		return
+	}
+	opts := stripe.CheckoutOptions{
+		Email:    req.Email,
+		Name:     req.Name,
+		Metadata: req.Metadata,
 	}
 	var (
 		res *stripe.CheckoutResult
@@ -138,9 +183,9 @@ func (d *Deps) createPaymentIntent(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, rerr.New(rerr.CodeValidation, "price_id must be a valid UUID"))
 			return
 		}
-		res, err = d.Service.CreateCatalogPayment(r.Context(), priceID, req.Email, req.Name)
+		res, err = d.Service.CreateCatalogPaymentWithOptions(r.Context(), priceID, opts)
 	} else {
-		res, err = d.Service.CreateAdhocPayment(r.Context(), req.Amount, req.Currency, req.Description, req.Email, req.Name)
+		res, err = d.Service.CreateAdhocPaymentWithOptions(r.Context(), req.Amount, req.Currency, req.Description, opts)
 	}
 	if err != nil {
 		d.writeServiceErr(w, err)

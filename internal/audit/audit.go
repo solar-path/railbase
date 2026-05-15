@@ -420,6 +420,12 @@ type ListFilter struct {
 	// ErrorCode is a case-insensitive substring match on the
 	// `error_code` column. Empty = no filter.
 	ErrorCode string
+	// TenantID is an exact match against the `tenant_id` column. Nil
+	// (uuid.Nil) = no filter. Set this when surfacing the audit log
+	// to non-admin tenant members so they only see rows scoped to
+	// their workspace; the per-tenant logs handler in api/tenants
+	// passes it.
+	TenantID uuid.UUID
 }
 
 // ListFiltered returns audit rows matching f, newest-first, truncated
@@ -544,6 +550,9 @@ func buildAuditWhere(f ListFilter) (string, []any) {
 	}
 	if f.ErrorCode != "" {
 		clauses = append(clauses, "error_code ILIKE "+addArg("%"+f.ErrorCode+"%"))
+	}
+	if f.TenantID != uuid.Nil {
+		clauses = append(clauses, "tenant_id = "+addArg(f.TenantID))
 	}
 	if len(clauses) == 0 {
 		return "", nil

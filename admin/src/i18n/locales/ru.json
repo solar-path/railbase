@@ -103,5 +103,24 @@
   "login.failed": "Не удалось войти.",
   "login.emailInvalid": "Введите корректный email",
   "login.passwordRequired": "Введите пароль",
-  "login.noAdmins": "Ещё нет администраторов? Создайте через {cmd} или используйте мастер начальной настройки."
+  "login.noAdmins": "Ещё нет администраторов? Создайте через {cmd} или используйте мастер начальной настройки.",
+
+  "dashboard.title": "Дашборд",
+  "dashboard.subtitle": "Краткий обзор состояния системы.",
+  "dashboard.collections": "Коллекции",
+  "dashboard.auditEvents": "Аудит-события",
+  "dashboard.settings": "Настройки",
+  "dashboard.docs": "Документация",
+  "dashboard.requestsPerMin": "Запросов/мин",
+  "dashboard.errorsPerMin": "Ошибок/мин",
+  "dashboard.auditEvents24h": "Аудит-события (24ч)",
+  "dashboard.jobsInFlight": "Задач в работе",
+  "dashboard.recentAuditEvents": "Недавние аудит-события",
+  "dashboard.noEvents": "Событий пока нет.",
+  "dashboard.warmingUp": "разогрев… ({have}/{need} замеров)",
+  "dashboard.loadingChart": "загрузка графика…",
+  "dashboard.col.seq": "№",
+  "dashboard.col.event": "событие",
+  "dashboard.col.outcome": "результат",
+  "dashboard.col.at": "когда"
 }

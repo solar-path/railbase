@@ -336,3 +336,105 @@ func TestInit_YamlTemplateDefaultsToCorrectPort(t *testing.T) {
 		}
 	}
 }
+
+// TestInit_Fullstack_OverlayChain — fullstack inherits from auth-starter
+// (which inherits from basic) AND adds its own public/private pages.
+// Verifies the embed walk picks up every layer.
+func TestInit_Fullstack_OverlayChain(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "demo")
+	_, err := Init(Options{
+		ProjectDir:      dir,
+		Template:        TemplateFullstack,
+		RailbaseVersion: "v0.4.3",
+	})
+	if err != nil {
+		t.Fatalf("Init fullstack: %v", err)
+	}
+	// Basic layer.
+	for _, p := range []string{"go.mod", "railbase.yaml", "cmd/demo/main.go"} {
+		if _, err := os.Stat(filepath.Join(dir, p)); err != nil {
+			t.Errorf("[basic] missing %q: %v", p, err)
+		}
+	}
+	// Auth-starter layer.
+	for _, p := range []string{
+		"web/package.json",
+		"web/src/api.ts",
+		"web/src/auth.ts",
+		"web/src/pages/login.tsx",
+		"web/src/pages/account.tsx",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, p)); err != nil {
+			t.Errorf("[auth-starter] missing %q: %v", p, err)
+		}
+	}
+	// Fullstack layer — overlay's own files.
+	for _, p := range []string{
+		"web/src/app.tsx", // OVERRIDDEN by fullstack (router with public+private)
+		"web/src/layouts/public.tsx",
+		"web/src/layouts/private.tsx",
+		"web/src/pages/public/landing.tsx",
+		"web/src/pages/public/pricing.tsx",
+		"web/src/pages/public/contact.tsx",
+		"web/src/pages/public/docs.tsx",
+		"web/src/pages/private/dashboard.tsx",
+		"web/src/pages/private/tenants.tsx",
+		"web/src/pages/private/tenant_settings.tsx",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, p)); err != nil {
+			t.Errorf("[fullstack] missing %q: %v", p, err)
+		}
+	}
+	// Sanity: the FULLSTACK app.tsx must have replaced the auth-starter
+	// version (last-write-wins). The fullstack one imports the layouts.
+	app, err := os.ReadFile(filepath.Join(dir, "web/src/app.tsx"))
+	if err != nil {
+		t.Fatalf("read app.tsx: %v", err)
+	}
+	if !strings.Contains(string(app), "./layouts/public.js") {
+		t.Errorf("fullstack app.tsx didn't override auth-starter app.tsx:\n%s", app)
+	}
+}
+
+// TestInit_Fullstack_UIExtras — fullstack ships an extended UI kit
+// alongside the auth-starter one. The 5 extra primitives (Badge,
+// Alert, Spinner, EmptyState, Tabs, Table) are emitted on top of
+// the 5 from auth-starter (Button, Input, Label, Card, Section)
+// for 10 total — matches the "ui-kit subset" promised in docs.
+func TestInit_Fullstack_UIExtras(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "demo")
+	if _, err := Init(Options{
+		ProjectDir:      dir,
+		Template:        TemplateFullstack,
+		RailbaseVersion: "v0.4.3",
+	}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	// Original 5 primitives (from auth-starter).
+	ui, err := os.ReadFile(filepath.Join(dir, "web/src/lib/ui.tsx"))
+	if err != nil {
+		t.Fatalf("read ui.tsx: %v", err)
+	}
+	for _, want := range []string{"export function Button", "export function Input", "export function Label", "export function Card", "export function Section"} {
+		if !strings.Contains(string(ui), want) {
+			t.Errorf("ui.tsx missing %q", want)
+		}
+	}
+	// New 5 (from fullstack overlay).
+	extra, err := os.ReadFile(filepath.Join(dir, "web/src/lib/ui_extras.tsx"))
+	if err != nil {
+		t.Fatalf("read ui_extras.tsx: %v", err)
+	}
+	for _, want := range []string{
+		"export function Badge",
+		"export function Alert",
+		"export function Spinner",
+		"export function EmptyState",
+		"export function Tabs",
+		"export const Table",
+	} {
+		if !strings.Contains(string(extra), want) {
+			t.Errorf("ui_extras.tsx missing %q", want)
+		}
+	}
+}

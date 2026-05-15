@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { adminAPI, recordsAPI } from "../api/admin";
 import type { TrashRecord } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 import { Button } from "@/lib/ui/button.ui";
 import { QDatatable, type ColumnDef, type RowAction } from "@/lib/ui/QDatatable.ui";
 import { Card, CardContent } from "@/lib/ui/card.ui";
@@ -21,7 +22,72 @@ import { Card, CardContent } from "@/lib/ui/card.ui";
 // `trash.retention.<collection>` setting. A button labelled "Delete
 // forever" is the kind of thing that destroys production at 3 a.m.
 
+function buildTrashColumns(t: Translator["t"]): ColumnDef<TrashRecord>[] {
+  return [
+    {
+      id: "deleted",
+      header: t("trash.col.deleted"),
+      accessor: "deleted",
+      cell: (it) => (
+        <span
+          className="font-mono text-xs text-muted-foreground whitespace-nowrap"
+          title={it.deleted}
+        >
+          {relativeTime(it.deleted, t)}
+        </span>
+      ),
+    },
+    {
+      id: "collection",
+      header: t("trash.col.collection"),
+      accessor: "collection",
+      cell: (it) => (
+        <span className="inline-block bg-muted rounded px-1.5 py-0.5 text-xs font-mono">
+          {it.collection}
+        </span>
+      ),
+    },
+    {
+      id: "id",
+      header: t("trash.col.id"),
+      accessor: "id",
+      cell: (it) => (
+        <span className="font-mono text-xs" title={it.id}>
+          {it.id.slice(0, 8)}…
+        </span>
+      ),
+    },
+    {
+      id: "created",
+      header: t("trash.col.created"),
+      accessor: "created",
+      cell: (it) => (
+        <span
+          className="font-mono text-xs text-muted-foreground whitespace-nowrap"
+          title={it.created}
+        >
+          {relativeTime(it.created, t)}
+        </span>
+      ),
+    },
+    {
+      id: "updated",
+      header: t("trash.col.updated"),
+      accessor: "updated",
+      cell: (it) => (
+        <span
+          className="font-mono text-xs text-muted-foreground whitespace-nowrap"
+          title={it.updated}
+        >
+          {relativeTime(it.updated, t)}
+        </span>
+      ),
+    },
+  ];
+}
+
 export function TrashScreen() {
+  const { t } = useT();
   const qc = useQueryClient();
 
   const [collection, setCollection] = useState<string>(""); // "" = all
@@ -38,8 +104,8 @@ export function TrashScreen() {
   // Auto-fade the flash banner. 5 s matches the backups screen.
   useEffect(() => {
     if (!flash) return;
-    const t = setTimeout(() => setFlash(null), 5_000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setFlash(null), 5_000);
+    return () => clearTimeout(timer);
   }, [flash]);
 
   // Single restore mutation keyed off (collection, id).
@@ -47,74 +113,14 @@ export function TrashScreen() {
     mutationFn: (args: { collection: string; id: string }) =>
       recordsAPI.restoreRecord(args.collection, args.id),
     onSuccess: (_data, vars) => {
-      setFlash(`Restored ${vars.collection}/${vars.id.slice(0, 8)}…`);
+      setFlash(t("trash.restored", { name: `${vars.collection}/${vars.id.slice(0, 8)}…` }));
       void qc.invalidateQueries({ queryKey: ["trash"] });
     },
   });
 
   const hasSoftDelete = collections.length > 0;
 
-  const columns: ColumnDef<TrashRecord>[] = [
-    {
-      id: "deleted",
-      header: "deleted",
-      accessor: "deleted",
-      cell: (it) => (
-        <span
-          className="font-mono text-xs text-muted-foreground whitespace-nowrap"
-          title={it.deleted}
-        >
-          {relativeTime(it.deleted)}
-        </span>
-      ),
-    },
-    {
-      id: "collection",
-      header: "collection",
-      accessor: "collection",
-      cell: (it) => (
-        <span className="inline-block bg-muted rounded px-1.5 py-0.5 text-xs font-mono">
-          {it.collection}
-        </span>
-      ),
-    },
-    {
-      id: "id",
-      header: "id",
-      accessor: "id",
-      cell: (it) => (
-        <span className="font-mono text-xs" title={it.id}>
-          {it.id.slice(0, 8)}…
-        </span>
-      ),
-    },
-    {
-      id: "created",
-      header: "created",
-      accessor: "created",
-      cell: (it) => (
-        <span
-          className="font-mono text-xs text-muted-foreground whitespace-nowrap"
-          title={it.created}
-        >
-          {relativeTime(it.created)}
-        </span>
-      ),
-    },
-    {
-      id: "updated",
-      header: "updated",
-      accessor: "updated",
-      cell: (it) => (
-        <span
-          className="font-mono text-xs text-muted-foreground whitespace-nowrap"
-          title={it.updated}
-        >
-          {relativeTime(it.updated)}
-        </span>
-      ),
-    },
-  ];
+  const columns = buildTrashColumns(t);
 
   const rowActions = (it: TrashRecord): RowAction<TrashRecord>[] => {
     const idShort = it.id.slice(0, 8);
@@ -124,10 +130,10 @@ export function TrashScreen() {
       restoreM.variables?.id === it.id;
     return [
       {
-        label: pending ? "Restoring…" : "Restore",
+        label: pending ? t("trash.action.restoring") : t("trash.action.restore"),
         disabled: () => pending,
         onSelect: () => {
-          if (!window.confirm(`Restore ${it.collection}/${idShort}…?`)) {
+          if (!window.confirm(t("trash.confirmRestore", { name: `${it.collection}/${idShort}…` }))) {
             return;
           }
           restoreM.mutate({ collection: it.collection, id: it.id });
@@ -139,12 +145,11 @@ export function TrashScreen() {
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Trash"
+        title={t("trash.title")}
         description={
           <>
-            Soft-deleted records across all collections with{" "}
-            <code className="font-mono">.SoftDelete()</code>. Records here can be
-            restored or stay until your retention policy permanently purges them.
+            {t("trash.descPart1")}{" "}
+            <code className="font-mono">.SoftDelete()</code>. {t("trash.descPart2")}
           </>
         }
       />
@@ -156,7 +161,7 @@ export function TrashScreen() {
             variant="ghost"
             size="sm"
             onClick={() => setFlash(null)}
-            aria-label="Dismiss"
+            aria-label={t("trash.dismiss")}
             className="text-primary/70 hover:text-primary hover:bg-transparent h-auto p-0"
           >
             ×
@@ -166,9 +171,9 @@ export function TrashScreen() {
 
       {restoreM.isError ? (
         <div className="rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          Restore failed:{" "}
+          {t("trash.restoreFailed")}{" "}
           <span className="font-mono">
-            {(restoreM.error as { message?: string } | null)?.message ?? "unknown error"}
+            {(restoreM.error as { message?: string } | null)?.message ?? t("trash.unknownError")}
           </span>
         </div>
       ) : null}
@@ -176,13 +181,13 @@ export function TrashScreen() {
       {hasSoftDelete ? (
         <AdminPage.Toolbar>
           <label className="flex items-center gap-1">
-            <span className="text-muted-foreground">collection</span>
+            <span className="text-muted-foreground">{t("trash.collectionLabel")}</span>
             <select
               value={collection}
               onChange={(e) => setCollection(e.currentTarget.value)}
               className="rounded border border-input px-2 py-1 bg-transparent"
             >
-              <option value="">all</option>
+              <option value="">{t("trash.allCollections")}</option>
               {collections.map((c) => (
                 <option key={c} value={c}>
                   {c}
@@ -196,11 +201,11 @@ export function TrashScreen() {
               size="sm"
               onClick={() => setCollection("")}
             >
-              clear
+              {t("trash.clear")}
             </Button>
           ) : null}
           <span className="text-xs text-muted-foreground ml-auto">
-            {total} record{total === 1 ? "" : "s"} in trash
+            {t(total === 1 ? "trash.totalOne" : "trash.totalMany", { count: total })}
           </span>
         </AdminPage.Toolbar>
       ) : null}
@@ -211,9 +216,7 @@ export function TrashScreen() {
         // trash". This guides the dev to the schema builder rather
         // than implying the trash is just empty.
         <div className="rounded border border-dashed border-input bg-muted px-4 py-8 text-center text-sm text-muted-foreground">
-          No collection has <code className="font-mono">.SoftDelete()</code> enabled.
-          Add the flag to a collection in your schema to start collecting
-          tombstones here.
+          {t("trash.noSoftDeletePart1")} <code className="font-mono">.SoftDelete()</code> {t("trash.noSoftDeletePart2")}
         </div>
       ) : (
         <Card>
@@ -227,12 +230,10 @@ export function TrashScreen() {
               emptyMessage={
                 <span className="space-y-1">
                   <span className="block">
-                    (No soft-deleted records — nothing to restore.)
+                    {t("trash.empty")}
                   </span>
                   <span className="block text-xs text-muted-foreground">
-                    Soft-deleted records linger here instead of being physically
-                    removed, so an accidental delete is one click away from being
-                    undone.
+                    {t("trash.emptyHint")}
                   </span>
                 </span>
               }
@@ -260,21 +261,21 @@ export function TrashScreen() {
 // rather than extracted — the admin bundle is small and a one-off
 // shared util file would add an import-hop for one function). Falls
 // back to the raw timestamp if parsing fails.
-function relativeTime(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  const diffMs = Date.now() - t;
+function relativeTime(iso: string, t: Translator["t"]): string {
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return iso;
+  const diffMs = Date.now() - ts;
   const sec = Math.round(diffMs / 1000);
-  if (sec < 5) return "just now";
-  if (sec < 60) return `${sec}s ago`;
+  if (sec < 5) return t("relative.justNow");
+  if (sec < 60) return t("relative.secondsAgo", { n: sec });
   const min = Math.round(sec / 60);
-  if (min < 60) return `${min} minute${min === 1 ? "" : "s"} ago`;
+  if (min < 60) return t(min === 1 ? "relative.minuteAgo" : "relative.minutesAgo", { n: min });
   const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr} hour${hr === 1 ? "" : "s"} ago`;
+  if (hr < 24) return t(hr === 1 ? "relative.hourAgo" : "relative.hoursAgo", { n: hr });
   const day = Math.round(hr / 24);
-  if (day < 30) return `${day} day${day === 1 ? "" : "s"} ago`;
+  if (day < 30) return t(day === 1 ? "relative.dayAgo" : "relative.daysAgo", { n: day });
   const mo = Math.round(day / 30);
-  if (mo < 12) return `${mo} month${mo === 1 ? "" : "s"} ago`;
+  if (mo < 12) return t(mo === 1 ? "relative.monthAgo" : "relative.monthsAgo", { n: mo });
   const yr = Math.round(mo / 12);
-  return `${yr} year${yr === 1 ? "" : "s"} ago`;
+  return t(yr === 1 ? "relative.yearAgo" : "relative.yearsAgo", { n: yr });
 }

@@ -21,6 +21,7 @@ import {
   QEditableForm,
   type QEditableField,
 } from "@/lib/ui/QEditableForm.ui";
+import { useT, type Translator } from "../i18n";
 
 // API tokens admin screen — paginated browser over `_api_tokens` with
 // create / revoke / rotate affordances. Backend endpoint family:
@@ -48,82 +49,85 @@ const TTL_PRESETS = ["1h", "24h", "30d", "90d", "never"] as const;
 // login.tsx). Scopes are stored as a string[] in form state; the
 // CSV-style text input is split on submit. ttl is a preset key that we
 // map to seconds via TTL_SECONDS at mutation time.
-const createTokenSchema = z.object({
-  name: z.string().min(1, "Name required"),
-  owner_id: z.string().min(1, "Owner ID required"),
-  owner_collection: z.string().min(1, "Owner collection required"),
-  scopes: z.array(z.string()),
-  ttl: z.enum(TTL_PRESETS),
-});
+function buildCreateTokenSchema(t: Translator["t"]) {
+  return z.object({
+    name: z.string().min(1, t("api_tokens.err.nameRequired")),
+    owner_id: z.string().min(1, t("api_tokens.err.ownerIdRequired")),
+    owner_collection: z.string().min(1, t("api_tokens.err.ownerCollectionRequired")),
+    scopes: z.array(z.string()),
+    ttl: z.enum(TTL_PRESETS),
+  });
+}
 
-// Static column set — no per-row closures needed, so it lives at module
-// scope. rotate / revoke are surfaced via QDatatable's row-action menu.
-const columns: ColumnDef<APIToken>[] = [
-  {
-    id: "name",
-    header: "name",
-    accessor: "name",
-    cell: (t) => <span class="font-medium">{t.name}</span>,
-  },
-  {
-    id: "owner",
-    header: "owner",
-    accessor: (t) => `${t.owner_collection}/${t.owner_id}`,
-    cell: (t) => (
-      <span class="font-mono text-xs text-muted-foreground whitespace-nowrap">
-        {t.owner_collection}/{t.owner_id.slice(0, 8)}…
-      </span>
-    ),
-  },
-  {
-    id: "fingerprint",
-    header: "fingerprint",
-    accessor: "fingerprint",
-    cell: (t) => <span class="font-mono text-xs">{t.fingerprint || "—"}</span>,
-  },
-  {
-    id: "scopes",
-    header: "scopes",
-    accessor: (t) => t.scopes.join(","),
-    cell: (t) => (
-      <span class="font-mono text-xs text-muted-foreground">
-        {t.scopes.length === 0 ? (
-          <span class="text-muted-foreground/60">(owner-bounded)</span>
-        ) : (
-          t.scopes.join(",")
-        )}
-      </span>
-    ),
-  },
-  {
-    id: "last_used",
-    header: "last used",
-    accessor: "last_used_at",
-    cell: (t) => (
-      <span class="font-mono text-xs text-muted-foreground whitespace-nowrap">
-        {t.last_used_at ?? "—"}
-      </span>
-    ),
-  },
-  {
-    id: "expires",
-    header: "expires",
-    accessor: "expires_at",
-    cell: (t) => (
-      <span class="font-mono text-xs text-muted-foreground whitespace-nowrap">
-        {t.expires_at ?? "never"}
-      </span>
-    ),
-  },
-  {
-    id: "status",
-    header: "status",
-    accessor: (t) => tokenStatus(t),
-    cell: (t) => <StatusBadge status={tokenStatus(t)} />,
-  },
-];
+function buildTokenColumns(t: Translator["t"]): ColumnDef<APIToken>[] {
+  return [
+    {
+      id: "name",
+      header: t("api_tokens.col.name"),
+      accessor: "name",
+      cell: (tok) => <span class="font-medium">{tok.name}</span>,
+    },
+    {
+      id: "owner",
+      header: t("api_tokens.col.owner"),
+      accessor: (tok) => `${tok.owner_collection}/${tok.owner_id}`,
+      cell: (tok) => (
+        <span class="font-mono text-xs text-muted-foreground whitespace-nowrap">
+          {tok.owner_collection}/{tok.owner_id.slice(0, 8)}…
+        </span>
+      ),
+    },
+    {
+      id: "fingerprint",
+      header: t("api_tokens.col.fingerprint"),
+      accessor: "fingerprint",
+      cell: (tok) => <span class="font-mono text-xs">{tok.fingerprint || "—"}</span>,
+    },
+    {
+      id: "scopes",
+      header: t("api_tokens.col.scopes"),
+      accessor: (tok) => tok.scopes.join(","),
+      cell: (tok) => (
+        <span class="font-mono text-xs text-muted-foreground">
+          {tok.scopes.length === 0 ? (
+            <span class="text-muted-foreground/60">{t("api_tokens.ownerBounded")}</span>
+          ) : (
+            tok.scopes.join(",")
+          )}
+        </span>
+      ),
+    },
+    {
+      id: "last_used",
+      header: t("api_tokens.col.lastUsed"),
+      accessor: "last_used_at",
+      cell: (tok) => (
+        <span class="font-mono text-xs text-muted-foreground whitespace-nowrap">
+          {tok.last_used_at ?? "—"}
+        </span>
+      ),
+    },
+    {
+      id: "expires",
+      header: t("api_tokens.col.expires"),
+      accessor: "expires_at",
+      cell: (tok) => (
+        <span class="font-mono text-xs text-muted-foreground whitespace-nowrap">
+          {tok.expires_at ?? t("api_tokens.never")}
+        </span>
+      ),
+    },
+    {
+      id: "status",
+      header: t("api_tokens.col.status"),
+      accessor: (tok) => tokenStatus(tok),
+      cell: (tok) => <StatusBadge status={tokenStatus(tok)} t={t} />,
+    },
+  ];
+}
 
 export function APITokensScreen() {
+  const { t } = useT();
   const qc = useQueryClient();
 
   const [total, setTotal] = useState(0);
@@ -175,25 +179,25 @@ export function APITokensScreen() {
 
   // rotate / revoke are only meaningful for an active token — both are
   // hidden on revoked / expired rows.
-  const rowActions = (t: APIToken): RowAction<APIToken>[] => {
-    const active = tokenStatus(t) === "active";
+  const rowActions = (tok: APIToken): RowAction<APIToken>[] => {
+    const active = tokenStatus(tok) === "active";
     return [
       {
-        label: "rotate",
+        label: t("api_tokens.action.rotate"),
         hidden: () => !active,
-        onSelect: () => setRotateFor(t),
+        onSelect: () => setRotateFor(tok),
       },
       {
-        label: "revoke",
+        label: t("api_tokens.action.revoke"),
         destructive: true,
         hidden: () => !active,
         onSelect: () => {
           if (
             window.confirm(
-              `Revoke "${t.name}"? Existing clients using this token will lose access immediately.`,
+              t("api_tokens.revokeConfirm", { name: tok.name }),
             )
           ) {
-            revokeM.mutate(t.id);
+            revokeM.mutate(tok.id);
           }
         },
       },
@@ -203,15 +207,14 @@ export function APITokensScreen() {
   return (
     <AdminPage>
       <AdminPage.Header
-        title="API tokens"
+        title={t("api_tokens.title")}
         description={
           <>
-            {total} token{total === 1 ? "" : "s"} total. Long-lived bearer
-            credentials for service-to-service auth. Raw values are shown
-            exactly once on create / rotate — copy them then.
+            {t("api_tokens.totalLine", { count: total })}{" "}
+            {t("api_tokens.subtitle")}
           </>
         }
-        actions={<Button onClick={() => setCreateOpen(true)}>+ Create token</Button>}
+        actions={<Button onClick={() => setCreateOpen(true)}>{t("api_tokens.createBtn")}</Button>}
       />
 
       {createdToken ? (
@@ -220,12 +223,13 @@ export function APITokensScreen() {
           record={createdToken.record}
           context={createdToken.context}
           onDismiss={() => setCreatedToken(null)}
+          t={t}
         />
       ) : null}
 
       <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">owner</span>
+          <span className="text-muted-foreground">{t("api_tokens.filter.owner")}</span>
           <Input
             type="text"
             value={ownerInput}
@@ -239,7 +243,7 @@ export function APITokensScreen() {
             checked={includeRevoked}
             onCheckedChange={(c) => setIncludeRevoked(c === true)}
           />
-          <span className="text-muted-foreground">include revoked</span>
+          <span className="text-muted-foreground">{t("api_tokens.filter.includeRevoked")}</span>
         </label>
         {ownerInput || includeRevoked ? (
           <Button
@@ -251,7 +255,7 @@ export function APITokensScreen() {
               setIncludeRevoked(false);
             }}
           >
-            clear
+            {t("api_tokens.clear")}
           </Button>
         ) : null}
       </AdminPage.Toolbar>
@@ -260,10 +264,10 @@ export function APITokensScreen() {
       <Card>
         <CardContent className="p-3 overflow-x-auto">
           <QDatatable
-            columns={columns}
+            columns={buildTokenColumns(t)}
             rowKey="id"
             pageSize={50}
-            emptyMessage="No tokens."
+            emptyMessage={t("api_tokens.empty")}
             rowActions={rowActions}
             deps={[owner, includeRevoked]}
             fetch={async (params) => {
@@ -289,6 +293,7 @@ export function APITokensScreen() {
         pending={createM.isPending}
         onClose={() => setCreateOpen(false)}
         onSubmit={(input) => createM.mutateAsync(input)}
+        t={t}
       />
 
       <TokenRotateDrawer
@@ -300,6 +305,7 @@ export function APITokensScreen() {
             ? rotateM.mutateAsync({ id: rotateFor.id, ttl_seconds })
             : Promise.resolve()
         }
+        t={t}
       />
     </AdminPage>
   );
@@ -313,11 +319,13 @@ function CreatedBanner({
   record,
   context,
   onDismiss,
+  t,
 }: {
   token: string;
   record: APIToken;
   context: "create" | "rotate";
   onDismiss: () => void;
+  t: Translator["t"];
 }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -335,19 +343,20 @@ function CreatedBanner({
         <div className="flex items-start justify-between">
           <div>
             <div className="font-semibold text-primary">
-              Token {context === "create" ? "created" : "rotated"} — copy now, it won't be shown again.
+              {context === "create" ? t("api_tokens.banner.created") : t("api_tokens.banner.rotated")}
             </div>
             <div className="text-xs text-primary mt-1">
               <span className="font-mono">{record.name}</span>
               {" — "}
-              fingerprint <span className="font-mono">{record.fingerprint || "—"}</span>
+              {t("api_tokens.fingerprintLabel")}{" "}
+              <span className="font-mono">{record.fingerprint || "—"}</span>
               {record.expires_at ? (
                 <>
-                  {" — expires "}
+                  {" — "}{t("api_tokens.expiresLabel")}{" "}
                   <span className="font-mono">{record.expires_at}</span>
                 </>
               ) : (
-                <span> — non-expiring</span>
+                <span> — {t("api_tokens.nonExpiring")}</span>
               )}
             </div>
           </div>
@@ -357,7 +366,7 @@ function CreatedBanner({
             onClick={onDismiss}
             className="text-primary hover:text-primary"
           >
-            dismiss
+            {t("api_tokens.dismiss")}
           </Button>
         </div>
         <div className="flex items-stretch gap-2">
@@ -370,13 +379,12 @@ function CreatedBanner({
             onClick={copy}
             className="border-primary/40 bg-background text-primary hover:bg-primary/20"
           >
-            {copied ? "Copied!" : "Copy"}
+            {copied ? t("api_tokens.copied") : t("api_tokens.copy")}
           </Button>
         </div>
         {context === "rotate" ? (
           <div className="text-xs text-primary">
-            The predecessor is still active. Once the successor is deployed,
-            revoke the predecessor explicitly.
+            {t("api_tokens.rotateNotice")}
           </div>
         ) : null}
       </CardContent>
@@ -425,6 +433,7 @@ function TokenCreateDrawer({
   pending,
   onClose,
   onSubmit,
+  t,
 }: {
   open: boolean;
   pending: boolean;
@@ -436,6 +445,7 @@ function TokenCreateDrawer({
     scopes?: string[];
     ttl_seconds?: number;
   }) => Promise<unknown>;
+  t: Translator["t"];
 }) {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -447,14 +457,13 @@ function TokenCreateDrawer({
   };
 
   const fields: QEditableField[] = [
-    { key: "name", label: "Name", required: true },
-    { key: "owner_id", label: "Owner ID", required: true, helpText: "UUID" },
-    { key: "owner_collection", label: "Owner collection", required: true },
+    { key: "name", label: t("api_tokens.field.name"), required: true },
+    { key: "owner_id", label: t("api_tokens.field.ownerId"), required: true, helpText: "UUID" },
+    { key: "owner_collection", label: t("api_tokens.field.ownerCollection"), required: true },
     {
       key: "scopes",
-      label: "Scopes",
-      helpText:
-        "Comma-separated. Advisory in v1 — the token authenticates as the owner with full owner permissions.",
+      label: t("api_tokens.field.scopes"),
+      helpText: t("api_tokens.field.scopesHelp"),
     },
     { key: "ttl", label: "TTL" },
   ];
@@ -470,7 +479,7 @@ function TokenCreateDrawer({
           <Input
             value={(value as string) ?? ""}
             onInput={(e) => onChange(e.currentTarget.value)}
-            placeholder="CI deploy bot"
+            placeholder={t("api_tokens.placeholder.name")}
             autoComplete="off"
           />
         );
@@ -527,7 +536,7 @@ function TokenCreateDrawer({
   const handleCreate = async (vals: Record<string, unknown>) => {
     setFieldErrors({});
     setFormError(null);
-    const parsed = createTokenSchema.safeParse(vals);
+    const parsed = buildCreateTokenSchema(t).safeParse(vals);
     if (!parsed.success) {
       const fe: Record<string, string> = {};
       for (const issue of parsed.error.issues) {
@@ -548,7 +557,7 @@ function TokenCreateDrawer({
       });
       // Parent's mutation onSuccess closes the drawer + flips the banner.
     } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Create failed.");
+      setFormError(e instanceof Error ? e.message : t("api_tokens.err.createFailed"));
     }
   };
 
@@ -562,10 +571,9 @@ function TokenCreateDrawer({
     >
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-lg">
         <DrawerHeader>
-          <DrawerTitle>Create API token</DrawerTitle>
+          <DrawerTitle>{t("api_tokens.createDrawer.title")}</DrawerTitle>
           <DrawerDescription>
-            A long-lived bearer credential. The raw value is shown exactly
-            once on create — copy it then.
+            {t("api_tokens.createDrawer.desc")}
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
@@ -600,11 +608,13 @@ function TokenRotateDrawer({
   pending,
   onClose,
   onSubmit,
+  t,
 }: {
   record: APIToken | null;
   pending: boolean;
   onClose: () => void;
   onSubmit: (ttl_seconds: number | undefined) => Promise<unknown>;
+  t: Translator["t"];
 }) {
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -616,8 +626,8 @@ function TokenRotateDrawer({
   const fields: QEditableField[] = [
     {
       key: "ttl",
-      label: "TTL for the new token",
-      helpText: "“inherit” keeps the predecessor's expiry.",
+      label: t("api_tokens.rotate.ttl"),
+      helpText: t("api_tokens.rotate.ttlHelp"),
     },
   ];
 
@@ -643,7 +653,7 @@ function TokenRotateDrawer({
       );
       // Parent's mutation onSuccess closes the drawer + flips the banner.
     } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Rotate failed.");
+      setFormError(e instanceof Error ? e.message : t("api_tokens.err.rotateFailed"));
     }
   };
 
@@ -658,11 +668,12 @@ function TokenRotateDrawer({
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-md">
         <DrawerHeader>
           <DrawerTitle>
-            Rotate {record ? `“${record.name}”` : "token"}
+            {record
+              ? t("api_tokens.rotate.titleNamed", { name: record.name })
+              : t("api_tokens.rotate.title")}
           </DrawerTitle>
           <DrawerDescription>
-            The predecessor stays active until you revoke it explicitly.
-            Distribute the successor first, then revoke the old row.
+            {t("api_tokens.rotate.desc")}
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
@@ -672,7 +683,7 @@ function TokenRotateDrawer({
             values={{ ttl: "inherit" }}
             renderInput={renderInput}
             onCreate={handleRotate}
-            submitLabel="Rotate"
+            submitLabel={t("api_tokens.rotate.submit")}
             onCancel={close}
             formError={formError}
             disabled={pending}
@@ -692,7 +703,13 @@ function tokenStatus(t: APIToken): "active" | "revoked" | "expired" {
   return "active";
 }
 
-function StatusBadge({ status }: { status: "active" | "revoked" | "expired" }) {
+function StatusBadge({
+  status,
+  t,
+}: {
+  status: "active" | "revoked" | "expired";
+  t: Translator["t"];
+}) {
   switch (status) {
     case "active":
       return (
@@ -700,13 +717,13 @@ function StatusBadge({ status }: { status: "active" | "revoked" | "expired" }) {
           variant="outline"
           className="border-primary/40 bg-primary/10 text-primary"
         >
-          active
+          {t("api_tokens.status.active")}
         </Badge>
       );
     case "revoked":
       return (
         <Badge variant="outline" className="border-input bg-muted text-muted-foreground">
-          revoked
+          {t("api_tokens.status.revoked")}
         </Badge>
       );
     case "expired":
@@ -715,7 +732,7 @@ function StatusBadge({ status }: { status: "active" | "revoked" | "expired" }) {
           variant="outline"
           className="border-input bg-muted text-foreground"
         >
-          expired
+          {t("api_tokens.status.expired")}
         </Badge>
       );
   }

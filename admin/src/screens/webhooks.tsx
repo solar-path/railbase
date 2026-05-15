@@ -4,6 +4,7 @@ import { z } from "zod";
 import { adminAPI } from "../api/admin";
 import type { Webhook, Delivery } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Textarea } from "@/lib/ui/textarea.ui";
@@ -34,25 +35,27 @@ import {
 // login.tsx). url is validated client-side as http(s):// (the backend
 // re-validates). events are stored as a string[] internally; the
 // textarea reflects a newline-joined view and re-splits on input.
-const createWebhookSchema = z.object({
-  name: z.string().min(1, "Name required"),
-  url: z
-    .string()
-    .min(1, "URL required")
-    .refine(
-      (v) => {
-        try {
-          const u = new URL(v.trim());
-          return u.protocol === "http:" || u.protocol === "https:";
-        } catch {
-          return false;
-        }
-      },
-      { message: "must be a valid http(s):// URL" },
-    ),
-  events: z.array(z.string()).min(1, "At least one event pattern required"),
-  description: z.string(),
-});
+function buildCreateWebhookSchema(t: Translator["t"]) {
+  return z.object({
+    name: z.string().min(1, t("webhooks.validation.nameRequired")),
+    url: z
+      .string()
+      .min(1, t("webhooks.validation.urlRequired"))
+      .refine(
+        (v) => {
+          try {
+            const u = new URL(v.trim());
+            return u.protocol === "http:" || u.protocol === "https:";
+          } catch {
+            return false;
+          }
+        },
+        { message: t("webhooks.validation.urlInvalid") },
+      ),
+    events: z.array(z.string()).min(1, t("webhooks.validation.eventsRequired")),
+    description: z.string(),
+  });
+}
 
 // Webhooks admin screen (v1.7.17 §3.11). Companion to the
 // `railbase webhooks ...` CLI; backend route family is
@@ -64,51 +67,55 @@ const createWebhookSchema = z.object({
 // (window.confirm), expand to view recent deliveries. Failed
 // deliveries get a "Replay" button that re-enqueues a fresh attempt.
 
-// Static column set. pause / resume / delete are surfaced via
-// QDatatable's per-row action menu; the row body is click-through to
-// the deliveries drawer.
-const columns: ColumnDef<Webhook>[] = [
-  {
-    id: "name",
-    header: "name",
-    accessor: "name",
-    cell: (w) => <span class="font-medium">{w.name}</span>,
-  },
-  {
-    id: "url",
-    header: "url",
-    accessor: "url",
-    cell: (w) => (
-      <span class="font-mono text-xs text-muted-foreground max-w-xs truncate block">
-        <code class="font-mono">{w.url}</code>
-      </span>
-    ),
-  },
-  {
-    id: "events",
-    header: "events",
-    accessor: (w) => w.events.join(","),
-    cell: (w) => <EventsCell events={w.events} />,
-  },
-  {
-    id: "status",
-    header: "status",
-    accessor: (w) => (w.active ? "active" : "paused"),
-    cell: (w) => <StatusBadge active={w.active} />,
-  },
-  {
-    id: "created",
-    header: "created",
-    accessor: "created_at",
-    cell: (w) => (
-      <span class="font-mono text-xs text-muted-foreground whitespace-nowrap">
-        {w.created_at}
-      </span>
-    ),
-  },
-];
+// Column factory. pause / resume / delete are surfaced via QDatatable's
+// per-row action menu; the row body is click-through to the deliveries
+// drawer.
+function buildWebhookColumns(t: Translator["t"]): ColumnDef<Webhook>[] {
+  return [
+    {
+      id: "name",
+      header: t("webhooks.col.name"),
+      accessor: "name",
+      cell: (w) => <span class="font-medium">{w.name}</span>,
+    },
+    {
+      id: "url",
+      header: t("webhooks.col.url"),
+      accessor: "url",
+      cell: (w) => (
+        <span class="font-mono text-xs text-muted-foreground max-w-xs truncate block">
+          <code class="font-mono">{w.url}</code>
+        </span>
+      ),
+    },
+    {
+      id: "events",
+      header: t("webhooks.col.events"),
+      accessor: (w) => w.events.join(","),
+      cell: (w) => <EventsCell events={w.events} t={t} />,
+    },
+    {
+      id: "status",
+      header: t("webhooks.col.status"),
+      accessor: (w) =>
+        w.active ? t("webhooks.status.active") : t("webhooks.status.paused"),
+      cell: (w) => <StatusBadge active={w.active} t={t} />,
+    },
+    {
+      id: "created",
+      header: t("webhooks.col.created"),
+      accessor: "created_at",
+      cell: (w) => (
+        <span class="font-mono text-xs text-muted-foreground whitespace-nowrap">
+          {w.created_at}
+        </span>
+      ),
+    },
+  ];
+}
 
 export function WebhooksScreen() {
+  const { t } = useT();
   const qc = useQueryClient();
 
   // Row-click opens the deliveries drawer for the selected webhook.
@@ -156,25 +163,21 @@ export function WebhooksScreen() {
   // always available behind a window.confirm.
   const rowActions = (w: Webhook): RowAction<Webhook>[] => [
     {
-      label: "pause",
+      label: t("webhooks.action.pause"),
       hidden: () => !w.active,
       onSelect: () => pauseM.mutate(w.id),
     },
     {
-      label: "resume",
+      label: t("webhooks.action.resume"),
       hidden: () => w.active,
       onSelect: () => resumeM.mutate(w.id),
     },
     {
-      label: "delete",
+      label: t("webhooks.action.delete"),
       destructive: true,
       separatorBefore: true,
       onSelect: () => {
-        if (
-          window.confirm(
-            `Delete webhook "${w.name}"? Recent delivery history will cascade away too.`,
-          )
-        ) {
+        if (window.confirm(t("webhooks.confirmDelete", { name: w.name }))) {
           deleteM.mutate(w.id);
         }
       },
@@ -184,15 +187,11 @@ export function WebhooksScreen() {
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Webhooks"
-        description={
-          <>
-            {items.length} webhook{items.length === 1 ? "" : "s"}. Outbound
-            event subscribers — every matching record event triggers an
-            HTTP POST signed with HMAC-SHA256.
-          </>
+        title={t("webhooks.title")}
+        description={t("webhooks.description", { count: items.length })}
+        actions={
+          <Button onClick={() => setCreateOpen(true)}>{t("webhooks.create")}</Button>
         }
-        actions={<Button onClick={() => setCreateOpen(true)}>+ Create webhook</Button>}
       />
 
       {createdSecret ? (
@@ -200,23 +199,24 @@ export function WebhooksScreen() {
           secret={createdSecret.secret}
           record={createdSecret.record}
           onDismiss={() => setCreatedSecret(null)}
+          t={t}
         />
       ) : null}
 
       <AdminPage.Body>
       {!q.isLoading && items.length === 0 ? (
-        <EmptyState onCreate={() => setCreateOpen(true)} />
+        <EmptyState onCreate={() => setCreateOpen(true)} t={t} />
       ) : (
         <Card>
           <CardContent className="p-3 overflow-x-auto">
             <QDatatable
-              columns={columns}
+              columns={buildWebhookColumns(t)}
               data={items}
               loading={q.isLoading}
               rowKey="id"
               rowActions={rowActions}
               onRowClick={(w) => setDrawerFor(w)}
-              emptyMessage="No webhooks."
+              emptyMessage={t("webhooks.empty")}
             />
           </CardContent>
         </Card>
@@ -241,7 +241,7 @@ export function WebhooksScreen() {
                 </DrawerDescription>
               </DrawerHeader>
               <div className="flex-1 overflow-y-auto">
-                <DeliveryTimeline webhookID={drawerFor.id} />
+                <DeliveryTimeline webhookID={drawerFor.id} t={t} />
               </div>
             </>
           ) : null}
@@ -255,6 +255,7 @@ export function WebhooksScreen() {
         pending={createM.isPending}
         onClose={() => setCreateOpen(false)}
         onSubmit={(input) => createM.mutateAsync(input)}
+        t={t}
       />
     </AdminPage>
   );
@@ -264,7 +265,7 @@ export function WebhooksScreen() {
 // showing a "+N more" badge for the overflow. We keep the dotted
 // patterns un-mangled (record.*.posts) so operators can read them
 // verbatim against the docs.
-function EventsCell({ events }: { events: string[] }) {
+function EventsCell({ events, t }: { events: string[]; t: Translator["t"] }) {
   const visible = events.slice(0, 3);
   const overflow = events.length - visible.length;
   return (
@@ -273,26 +274,26 @@ function EventsCell({ events }: { events: string[] }) {
         <Badge key={e} variant="secondary">{e}</Badge>
       ))}
       {overflow > 0 ? (
-        <Badge variant="outline">+{overflow} more</Badge>
+        <Badge variant="outline">{t("webhooks.eventsMore", { count: overflow })}</Badge>
       ) : null}
     </div>
   );
 }
 
-function StatusBadge({ active }: { active: boolean }) {
+function StatusBadge({ active, t }: { active: boolean; t: Translator["t"] }) {
   return active ? (
     <Badge
       variant="outline"
       className="border-primary/40 bg-primary/10 text-primary"
     >
-      active
+      {t("webhooks.status.active")}
     </Badge>
   ) : (
     <Badge
       variant="outline"
       className="border-input bg-muted text-foreground"
     >
-      paused
+      {t("webhooks.status.paused")}
     </Badge>
   );
 }
@@ -301,7 +302,13 @@ function StatusBadge({ active }: { active: boolean }) {
 // query is keyed by webhookID so each expand panel has its own cache
 // slot — collapsing + reopening reuses the cached page rather than
 // re-fetching.
-function DeliveryTimeline({ webhookID }: { webhookID: string }) {
+function DeliveryTimeline({
+  webhookID,
+  t,
+}: {
+  webhookID: string;
+  t: Translator["t"];
+}) {
   const qc = useQueryClient();
   const dq = useQuery({
     queryKey: ["webhook-deliveries", webhookID],
@@ -315,26 +322,26 @@ function DeliveryTimeline({ webhookID }: { webhookID: string }) {
   });
 
   if (dq.isLoading) {
-    return <div className="text-xs text-muted-foreground p-3">Loading deliveries…</div>;
+    return <div className="text-xs text-muted-foreground p-3">{t("webhooks.deliveries.loading")}</div>;
   }
   const items = dq.data?.items ?? [];
   if (items.length === 0) {
-    return <div className="text-xs text-muted-foreground p-3">No deliveries yet.</div>;
+    return <div className="text-xs text-muted-foreground p-3">{t("webhooks.deliveries.empty")}</div>;
   }
   return (
     <div className="p-3">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">
-        Recent deliveries
+        {t("webhooks.deliveries.recent")}
       </div>
       <Table className="text-xs">
         <TableHeader>
           <TableRow>
-            <TableHead className="h-8 px-3 py-1">created</TableHead>
-            <TableHead className="h-8 px-3 py-1">event</TableHead>
-            <TableHead className="h-8 px-3 py-1">status</TableHead>
-            <TableHead className="h-8 px-3 py-1">code</TableHead>
-            <TableHead className="h-8 px-3 py-1">attempt</TableHead>
-            <TableHead className="h-8 px-3 py-1">error</TableHead>
+            <TableHead className="h-8 px-3 py-1">{t("webhooks.deliveries.col.created")}</TableHead>
+            <TableHead className="h-8 px-3 py-1">{t("webhooks.deliveries.col.event")}</TableHead>
+            <TableHead className="h-8 px-3 py-1">{t("webhooks.deliveries.col.status")}</TableHead>
+            <TableHead className="h-8 px-3 py-1">{t("webhooks.deliveries.col.code")}</TableHead>
+            <TableHead className="h-8 px-3 py-1">{t("webhooks.deliveries.col.attempt")}</TableHead>
+            <TableHead className="h-8 px-3 py-1">{t("webhooks.deliveries.col.error")}</TableHead>
             <TableHead />
           </TableRow>
         </TableHeader>
@@ -363,7 +370,7 @@ function DeliveryTimeline({ webhookID }: { webhookID: string }) {
                     onClick={() => replayM.mutate(d.id)}
                     disabled={replayM.isPending}
                   >
-                    replay
+                    {t("webhooks.deliveries.replay")}
                   </Button>
                 ) : null}
               </TableCell>
@@ -413,10 +420,12 @@ function CreatedBanner({
   secret,
   record,
   onDismiss,
+  t,
 }: {
   secret: string;
   record: Webhook;
   onDismiss: () => void;
+  t: Translator["t"];
 }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -434,7 +443,7 @@ function CreatedBanner({
         <div className="flex items-start justify-between">
           <div>
             <div className="font-semibold text-primary">
-              Webhook created — copy the secret now, it won't be shown again.
+              {t("webhooks.banner.title")}
             </div>
             <div className="text-xs text-primary mt-1">
               <span className="font-mono">{record.name}</span>
@@ -448,7 +457,7 @@ function CreatedBanner({
             onClick={onDismiss}
             className="text-primary hover:text-primary/80"
           >
-            dismiss
+            {t("webhooks.banner.dismiss")}
           </Button>
         </div>
         <div className="flex items-stretch gap-2">
@@ -461,29 +470,27 @@ function CreatedBanner({
             onClick={copy}
             className="border-primary/40 bg-background text-primary hover:bg-primary/10"
           >
-            {copied ? "Copied!" : "Copy"}
+            {copied ? t("webhooks.banner.copied") : t("webhooks.banner.copy")}
           </Button>
         </div>
         <div className="text-xs text-primary">
-          Sign incoming payloads with HMAC-SHA256 using this key. See
-          docs/21-webhooks.md for the signature header format.
+          {t("webhooks.banner.help")}
         </div>
       </CardContent>
     </Card>
   );
 }
 
-function EmptyState({ onCreate }: { onCreate: () => void }) {
+function EmptyState({ onCreate, t }: { onCreate: () => void; t: Translator["t"] }) {
   return (
     <Card className="border-2 border-dashed bg-muted">
       <CardContent className="p-8 text-center">
-        <div className="text-sm font-medium text-foreground">No webhooks yet.</div>
+        <div className="text-sm font-medium text-foreground">{t("webhooks.emptyState.title")}</div>
         <div className="text-xs text-muted-foreground mt-1">
-          Outbound webhooks fan out every record event to your URL. HMAC-signed,
-          retried with exponential backoff via the jobs framework.
+          {t("webhooks.emptyState.body")}
         </div>
         <Button onClick={onCreate} className="mt-3">
-          Create your first webhook
+          {t("webhooks.emptyState.cta")}
         </Button>
       </CardContent>
     </Card>
@@ -500,6 +507,7 @@ function WebhookCreateDrawer({
   pending,
   onClose,
   onSubmit,
+  t,
 }: {
   open: boolean;
   pending: boolean;
@@ -510,6 +518,7 @@ function WebhookCreateDrawer({
     events: string[];
     description?: string;
   }) => Promise<unknown>;
+  t: Translator["t"];
 }) {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -521,21 +530,20 @@ function WebhookCreateDrawer({
   };
 
   const fields: QEditableField[] = [
-    { key: "name", label: "Name", required: true },
+    { key: "name", label: t("webhooks.field.name"), required: true },
     {
       key: "url",
-      label: "URL",
+      label: t("webhooks.field.url"),
       required: true,
-      helpText: "https:// — the backend re-validates.",
+      helpText: t("webhooks.field.url.help"),
     },
     {
       key: "events",
-      label: "Events",
+      label: t("webhooks.field.events"),
       required: true,
-      helpText:
-        "One per line or comma-separated. Dotted patterns; * matches one segment (e.g. record.*.posts).",
+      helpText: t("webhooks.field.events.help"),
     },
-    { key: "description", label: "Description" },
+    { key: "description", label: t("webhooks.field.description") },
   ];
 
   const renderInput = (
@@ -586,7 +594,7 @@ function WebhookCreateDrawer({
             rows={2}
             value={(value as string) ?? ""}
             onInput={(e) => onChange(e.currentTarget.value)}
-            placeholder="What this webhook does, who owns it…"
+            placeholder={t("webhooks.placeholder.description")}
           />
         );
       default:
@@ -597,7 +605,8 @@ function WebhookCreateDrawer({
   const handleCreate = async (vals: Record<string, unknown>) => {
     setFieldErrors({});
     setFormError(null);
-    const parsed = createWebhookSchema.safeParse(vals);
+    const schema = buildCreateWebhookSchema(t);
+    const parsed = schema.safeParse(vals);
     if (!parsed.success) {
       const fe: Record<string, string> = {};
       for (const issue of parsed.error.issues) {
@@ -617,7 +626,7 @@ function WebhookCreateDrawer({
       });
       // Parent's mutation onSuccess closes the drawer + flips the banner.
     } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Create failed.");
+      setFormError(e instanceof Error ? e.message : t("webhooks.create.failed"));
     }
   };
 
@@ -631,10 +640,9 @@ function WebhookCreateDrawer({
     >
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-lg">
         <DrawerHeader>
-          <DrawerTitle>Create webhook</DrawerTitle>
+          <DrawerTitle>{t("webhooks.create.title")}</DrawerTitle>
           <DrawerDescription>
-            An outbound subscriber — every matching record event triggers an
-            HMAC-signed HTTP POST.
+            {t("webhooks.create.description")}
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
@@ -654,4 +662,3 @@ function WebhookCreateDrawer({
     </Drawer>
   );
 }
-

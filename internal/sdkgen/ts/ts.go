@@ -83,6 +83,14 @@ func Generate(specs []builder.CollectionSpec, opts Options) ([]string, error) {
 		// revoke, future profile/password/2FA). Schema-independent —
 		// these are global /api/auth/* routes, not per-collection.
 		{"account.ts", []byte(EmitAccount())},
+		// v0.4.3 — tenants.ts: workspaces CRUD + per-tenant role
+		// lookup. Schema-independent; the surface is fixed, not
+		// derived from user collections.
+		{"tenants.ts", []byte(EmitTenants())},
+		// v0.4.3 Sprint 5 — contact.ts: public POST /api/contact
+		// wrapper. Schema-independent and CALLABLE WITHOUT a token —
+		// the scaffold's marketing pages use it pre-signin.
+		{"contact.ts", []byte(EmitContact())},
 		// stripe.ts / notifications.ts / realtime.ts are schema-
 		// independent — their endpoints are fixed, not derived from
 		// CollectionSpec — so the Emit* fns take no specs. Always

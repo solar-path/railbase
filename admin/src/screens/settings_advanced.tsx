@@ -23,6 +23,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import { isAPIError } from "../api/client";
 import type { SettingItem } from "../api/types";
+import { useT, type Translator } from "../i18n";
 
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
@@ -43,25 +44,27 @@ import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 // SETTING_KEY_RE mirrors the server's accepted key shape.
 const SETTING_KEY_RE = /^[a-z][a-z0-9._-]*$/;
 
-const columns: ColumnDef<SettingItem>[] = [
-  {
-    id: "key",
-    header: "key",
-    accessor: "key",
-    sortable: true,
-    cell: (row) => <span class="font-mono">{row.key}</span>,
-  },
-  {
-    id: "value",
-    header: "value",
-    accessor: (row) => JSON.stringify(row.value),
-    cell: (row) => (
-      <pre class="font-mono text-xs whitespace-pre-wrap break-all">
-        {JSON.stringify(row.value)}
-      </pre>
-    ),
-  },
-];
+function buildAdvancedColumns(t: Translator["t"]): ColumnDef<SettingItem>[] {
+  return [
+    {
+      id: "key",
+      header: t("settings.advanced.col.key"),
+      accessor: "key",
+      sortable: true,
+      cell: (row) => <span class="font-mono">{row.key}</span>,
+    },
+    {
+      id: "value",
+      header: t("settings.advanced.col.value"),
+      accessor: (row) => JSON.stringify(row.value),
+      cell: (row) => (
+        <pre class="font-mono text-xs whitespace-pre-wrap break-all">
+          {JSON.stringify(row.value)}
+        </pre>
+      ),
+    },
+  ];
+}
 
 type SettingsTarget = SettingItem | "new" | null;
 
@@ -80,6 +83,7 @@ export function AdvancedSettingsTable({
   unknownKeys: string[];
   onMutated: () => void;
 }) {
+  const { t } = useT();
   const qc = useQueryClient();
   const list = useQuery({
     queryKey: ["settings"],
@@ -103,15 +107,16 @@ export function AdvancedSettingsTable({
   const unknownSet = new Set(unknownKeys);
   const rows = (list.data?.items ?? []).filter((r) => unknownSet.has(r.key));
 
+  const columns = buildAdvancedColumns(t);
+
   return (
     <>
       <div className="flex items-center justify-between gap-2 mb-3">
         <p className="text-xs text-muted-foreground">
-          Anything you can persist in <code className="font-mono">_settings</code> as raw JSON.
-          The server stores values as JSONB regardless of the picked type.
+          {t("settings.advanced.help")}
         </p>
         <Button size="sm" onClick={() => setTarget("new")}>
-          + New key
+          {t("settings.advanced.newKey")}
         </Button>
       </div>
 
@@ -121,20 +126,20 @@ export function AdvancedSettingsTable({
         loading={list.isLoading}
         rowKey="key"
         search
-        searchPlaceholder="Search keys…"
-        emptyMessage="No advanced overrides. Click “+ New key” to add one."
+        searchPlaceholder={t("settings.advanced.searchPlaceholder")}
+        emptyMessage={t("settings.advanced.empty")}
         rowActions={(row) => [
           {
-            label: "Edit",
+            label: t("settings.advanced.action.edit"),
             onSelect: () => setTarget(row),
           },
           {
-            label: "Delete",
+            label: t("settings.advanced.action.delete"),
             destructive: true,
             separatorBefore: true,
             disabled: () => delMu.isPending,
             onSelect: () => {
-              if (window.confirm(`Delete setting “${row.key}”?`)) {
+              if (window.confirm(t("settings.advanced.confirm.delete", { key: row.key }))) {
                 delMu.mutate(row.key);
               }
             },
@@ -163,6 +168,7 @@ function SettingsEditorDrawer({
   onClose: () => void;
   onMutated: () => void;
 }) {
+  const { t } = useT();
   const isEdit = target !== null && target !== "new";
   return (
     <Drawer
@@ -174,11 +180,13 @@ function SettingsEditorDrawer({
     >
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-lg">
         <DrawerHeader>
-          <DrawerTitle>{isEdit ? "Edit setting" : "New setting"}</DrawerTitle>
+          <DrawerTitle>
+            {isEdit ? t("settings.advanced.editor.titleEdit") : t("settings.advanced.editor.titleNew")}
+          </DrawerTitle>
           <DrawerDescription>
             {isEdit
-              ? "Update the stored value. The key is fixed."
-              : "A key/value entry persisted in _settings. Catalog-known keys belong in the typed forms above."}
+              ? t("settings.advanced.editor.descEdit")
+              : t("settings.advanced.editor.descNew")}
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
@@ -205,6 +213,7 @@ function SettingsEditorBody({
   onClose: () => void;
   onMutated: () => void;
 }) {
+  const { t } = useT();
   const isEdit = target !== "new";
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -218,20 +227,19 @@ function SettingsEditorBody({
   const fields: QEditableField[] = [
     {
       key: "key",
-      label: "Key",
+      label: t("settings.advanced.field.key"),
       required: !isEdit,
       readOnly: isEdit,
       helpText: isEdit
-        ? "The key is fixed — delete + recreate to rename."
-        : "Lowercase letters, digits, dots, dashes, underscores (must start with a letter).",
+        ? t("settings.advanced.field.keyHelpEdit")
+        : t("settings.advanced.field.keyHelpNew"),
     },
     {
       key: "type",
-      label: "Type",
-      helpText:
-        "Server stores everything as JSONB; this picker only coerces the value before submit.",
+      label: t("settings.advanced.field.type"),
+      helpText: t("settings.advanced.field.typeHelp"),
     },
-    { key: "value", label: "Value" },
+    { key: "value", label: t("settings.advanced.field.value") },
   ];
 
   const renderInput = (
@@ -294,12 +302,12 @@ function SettingsEditorBody({
 
     if (!isEdit) {
       if (!key) {
-        setFieldErrors({ key: "Key required" });
+        setFieldErrors({ key: t("settings.advanced.error.keyRequired") });
         return;
       }
       if (!SETTING_KEY_RE.test(key)) {
         setFieldErrors({
-          key: "Lowercase letters, digits, dots, dashes, underscores only (must start with a letter).",
+          key: t("settings.advanced.error.keyFormat"),
         });
         return;
       }
@@ -313,7 +321,7 @@ function SettingsEditorBody({
       case "int": {
         const n = Number(rawValue);
         if (!Number.isFinite(n) || !Number.isInteger(n)) {
-          setFieldErrors({ value: "value must be an integer" });
+          setFieldErrors({ value: t("settings.advanced.error.valueInt") });
           return;
         }
         parsed = n;
@@ -322,7 +330,7 @@ function SettingsEditorBody({
       case "bool": {
         const v = rawValue.trim().toLowerCase();
         if (v !== "true" && v !== "false") {
-          setFieldErrors({ value: 'value must be "true" or "false"' });
+          setFieldErrors({ value: t("settings.advanced.error.valueBool") });
           return;
         }
         parsed = v === "true";
@@ -334,8 +342,7 @@ function SettingsEditorBody({
           parsed = JSON.parse(rawValue);
         } catch {
           setFieldErrors({
-            value:
-              "value must be valid JSON (string, number, bool, object, etc.)",
+            value: t("settings.advanced.error.valueJson"),
           });
           return;
         }
@@ -346,7 +353,7 @@ function SettingsEditorBody({
       await setMu.mutateAsync({ key, value: parsed });
       onClose();
     } catch (e) {
-      setFormError(isAPIError(e) ? e.message : "Failed to save.");
+      setFormError(isAPIError(e) ? e.message : t("settings.advanced.error.saveFailed"));
     }
   };
 
@@ -362,7 +369,7 @@ function SettingsEditorBody({
       renderInput={renderInput}
       renderDisplay={renderDisplay}
       onCreate={handleSubmit}
-      submitLabel="Save"
+      submitLabel={t("common.save")}
       onCancel={onClose}
       fieldErrors={fieldErrors}
       formError={formError}

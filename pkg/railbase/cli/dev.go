@@ -83,6 +83,13 @@ For Sentinel's exact shape:
 
   railbase dev --embed-pg --web ./web`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// FEEDBACK #B5 — if --addr wasn't passed explicitly, fall back
+			// to $RAILBASE_HTTP_ADDR so `dev` honours the same env override
+			// `serve` does. The blogger project hit a port-conflict on
+			// :8095, set RAILBASE_HTTP_ADDR=:8096 in .env, and watched
+			// `./blogger dev` keep binding to :8095 because the flag's
+			// default value won the precedence fight.
+			addr = resolveDevAddr(addr, cmd.Flags().Changed("addr"), os.Getenv("RAILBASE_HTTP_ADDR"))
 			return runDev(cmd.Context(), devOptions{
 				webDir:      webDir,
 				webCmd:      webCmd,
@@ -355,6 +362,26 @@ func watchSchemaAndRegen(ctx context.Context, dir, pkg, out string) {
 			fmt.Fprintf(os.Stderr, "railbase dev: watch error: %v\n", err)
 		}
 	}
+}
+
+// resolveDevAddr decides which bind address `railbase dev` should
+// pass to the backend. Precedence:
+//
+//  1. Explicit --addr from the CLI (flagChanged=true) wins always.
+//  2. Otherwise $RAILBASE_HTTP_ADDR, if non-empty.
+//  3. Otherwise the cobra default (already in flagDefault).
+//
+// FEEDBACK #B5 — without step 2, an operator with
+// `RAILBASE_HTTP_ADDR=:8096` in their .env still got the cobra default
+// `:8095` because flag-defaults outrank env in cobra.
+func resolveDevAddr(flagDefault string, flagChanged bool, envValue string) string {
+	if flagChanged {
+		return flagDefault
+	}
+	if v := strings.TrimSpace(envValue); v != "" {
+		return v
+	}
+	return flagDefault
 }
 
 // isSignalExit detects exec.ExitError caused by SIGTERM/SIGKILL.

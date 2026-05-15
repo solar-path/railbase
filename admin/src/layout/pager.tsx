@@ -1,4 +1,5 @@
 import { Button } from "@/lib/ui/button.ui";
+import { useT } from "../i18n";
 
 // Shared paginator chip used by the audit / logs / jobs viewers.
 //
@@ -20,6 +21,7 @@ export function Pager({
   totalPages: number;
   onChange: (p: number) => void;
 }) {
+  const { t } = useT();
   return (
     <div className="flex items-center gap-2 text-sm">
       <Button
@@ -29,10 +31,10 @@ export function Pager({
         disabled={page <= 1}
         onClick={() => onChange(page - 1)}
       >
-        ← prev
+        {t("pager.prev")}
       </Button>
       <span className="text-muted-foreground">
-        page {page} / {totalPages}
+        {t("pager.pageOf", { page, total: totalPages })}
       </span>
       <Button
         type="button"
@@ -41,7 +43,7 @@ export function Pager({
         disabled={page >= totalPages}
         onClick={() => onChange(page + 1)}
       >
-        next →
+        {t("pager.next")}
       </Button>
     </div>
   );

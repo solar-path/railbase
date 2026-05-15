@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, Redirect, useLocation, useParams } from "wouter-preact";
 import { adminAPI, recordsAPI } from "../api/admin";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 import { APITokensScreen } from "./api_tokens";
 import { SystemAdminsScreen } from "./system_admins";
 import { SystemAdminSessionsScreen } from "./system_admin_sessions";
@@ -104,10 +105,11 @@ export function RecordsScreen() {
 // registered there's nothing to redirect to, so we show an empty state
 // that explains Railbase's schema-as-code model rather than 404ing.
 export function DataHomeScreen() {
+  const { t } = useT();
   const schemaQ = useQuery({ queryKey: ["schema"], queryFn: () => adminAPI.schema() });
 
   if (schemaQ.isLoading) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <p className="text-sm text-muted-foreground">{t("common.loading")}</p>;
   }
 
   const collections = schemaQ.data?.collections ?? [];
@@ -118,29 +120,24 @@ export function DataHomeScreen() {
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Data"
-        description="No collections yet."
+        title={t("records.dataHome.title")}
+        description={t("records.dataHome.empty")}
         actions={
           <Button asChild size="sm">
-            <Link href="/collections/new">+ New collection</Link>
+            <Link href="/collections/new">{t("records.action.newCollection")}</Link>
           </Button>
         }
       />
       <AdminPage.Body>
         <Card className="max-w-2xl p-6 text-sm text-muted-foreground space-y-3">
-          <p>
-            Create a collection to define a table and its fields — it's
-            provisioned in the database immediately and its record API
-            goes live. Code-defined collections (declared in your app's
-            schema) also show up here once registered.
-          </p>
+          <p>{t("records.dataHome.intro")}</p>
           <p>
             <Link href="/collections/new" className="text-foreground underline">
-              Create your first collection
+              {t("records.dataHome.createFirst")}
             </Link>{" "}
-            or{" "}
+            {t("records.dataHome.or")}{" "}
             <Link href="/schema" className="text-foreground underline">
-              view the registered schema
+              {t("records.dataHome.viewSchema")}
             </Link>
             .
           </p>
@@ -158,6 +155,7 @@ export function UserCollectionRecords({
   /** Deep-link entry: record id or "new" to open the drawer on mount. */
   initialEditing?: string;
 }) {
+  const { t } = useT();
   const [, navigate] = useLocation();
   const schemaQ = useQuery({ queryKey: ["schema"], queryFn: () => adminAPI.schema() });
   const spec = schemaQ.data?.collections.find((c) => c.name === name) ?? null;
@@ -239,7 +237,7 @@ export function UserCollectionRecords({
                 rowId={rowId}
                 field={col.field}
                 value={row[col.key]}
-                onSaved={() => setRefreshTick((t) => t + 1)}
+                onSaved={() => setRefreshTick((tick) => tick + 1)}
                 render={col.render}
               />
             );
@@ -273,7 +271,7 @@ export function UserCollectionRecords({
         setBulkBanner({ kind: "partial", ok, failed });
       }
       // Refetch the current page so deleted rows drop out.
-      setRefreshTick((t) => t + 1);
+      setRefreshTick((tick) => tick + 1);
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -281,30 +279,30 @@ export function UserCollectionRecords({
     },
   });
 
-  if (schemaQ.isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (schemaQ.isLoading) return <p className="text-sm text-muted-foreground">{t("common.loading")}</p>;
   if (!spec) {
     return (
       <p className="text-sm text-destructive">
-        Collection <code className="font-mono">{name}</code> not found.
+        {t("records.notFound.prefix")} <code className="font-mono">{name}</code> {t("records.notFound.suffix")}
       </p>
     );
   }
+
+  const descriptionParts: string[] = [
+    t("records.recordCount", { count: total }),
+  ];
+  if (spec.auth) descriptionParts.push(t("records.authReadonly"));
+  if (spec.tenant) descriptionParts.push(t("records.tenantScoped"));
 
   return (
     <AdminPage>
       <AdminPage.Header
         title={<span className="font-mono">{name}</span>}
-        description={
-          <>
-            {total} record{total === 1 ? "" : "s"}
-            {spec.auth ? " · auth collection (read-only here)" : ""}
-            {spec.tenant ? " · tenant-scoped" : ""}
-          </>
-        }
+        description={descriptionParts.join(" · ")}
         actions={
           spec.auth ? null : (
             <Button size="sm" onClick={() => setEditing("new")}>
-              + New
+              {t("records.action.new")}
             </Button>
           )
         }
@@ -314,7 +312,7 @@ export function UserCollectionRecords({
       <Card className="p-3">
         <div className="flex flex-wrap items-end gap-3">
           <div className="block flex-1 min-w-64 space-y-0.5">
-            <Label htmlFor="records-filter" className="text-xs text-muted-foreground">filter</Label>
+            <Label htmlFor="records-filter" className="text-xs text-muted-foreground">{t("records.filter.filter")}</Label>
             <Input
               id="records-filter"
               type="text"
@@ -325,7 +323,7 @@ export function UserCollectionRecords({
             />
           </div>
           <div className="block space-y-0.5">
-            <Label htmlFor="records-sort" className="text-xs text-muted-foreground">sort</Label>
+            <Label htmlFor="records-sort" className="text-xs text-muted-foreground">{t("records.filter.sort")}</Label>
             <Input
               id="records-sort"
               type="text"
@@ -338,16 +336,16 @@ export function UserCollectionRecords({
         </div>
       </Card>
 
-      {bulkBanner ? <BulkBanner banner={bulkBanner} onDismiss={() => setBulkBanner(null)} /> : null}
+      {bulkBanner ? <BulkBanner banner={bulkBanner} onDismiss={() => setBulkBanner(null)} tr={t} /> : null}
 
       <QDatatable
         columns={gridColumns}
         rowKey="id"
         pageSize={30}
         selectable={!readOnly}
-        emptyMessage="No records."
+        emptyMessage={t("records.empty")}
         rowActions={[
-          { label: "Edit", onSelect: (row) => setEditing((row.id as string) ?? null) },
+          { label: t("records.action.edit"), onSelect: (row) => setEditing((row.id as string) ?? null) },
         ]}
         deps={[name, sort, filter, refreshTick]}
         fetch={async (params) => {
@@ -370,13 +368,13 @@ export function UserCollectionRecords({
               const ids = selectedKeys.map(String);
               if (ids.length === 0) return;
               const ok = window.confirm(
-                `Delete ${ids.length} record${ids.length === 1 ? "" : "s"}?`,
+                t("records.confirm.bulkDelete", { count: ids.length }),
               );
               if (!ok) return;
               batchDeleteMut.mutate(ids, { onSettled: () => clear() });
             }}
           >
-            {batchDeleteMut.isPending ? "Deleting…" : "Delete"}
+            {batchDeleteMut.isPending ? t("records.action.deleting") : t("records.action.delete")}
           </Button>
         )}
       />
@@ -400,7 +398,7 @@ export function UserCollectionRecords({
         <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-2xl">
           <DrawerHeader>
             <DrawerTitle>
-              {editing === "new" ? "New record" : "Edit record"}
+              {editing === "new" ? t("records.drawer.titleNew") : t("records.drawer.titleEdit")}
             </DrawerTitle>
             <DrawerDescription className="font-mono">
               {editing === "new" ? name : editing}
@@ -412,7 +410,7 @@ export function UserCollectionRecords({
                 key={editing}
                 name={name}
                 recordId={editing}
-                onChanged={() => setRefreshTick((t) => t + 1)}
+                onChanged={() => setRefreshTick((tick) => tick + 1)}
                 onClose={closeDrawer}
               />
             ) : null}
@@ -517,19 +515,21 @@ function stripTags(s: string): string {
 function BulkBanner({
   banner,
   onDismiss,
+  tr,
 }: {
   banner:
     | { kind: "success"; count: number }
     | { kind: "partial"; ok: number; failed: { id: string; message: string }[] }
     | { kind: "error"; message: string };
   onDismiss: () => void;
+  tr: Translator["t"];
 }) {
   if (banner.kind === "success") {
     return (
       <div className="flex items-center justify-between rounded border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-primary">
-        <span>Deleted {banner.count} record{banner.count === 1 ? "" : "s"}.</span>
+        <span>{tr("records.bulk.deletedCount", { count: banner.count })}</span>
         <Button type="button" variant="link" size="sm" onClick={onDismiss} className="h-auto px-0 text-xs">
-          dismiss
+          {tr("records.bulk.dismiss")}
         </Button>
       </div>
     );
@@ -539,26 +539,26 @@ function BulkBanner({
       <div className="flex items-center justify-between rounded border border-input bg-muted px-3 py-2 text-sm text-foreground">
         <div>
           <span className="font-medium">
-            {banner.ok} ok, {banner.failed.length} failed.
+            {tr("records.bulk.partial", { ok: banner.ok, failed: banner.failed.length })}
           </span>{" "}
           <span
             className="underline decoration-dotted cursor-help"
             title={banner.failed.map((f) => `${f.id}: ${f.message}`).join("\n")}
           >
-            hover for details
+            {tr("records.bulk.hoverDetails")}
           </span>
         </div>
         <Button type="button" variant="link" size="sm" onClick={onDismiss} className="h-auto px-0 text-xs">
-          dismiss
+          {tr("records.bulk.dismiss")}
         </Button>
       </div>
     );
   }
   return (
     <div className="flex items-center justify-between rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-      <span>Batch delete failed: {banner.message}</span>
+      <span>{tr("records.bulk.failed", { message: banner.message })}</span>
       <Button type="button" variant="link" size="sm" onClick={onDismiss} className="h-auto px-0 text-xs">
-        dismiss
+        {tr("records.bulk.dismiss")}
       </Button>
     </div>
   );
@@ -588,6 +588,7 @@ function InlineCell({
   onSaved: () => void;
   render: (v: unknown) => React.ReactNode;
 }) {
+  const { t } = useT();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string>(() => stringifyForInput(value, field));
   const [err, setErr] = useState<string | null>(null);
@@ -611,7 +612,7 @@ function InlineCell({
     setErr(null);
     let parsed: unknown;
     try {
-      parsed = parseForField(raw, field);
+      parsed = parseForField(raw, field, t);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       return;
@@ -793,14 +794,14 @@ function stringifyForInput(v: unknown, f: FieldSpec): string {
 // matches the FieldSpec contract. The backend revalidates regardless;
 // we only catch obvious type errors so the optimistic write doesn't
 // shove a string into a number column.
-function parseForField(raw: string | boolean, f: FieldSpec): unknown {
+function parseForField(raw: string | boolean, f: FieldSpec, t: Translator["t"]): unknown {
   if (typeof raw === "boolean") return raw;
   const s = raw;
   if (f.type === "number") {
     if (s === "") return null;
     const n = Number(s);
-    if (!Number.isFinite(n)) throw new Error("not a number");
-    if (f.is_int && !Number.isInteger(n)) throw new Error("must be an integer");
+    if (!Number.isFinite(n)) throw new Error(t("records.parse.notNumber"));
+    if (f.is_int && !Number.isInteger(n)) throw new Error(t("records.parse.notInteger"));
     return n;
   }
   // text-ish — empty string stays "" (not null); callers wanting a

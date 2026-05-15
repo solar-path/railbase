@@ -2,6 +2,7 @@ import { useState } from "react";
 import { adminAPI } from "../api/admin";
 import type { SystemAdminSessionRow } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 
 // System admin sessions browser — read-only paginated view of the
@@ -18,96 +19,94 @@ import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 // Columns: id (truncated), admin_id (truncated), ip, user_agent (60-
 // char cap from the server), last_used_at, expires_at, created.
 
-const columns: ColumnDef<SystemAdminSessionRow>[] = [
-  {
-    id: "id",
-    header: "id",
-    accessor: "id",
-    cell: (s) => (
-      <span class="font-mono text-xs text-muted-foreground" title={s.id}>
-        {s.id.slice(0, 8)}…
-      </span>
-    ),
-  },
-  {
-    id: "admin",
-    header: "admin",
-    accessor: "admin_id",
-    cell: (s) => (
-      <span class="font-mono text-xs" title={s.admin_id}>
-        {s.admin_id.slice(0, 8)}…
-      </span>
-    ),
-  },
-  {
-    id: "ip",
-    header: "ip",
-    accessor: "ip",
-    cell: (s) => <span class="font-mono text-xs">{s.ip ?? "—"}</span>,
-  },
-  {
-    id: "user_agent",
-    header: "user agent",
-    accessor: "user_agent",
-    cell: (s) => (
-      <span
-        class="font-mono text-xs text-muted-foreground block max-w-md truncate"
-        title={s.user_agent ?? ""}
-      >
-        {s.user_agent ?? "—"}
-      </span>
-    ),
-  },
-  {
-    id: "last_used_at",
-    header: "last used",
-    accessor: "last_used_at",
-    sortable: true,
-    cell: (s) => (
-      <span class="font-mono text-xs text-muted-foreground">{s.last_used_at}</span>
-    ),
-  },
-  {
-    id: "expires_at",
-    header: "expires",
-    accessor: "expires_at",
-    sortable: true,
-    cell: (s) => (
-      <span class="font-mono text-xs text-muted-foreground">{s.expires_at}</span>
-    ),
-  },
-  {
-    id: "created",
-    header: "created",
-    accessor: "created",
-    sortable: true,
-    cell: (s) => (
-      <span class="font-mono text-xs text-muted-foreground">{s.created}</span>
-    ),
-  },
-];
+function buildAdminSessionColumns(t: Translator["t"]): ColumnDef<SystemAdminSessionRow>[] {
+  return [
+    {
+      id: "id",
+      header: t("sysAdminSessions.col.id"),
+      accessor: "id",
+      cell: (s) => (
+        <span class="font-mono text-xs text-muted-foreground" title={s.id}>
+          {s.id.slice(0, 8)}…
+        </span>
+      ),
+    },
+    {
+      id: "admin",
+      header: t("sysAdminSessions.col.admin"),
+      accessor: "admin_id",
+      cell: (s) => (
+        <span class="font-mono text-xs" title={s.admin_id}>
+          {s.admin_id.slice(0, 8)}…
+        </span>
+      ),
+    },
+    {
+      id: "ip",
+      header: t("sysAdminSessions.col.ip"),
+      accessor: "ip",
+      cell: (s) => <span class="font-mono text-xs">{s.ip ?? "—"}</span>,
+    },
+    {
+      id: "user_agent",
+      header: t("sysAdminSessions.col.userAgent"),
+      accessor: "user_agent",
+      cell: (s) => (
+        <span
+          class="font-mono text-xs text-muted-foreground block max-w-md truncate"
+          title={s.user_agent ?? ""}
+        >
+          {s.user_agent ?? "—"}
+        </span>
+      ),
+    },
+    {
+      id: "last_used_at",
+      header: t("sysAdminSessions.col.lastUsed"),
+      accessor: "last_used_at",
+      sortable: true,
+      cell: (s) => (
+        <span class="font-mono text-xs text-muted-foreground">{s.last_used_at}</span>
+      ),
+    },
+    {
+      id: "expires_at",
+      header: t("sysAdminSessions.col.expires"),
+      accessor: "expires_at",
+      sortable: true,
+      cell: (s) => (
+        <span class="font-mono text-xs text-muted-foreground">{s.expires_at}</span>
+      ),
+    },
+    {
+      id: "created",
+      header: t("sysAdminSessions.col.created"),
+      accessor: "created",
+      sortable: true,
+      cell: (s) => (
+        <span class="font-mono text-xs text-muted-foreground">{s.created}</span>
+      ),
+    },
+  ];
+}
 
 export function SystemAdminSessionsScreen() {
+  const { t } = useT();
   const [total, setTotal] = useState(0);
 
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Admin sessions"
-        description={
-          <>
-            {total} session{total === 1 ? "" : "s"} total. Read-only — token
-            hashes never leave the server.
-          </>
-        }
+        title={t("sysAdminSessions.title")}
+        description={t("sysAdminSessions.description", { count: total })}
       />
 
       <AdminPage.Body>
         <QDatatable
-          columns={columns}
+          columns={buildAdminSessionColumns(t)}
           rowKey="id"
           pageSize={50}
-          emptyMessage="No admin sessions — no admins have signed in yet."
+          emptyMessage={t("sysAdminSessions.empty")}
           fetch={async (params) => {
             const r = await adminAPI.listSystemAdminSessions({
               page: params.page,

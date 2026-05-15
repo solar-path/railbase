@@ -18,6 +18,27 @@ import (
 //go:embed assets/Roboto-Regular.ttf
 var robotoRegular []byte
 
+// DefaultFont returns a copy of the embedded Roboto Regular TTF used
+// by NewPDFWriter for rendering. Embedders building their own gopdf
+// documents alongside Railbase get the same font without having to
+// re-embed it themselves — FEEDBACK #31 (the shopper project copied
+// the 170 KB TTF into its own binary just to call `pdf.AddTTFFontData`
+// directly).
+//
+// Returns a defensive copy so callers can't mutate the package-level
+// embedded buffer.
+func DefaultFont() []byte {
+	out := make([]byte, len(robotoRegular))
+	copy(out, robotoRegular)
+	return out
+}
+
+// DefaultFontName is the family name NewPDFWriter registers Roboto
+// under. Embedders writing their own gopdf code should use this when
+// calling `pdf.SetFont(DefaultFontName, "", size)` so the font lookup
+// matches the bytes returned by DefaultFont().
+const DefaultFontName = defaultFont
+
 // pageWidth / pageHeight in points (1/72 inch). A4 portrait.
 const (
 	pageWidth   = 595.28

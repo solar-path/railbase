@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { adminAPI } from "../api/admin";
 import type { EmailEvent } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 import { Button } from "@/lib/ui/button.ui";
 import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
@@ -25,72 +26,75 @@ import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 type EventFilter = "" | "sent" | "failed" | "bounced" | "opened" | "clicked" | "complained";
 type BounceTypeFilter = "" | "hard" | "soft" | "transient";
 
-const columns: ColumnDef<EmailEvent>[] = [
-  {
-    id: "time",
-    header: "time",
-    accessor: "occurred_at",
-    cell: (e) => (
-      <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">
-        {e.occurred_at}
-      </span>
-    ),
-  },
-  {
-    id: "event",
-    header: "event",
-    accessor: "event",
-    cell: (e) => <Badge variant={eventVariant(e.event)}>{e.event}</Badge>,
-  },
-  {
-    id: "recipient",
-    header: "recipient",
-    accessor: "recipient",
-    cell: (e) => (
-      <span className="font-mono text-xs block max-w-xs truncate" title={e.recipient}>
-        {e.recipient}
-      </span>
-    ),
-  },
-  {
-    id: "subject",
-    header: "subject",
-    accessor: "subject",
-    cell: (e) => (
-      <span className="block max-w-md truncate" title={e.subject ?? ""}>
-        {e.subject || <span className="text-muted-foreground">—</span>}
-      </span>
-    ),
-  },
-  {
-    id: "template",
-    header: "template",
-    accessor: "template",
-    cell: (e) => (
-      <span className="font-mono text-xs" title={e.template ?? ""}>
-        {e.template || <span className="text-muted-foreground">—</span>}
-      </span>
-    ),
-  },
-  {
-    id: "driver",
-    header: "driver",
-    accessor: "driver",
-    cell: (e) => <span className="font-mono text-xs">{e.driver}</span>,
-  },
-  {
-    id: "code",
-    header: "code",
-    accessor: "error_code",
-    cell: (e) => (
-      <span className="font-mono text-xs" title={e.error_code ?? ""}>
-        {e.error_code || <span className="text-muted-foreground">—</span>}
-      </span>
-    ),
-  },
-];
+function buildEmailEventColumns(t: Translator["t"]): ColumnDef<EmailEvent>[] {
+  return [
+    {
+      id: "time",
+      header: t("emailEvents.col.time"),
+      accessor: "occurred_at",
+      cell: (e) => (
+        <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">
+          {e.occurred_at}
+        </span>
+      ),
+    },
+    {
+      id: "event",
+      header: t("emailEvents.col.event"),
+      accessor: "event",
+      cell: (e) => <Badge variant={eventVariant(e.event)}>{e.event}</Badge>,
+    },
+    {
+      id: "recipient",
+      header: t("emailEvents.col.recipient"),
+      accessor: "recipient",
+      cell: (e) => (
+        <span className="font-mono text-xs block max-w-xs truncate" title={e.recipient}>
+          {e.recipient}
+        </span>
+      ),
+    },
+    {
+      id: "subject",
+      header: t("emailEvents.col.subject"),
+      accessor: "subject",
+      cell: (e) => (
+        <span className="block max-w-md truncate" title={e.subject ?? ""}>
+          {e.subject || <span className="text-muted-foreground">—</span>}
+        </span>
+      ),
+    },
+    {
+      id: "template",
+      header: t("emailEvents.col.template"),
+      accessor: "template",
+      cell: (e) => (
+        <span className="font-mono text-xs" title={e.template ?? ""}>
+          {e.template || <span className="text-muted-foreground">—</span>}
+        </span>
+      ),
+    },
+    {
+      id: "driver",
+      header: t("emailEvents.col.driver"),
+      accessor: "driver",
+      cell: (e) => <span className="font-mono text-xs">{e.driver}</span>,
+    },
+    {
+      id: "code",
+      header: t("emailEvents.col.code"),
+      accessor: "error_code",
+      cell: (e) => (
+        <span className="font-mono text-xs" title={e.error_code ?? ""}>
+          {e.error_code || <span className="text-muted-foreground">—</span>}
+        </span>
+      ),
+    },
+  ];
+}
 
 export function EmailEventsPanel() {
+  const { t } = useT();
   const [total, setTotal] = useState(0);
 
   const [recipientInput, setRecipientInput] = useState("");
@@ -103,40 +107,41 @@ export function EmailEventsPanel() {
 
   // Debounce the recipient input. 300ms feels snappy without hammering.
   useEffect(() => {
-    const t = setTimeout(() => {
+    const tid = setTimeout(() => {
       setRecipient(recipientInput);
     }, 300);
-    return () => clearTimeout(t);
+    return () => clearTimeout(tid);
   }, [recipientInput]);
 
   const hasFilter = !!(recipient || event || template || bounceType || since || until);
 
+  const columns = buildEmailEventColumns(t);
+
   return (
     <>
       <p className="text-sm text-muted-foreground">
-        {total} event{total === 1 ? "" : "s"} total. Showing newest first. One row
-        per recipient per <code className="font-mono">mailer.Send</code> call.
+        {t("emailEvents.summary", { count: total })}
       </p>
 
       <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">recipient</span>
+          <span className="text-muted-foreground">{t("emailEvents.filter.recipient")}</span>
           <Input
             type="text"
             value={recipientInput}
             onInput={(e) => setRecipientInput(e.currentTarget.value)}
-            placeholder="alice@example.com"
+            placeholder={t("emailEvents.filter.recipientPlaceholder")}
             className="w-56 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">event</span>
+          <span className="text-muted-foreground">{t("emailEvents.filter.event")}</span>
           <select
             value={event}
             onChange={(e) => setEvent(e.currentTarget.value as EventFilter)}
             className="rounded border border-input px-2 py-1 bg-transparent"
           >
-            <option value="">all</option>
+            <option value="">{t("emailEvents.filter.all")}</option>
             <option value="sent">sent</option>
             <option value="failed">failed</option>
             <option value="bounced">bounced</option>
@@ -146,30 +151,30 @@ export function EmailEventsPanel() {
           </select>
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">template</span>
+          <span className="text-muted-foreground">{t("emailEvents.filter.template")}</span>
           <Input
             type="text"
             value={template}
             onInput={(e) => setTemplate(e.currentTarget.value)}
-            placeholder="invite_received"
+            placeholder={t("emailEvents.filter.templatePlaceholder")}
             className="w-48 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">bounce_type</span>
+          <span className="text-muted-foreground">{t("emailEvents.filter.bounceType")}</span>
           <select
             value={bounceType}
             onChange={(e) => setBounceType(e.currentTarget.value as BounceTypeFilter)}
             className="rounded border border-input px-2 py-1 bg-transparent"
           >
-            <option value="">all</option>
+            <option value="">{t("emailEvents.filter.all")}</option>
             <option value="hard">hard</option>
             <option value="soft">soft</option>
             <option value="transient">transient</option>
           </select>
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">since</span>
+          <span className="text-muted-foreground">{t("emailEvents.filter.since")}</span>
           <Input
             type="datetime-local"
             value={since}
@@ -178,7 +183,7 @@ export function EmailEventsPanel() {
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">until</span>
+          <span className="text-muted-foreground">{t("emailEvents.filter.until")}</span>
           <Input
             type="datetime-local"
             value={until}
@@ -200,7 +205,7 @@ export function EmailEventsPanel() {
               setUntil("");
             }}
           >
-            clear
+            {t("emailEvents.filter.clear")}
           </Button>
         ) : null}
       </AdminPage.Toolbar>
@@ -210,7 +215,7 @@ export function EmailEventsPanel() {
           columns={columns}
           rowKey="id"
           pageSize={50}
-          emptyMessage="No email events."
+          emptyMessage={t("emailEvents.empty")}
           deps={[recipient, event, template, bounceType, since, until]}
           fetch={async (params) => {
             const r = await adminAPI.listEmailEvents({

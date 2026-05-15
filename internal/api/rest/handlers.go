@@ -172,11 +172,15 @@ func resolveCollection(name string) (builder.CollectionSpec, error) {
 	if spec.Auth {
 		// Auth collections own NOT NULL system columns (password_hash,
 		// token_key) that the generic CRUD writer can't fill safely.
-		// Use the dedicated /auth-signup / /auth-with-password / /me
-		// endpoints to mutate or read auth records.
+		// Spell out the four common endpoints so a first-time embedder
+		// doesn't have to grep the source — FEEDBACK #8.
 		return spec, rerr.New(rerr.CodeForbidden,
-			"collection %q is an auth collection; use /api/collections/%s/auth-* endpoints",
-			name, name)
+			"collection %q is an auth collection; generic /records CRUD is disabled. "+
+				"Use POST /api/collections/%s/auth-signup to create, "+
+				"POST /api/collections/%s/auth-with-password to sign in, "+
+				"GET  /api/collections/%s/auth-me to read the current record, "+
+				"or POST /api/collections/%s/auth-otp / /auth-magic-link for passwordless flows.",
+			name, name, name, name, name)
 	}
 	return spec, nil
 }

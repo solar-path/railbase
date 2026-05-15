@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useSignal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { useLocation, Link } from "wouter-preact";
@@ -6,6 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { adminAPI } from "../api/admin";
 import { isAPIError } from "../api/client";
+import { useT } from "../i18n";
 import { Button } from "@/lib/ui/button.ui";
 import {
   Card,
@@ -33,32 +35,37 @@ import {
 // the password-reset email; if they got here directly, route them to
 // /forgot-password to request a fresh one.
 
-// Min-8 + at-least-1 upper / digit / symbol matches the bootstrap
-// wizard's admin password rule. Identical schema means an operator
-// can't pick a weaker password via reset than they could at create.
-const schema = z
-  .object({
-    password: z
-      .string()
-      .min(8, "Min 8 characters")
-      .regex(/[A-Z]/, "Need uppercase")
-      .regex(/[0-9]/, "Need digit")
-      .regex(/[^A-Za-z0-9]/, "Need symbol"),
-    confirm: z.string(),
-  })
-  .refine((d) => d.password === d.confirm, {
-    message: "Passwords don't match",
-    path: ["confirm"],
-  });
-
-type Values = z.infer<typeof schema>;
+type Values = { password: string; confirm: string };
 
 export function ResetPasswordScreen() {
+  const { t } = useT();
   const [, navigate] = useLocation();
   const token = useSignal<string>("");
   const busy = useSignal(false);
   const err = useSignal<string | null>(null);
   const success = useSignal(false);
+
+  // Min-8 + at-least-1 upper / digit / symbol matches the bootstrap
+  // wizard's admin password rule. Identical schema means an operator
+  // can't pick a weaker password via reset than they could at create.
+  const schema = useMemo(
+    () =>
+      z
+        .object({
+          password: z
+            .string()
+            .min(8, t("passwordReset.errMin8"))
+            .regex(/[A-Z]/, t("passwordReset.errUpper"))
+            .regex(/[0-9]/, t("passwordReset.errDigit"))
+            .regex(/[^A-Za-z0-9]/, t("passwordReset.errSymbol")),
+          confirm: z.string(),
+        })
+        .refine((d) => d.password === d.confirm, {
+          message: t("passwordReset.errMismatch"),
+          path: ["confirm"],
+        }),
+    [t],
+  );
 
   // Read ?token=... from the URL on mount. wouter-preact's location
   // hook covers PATH but not search; we read window.location.search
@@ -70,7 +77,7 @@ export function ResetPasswordScreen() {
     } catch {
       // Malformed URL — token stays empty, fallback renders.
     }
-     
+
   }, []);
 
   const form = useForm<Values>({
@@ -89,7 +96,7 @@ export function ResetPasswordScreen() {
       // the redirect — feels less like a click-and-jump.
       setTimeout(() => navigate("/login"), 1500);
     } catch (e) {
-      err.value = isAPIError(e) ? e.message : "Reset failed.";
+      err.value = isAPIError(e) ? e.message : t("passwordReset.failed");
     } finally {
       busy.value = false;
     }
@@ -100,31 +107,30 @@ export function ResetPasswordScreen() {
     <div class="min-h-screen flex items-center justify-center bg-muted p-6">
       <Card class="w-full max-w-md">
         <CardHeader class="space-y-1">
-          <CardTitle class="text-xl">Set a new password</CardTitle>
+          <CardTitle class="text-xl">{t("passwordReset.title")}</CardTitle>
           <CardDescription>
             {token.value
-              ? "Pick a strong password. This link can only be used once."
-              : "This page expects a reset token in the URL."}
+              ? t("passwordReset.subtitle")
+              : t("passwordReset.tokenMissingSubtitle")}
           </CardDescription>
         </CardHeader>
         <CardContent>
           {!token.value ? (
             <div class="space-y-3 text-sm">
               <p>
-                No reset token in the URL. Reset links arrive by email
-                — open the link in that email, or request a new one.
+                {t("passwordReset.tokenMissingBody")}
               </p>
               <Link
                 href="/forgot-password"
                 class="block text-center text-sm underline"
               >
-                Request a reset link
+                {t("passwordReset.requestNewLink")}
               </Link>
             </div>
           ) : success.value ? (
             <div class="space-y-3 text-sm">
               <p class="text-foreground">
-                Password updated. Redirecting to sign in…
+                {t("passwordReset.successRedirect")}
               </p>
             </div>
           ) : (
@@ -135,7 +141,7 @@ export function ResetPasswordScreen() {
                   name="password"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>New password</FormLabel>
+                      <FormLabel>{t("passwordReset.newPassword")}</FormLabel>
                       <FormControl>
                         <PasswordInput
                           autoComplete="new-password"
@@ -156,7 +162,7 @@ export function ResetPasswordScreen() {
                   name="confirm"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Confirm password</FormLabel>
+                      <FormLabel>{t("passwordReset.confirmPassword")}</FormLabel>
                       <FormControl>
                         <PasswordInput
                           autoComplete="new-password"
@@ -183,11 +189,11 @@ export function ResetPasswordScreen() {
                   disabled={busy.value || form.formState.isSubmitting}
                   class="w-full"
                 >
-                  {busy.value ? "Resetting…" : "Set new password"}
+                  {busy.value ? t("passwordReset.resetting") : t("passwordReset.submit")}
                 </Button>
                 <p class="text-xs text-muted-foreground text-center">
                   <Link href="/login" class="underline">
-                    Back to sign in
+                    {t("forgotPassword.backToSignIn")}
                   </Link>
                 </p>
               </form>

@@ -7,6 +7,7 @@ import { Input } from "@/lib/ui/input.ui";
 import { Badge } from "@/lib/ui/badge.ui";
 import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 import { Download } from "@/lib/ui/icons";
+import { useT, type Translator } from "../i18n";
 
 // Audit panel — paginated, filterable list of `_audit_log` rows.
 // Rendered as the "Audit" category of the unified Logs screen
@@ -28,64 +29,69 @@ import { Download } from "@/lib/ui/icons";
 
 type OutcomeFilter = "" | "success" | "denied" | "failed" | "error";
 
-const columns: ColumnDef<AuditEvent>[] = [
-  {
-    id: "seq",
-    header: "seq",
-    accessor: "seq",
-    cell: (e) => <span className="font-mono text-muted-foreground">{e.seq}</span>,
-  },
-  {
-    id: "at",
-    header: "at",
-    accessor: "at",
-    cell: (e) => (
-      <span className="font-mono text-xs text-muted-foreground">{e.at}</span>
-    ),
-  },
-  {
-    id: "event",
-    header: "event",
-    accessor: "event",
-    cell: (e) => <span className="font-mono">{e.event}</span>,
-  },
-  {
-    id: "outcome",
-    header: "outcome",
-    accessor: "outcome",
-    cell: (e) => <Badge variant={outcomeVariant(e.outcome)}>{e.outcome}</Badge>,
-  },
-  {
-    id: "user",
-    header: "user",
-    accessor: "user_id",
-    cell: (e) => (
-      <span className="font-mono text-xs">
-        {e.user_id ? (
-          <span title={e.user_collection ?? ""}>{e.user_id.slice(0, 8)}…</span>
-        ) : (
-          "—"
-        )}
-      </span>
-    ),
-  },
-  {
-    id: "ip",
-    header: "ip",
-    accessor: "ip",
-    cell: (e) => <span className="font-mono text-xs">{e.ip ?? "—"}</span>,
-  },
-  {
-    id: "error",
-    header: "error",
-    accessor: "error_code",
-    cell: (e) => (
-      <span className="font-mono text-xs text-foreground">{e.error_code ?? ""}</span>
-    ),
-  },
-];
+function buildAuditColumns(t: Translator["t"]): ColumnDef<AuditEvent>[] {
+  return [
+    {
+      id: "seq",
+      header: t("audit.col.seq"),
+      accessor: "seq",
+      cell: (e) => <span className="font-mono text-muted-foreground">{e.seq}</span>,
+    },
+    {
+      id: "at",
+      header: t("audit.col.at"),
+      accessor: "at",
+      cell: (e) => (
+        <span className="font-mono text-xs text-muted-foreground">{e.at}</span>
+      ),
+    },
+    {
+      id: "event",
+      header: t("audit.col.event"),
+      accessor: "event",
+      cell: (e) => <span className="font-mono">{e.event}</span>,
+    },
+    {
+      id: "outcome",
+      header: t("audit.col.outcome"),
+      accessor: "outcome",
+      cell: (e) => (
+        <Badge variant={outcomeVariant(e.outcome)}>{t(`audit.outcome.${e.outcome}`)}</Badge>
+      ),
+    },
+    {
+      id: "user",
+      header: t("audit.col.user"),
+      accessor: "user_id",
+      cell: (e) => (
+        <span className="font-mono text-xs">
+          {e.user_id ? (
+            <span title={e.user_collection ?? ""}>{e.user_id.slice(0, 8)}…</span>
+          ) : (
+            "—"
+          )}
+        </span>
+      ),
+    },
+    {
+      id: "ip",
+      header: t("audit.col.ip"),
+      accessor: "ip",
+      cell: (e) => <span className="font-mono text-xs">{e.ip ?? "—"}</span>,
+    },
+    {
+      id: "error",
+      header: t("audit.col.error"),
+      accessor: "error_code",
+      cell: (e) => (
+        <span className="font-mono text-xs text-foreground">{e.error_code ?? ""}</span>
+      ),
+    },
+  ];
+}
 
 export function AuditPanel() {
+  const { t } = useT();
   const [total, setTotal] = useState(0);
 
   const [eventInput, setEventInput] = useState("");
@@ -118,34 +124,34 @@ export function AuditPanel() {
   return (
     <>
       <p className="text-sm text-muted-foreground">
-        {total} event{total === 1 ? "" : "s"} total. Append-only hash chain — verify
-        integrity with <code className="font-mono">railbase audit verify</code>. Every
-        system_admin action is recorded here for forensic review.
+        {t("audit.eventCount", { count: total })} {t("audit.summaryLead")}{" "}
+        <code className="font-mono">railbase audit verify</code>.{" "}
+        {t("audit.summaryTail")}
       </p>
 
       <AdminPage.Toolbar>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">event</span>
+          <span className="text-muted-foreground">{t("audit.filter.event")}</span>
           <Input
             type="text"
             value={eventInput}
             onInput={(e) => setEventInput(e.currentTarget.value)}
-            placeholder="substring (e.g. auth.signin)"
+            placeholder={t("audit.filter.eventPlaceholder")}
             className="w-56 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">outcome</span>
+          <span className="text-muted-foreground">{t("audit.filter.outcome")}</span>
           <select
             value={outcome}
             onChange={(e) => setOutcome(e.currentTarget.value as OutcomeFilter)}
             className="rounded border border-input px-2 py-1 bg-transparent"
           >
-            <option value="">all</option>
-            <option value="success">success</option>
-            <option value="denied">denied</option>
-            <option value="failed">failed</option>
-            <option value="error">error</option>
+            <option value="">{t("audit.filter.all")}</option>
+            <option value="success">{t("audit.outcome.success")}</option>
+            <option value="denied">{t("audit.outcome.denied")}</option>
+            <option value="failed">{t("audit.outcome.failed")}</option>
+            <option value="error">{t("audit.outcome.error")}</option>
           </select>
         </label>
         <label className="flex items-center gap-1">
@@ -154,28 +160,28 @@ export function AuditPanel() {
             type="text"
             value={userIdInput}
             onInput={(e) => setUserIdInput(e.currentTarget.value)}
-            placeholder="UUID exact match"
+            placeholder={t("audit.filter.userIdPlaceholder")}
             className="w-64 h-8 font-mono text-xs"
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">since</span>
+          <span className="text-muted-foreground">{t("audit.filter.since")}</span>
           <Input
             type="datetime-local"
             value={since}
             onInput={(e) => setSince(e.currentTarget.value)}
             className="h-8 font-mono text-xs w-auto"
-            title="RFC3339 lower bound on the row's `at` column"
+            title={t("audit.filter.sinceTitle")}
           />
         </label>
         <label className="flex items-center gap-1">
-          <span className="text-muted-foreground">until</span>
+          <span className="text-muted-foreground">{t("audit.filter.until")}</span>
           <Input
             type="datetime-local"
             value={until}
             onInput={(e) => setUntil(e.currentTarget.value)}
             className="h-8 font-mono text-xs w-auto"
-            title="RFC3339 upper bound on the row's `at` column"
+            title={t("audit.filter.untilTitle")}
           />
         </label>
         <label className="flex items-center gap-1">
@@ -184,7 +190,7 @@ export function AuditPanel() {
             type="text"
             value={errorCodeInput}
             onInput={(e) => setErrorCodeInput(e.currentTarget.value)}
-            placeholder="substring"
+            placeholder={t("audit.filter.substring")}
             className="w-48 h-8 font-mono text-xs"
           />
         </label>
@@ -204,7 +210,7 @@ export function AuditPanel() {
               setErrorCode("");
             }}
           >
-            clear
+            {t("audit.clear")}
           </Button>
         ) : null}
         {/* v1.7.x §3.15 Block A — XLSX export with the same filter
@@ -228,19 +234,19 @@ export function AuditPanel() {
             const url = "/api/_admin/audit/export.xlsx" + (qs ? "?" + qs : "");
             window.location.href = url;
           }}
-          title="Export the current filter slice as XLSX (cap 100k rows)"
+          title={t("audit.exportTitle")}
         >
           <Download className="h-3.5 w-3.5 mr-1" />
-          Export XLSX
+          {t("audit.exportXlsx")}
         </Button>
       </AdminPage.Toolbar>
 
       <AdminPage.Body>
         <QDatatable
-          columns={columns}
+          columns={buildAuditColumns(t)}
           rowKey="seq"
           pageSize={50}
-          emptyMessage="No events."
+          emptyMessage={t("audit.empty")}
           deps={[event, outcome, userId, since, until, errorCode]}
           fetch={async (params) => {
             const r = await adminAPI.audit({

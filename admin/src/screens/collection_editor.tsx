@@ -17,6 +17,7 @@ import {
   QEditableList,
   type QEditableColumn,
 } from "@/lib/ui/QEditableList.ui";
+import { useT, type Translator } from "../i18n";
 
 // Collection editor — create / edit a runtime (admin-managed) collection.
 // v0.9 of the PocketBase-style admin: collections created here are applied
@@ -41,23 +42,27 @@ import {
 // union in api/types.ts; all are supported by internal/schema/live +
 // gen). The v1.4.x domain types (tel, slug, color, country, …) carry
 // bespoke modifiers the grid doesn't model yet — declare those in code.
-const FIELD_TYPES: Array<{ value: FieldSpec["type"]; label: string }> = [
-  { value: "text", label: "Text" },
-  { value: "richtext", label: "Rich text" },
-  { value: "number", label: "Number" },
-  { value: "bool", label: "Boolean" },
-  { value: "date", label: "Date" },
-  { value: "email", label: "Email" },
-  { value: "url", label: "URL" },
-  { value: "json", label: "JSON" },
-  { value: "select", label: "Select" },
-  { value: "multiselect", label: "Multi-select" },
-  { value: "relation", label: "Relation (→ one)" },
-  { value: "relations", label: "Relations (→ many)" },
-  { value: "file", label: "File" },
-  { value: "files", label: "Files" },
-  { value: "password", label: "Password" },
-];
+function buildFieldTypes(
+  t: Translator["t"],
+): Array<{ value: FieldSpec["type"]; label: string }> {
+  return [
+    { value: "text", label: t("collection_editor.fieldType.text") },
+    { value: "richtext", label: t("collection_editor.fieldType.richtext") },
+    { value: "number", label: t("collection_editor.fieldType.number") },
+    { value: "bool", label: t("collection_editor.fieldType.bool") },
+    { value: "date", label: t("collection_editor.fieldType.date") },
+    { value: "email", label: t("collection_editor.fieldType.email") },
+    { value: "url", label: t("collection_editor.fieldType.url") },
+    { value: "json", label: "JSON" },
+    { value: "select", label: t("collection_editor.fieldType.select") },
+    { value: "multiselect", label: t("collection_editor.fieldType.multiselect") },
+    { value: "relation", label: t("collection_editor.fieldType.relation") },
+    { value: "relations", label: t("collection_editor.fieldType.relations") },
+    { value: "file", label: t("collection_editor.fieldType.file") },
+    { value: "files", label: t("collection_editor.fieldType.files") },
+    { value: "password", label: t("collection_editor.fieldType.password") },
+  ];
+}
 
 // SELECT_VALUE_TYPES / RELATION_TYPES — the type groups that share a
 // modifier column, so the disabled() predicates stay in one place.
@@ -165,35 +170,36 @@ const NAME_RE = /^[a-z_][a-z0-9_]*$/;
 // validateLocal mirrors the server's builder.Validate just enough to give
 // fast inline feedback. The server is still authoritative.
 function validateLocal(
+  t: Translator["t"],
   name: string,
   fields: EditorField[],
   isEdit: boolean,
 ): string | null {
   if (!isEdit) {
-    if (!name.trim()) return "Collection name is required.";
+    if (!name.trim()) return t("collection_editor.err.nameRequired");
     if (!NAME_RE.test(name)) {
-      return "Name must be lowercase letters, digits and underscores, starting with a letter or underscore.";
+      return t("collection_editor.err.nameInvalid");
     }
     if (name.startsWith("_")) {
-      return "Names starting with “_” are reserved for system tables.";
+      return t("collection_editor.err.nameReserved");
     }
   }
-  if (fields.length === 0) return "Add at least one field.";
+  if (fields.length === 0) return t("collection_editor.err.noFields");
   const seen = new Set<string>();
   for (const f of fields) {
     const n = f.name.trim();
-    if (!n) return "Every field needs a name.";
-    if (!NAME_RE.test(n)) return `Field “${n}” has an invalid name.`;
-    if (seen.has(n)) return `Duplicate field name “${n}”.`;
+    if (!n) return t("collection_editor.err.fieldNameRequired");
+    if (!NAME_RE.test(n)) return t("collection_editor.err.fieldNameInvalid", { name: n });
+    if (seen.has(n)) return t("collection_editor.err.duplicateField", { name: n });
     seen.add(n);
     if (
       SELECT_VALUE_TYPES.includes(f.type) &&
       fieldToSpec(f).select_values?.length === 0
     ) {
-      return `Select field “${n}” needs at least one option.`;
+      return t("collection_editor.err.selectNeedsOption", { name: n });
     }
     if (RELATION_TYPES.includes(f.type) && !f.relatedCollection.trim()) {
-      return `Relation field “${n}” needs a related collection.`;
+      return t("collection_editor.err.relationNeedsTarget", { name: n });
     }
   }
   return null;
@@ -229,6 +235,7 @@ export function CollectionEditorDrawer({
   onClose: () => void;
   onMutated: (name: string) => void;
 }) {
+  const { t } = useT();
   const isEdit = target !== null && target !== "new";
   return (
     <Drawer
@@ -241,10 +248,10 @@ export function CollectionEditorDrawer({
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-3xl">
         <DrawerHeader>
           <DrawerTitle>
-            {isEdit ? "Edit collection" : "New collection"}
+            {isEdit ? t("collection_editor.editTitle") : t("collection_editor.newTitle")}
           </DrawerTitle>
           <DrawerDescription className="font-mono">
-            {isEdit ? target : "Define a table and its fields"}
+            {isEdit ? target : t("collection_editor.newDesc")}
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
@@ -256,6 +263,7 @@ export function CollectionEditorDrawer({
               target={target}
               onClose={onClose}
               onMutated={onMutated}
+              t={t}
             />
           ) : null}
         </div>
@@ -271,10 +279,12 @@ function CollectionEditorBody({
   target,
   onClose,
   onMutated,
+  t,
 }: {
   target: "new" | string;
   onClose: () => void;
   onMutated: (name: string) => void;
+  t: Translator["t"];
 }) {
   const isEdit = target !== "new";
   const schemaQ = useQuery({
@@ -283,7 +293,7 @@ function CollectionEditorBody({
   });
 
   if (isEdit && schemaQ.isLoading) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <p className="text-sm text-muted-foreground">{t("common.loading")}</p>;
   }
 
   const existing =
@@ -296,17 +306,17 @@ function CollectionEditorBody({
   if (isEdit && !existing) {
     return (
       <p className="text-sm text-destructive">
-        Collection <code className="font-mono">{target}</code> not found.
+        {t("collection_editor.notFoundLead")}{" "}
+        <code className="font-mono">{target}</code>{" "}
+        {t("collection_editor.notFoundTail")}
       </p>
     );
   }
   if (isEdit && !isManaged) {
     return (
       <p className="text-sm text-muted-foreground">
-        <code className="font-mono">{target}</code> is a code-defined
-        collection — its schema lives in your app&apos;s source and can&apos;t
-        be edited from the admin UI. Only collections created here are
-        editable.
+        <code className="font-mono">{target}</code>{" "}
+        {t("collection_editor.codeDefined")}
       </p>
     );
   }
@@ -318,6 +328,7 @@ function CollectionEditorBody({
       allCollections={(schemaQ.data?.collections ?? []).map((c) => c.name)}
       onClose={onClose}
       onMutated={onMutated}
+      t={t}
     />
   );
 }
@@ -331,14 +342,17 @@ function CollectionEditorForm({
   allCollections,
   onClose,
   onMutated,
+  t,
 }: {
   isEdit: boolean;
   existing: CollectionSpec | null;
   allCollections: string[];
   onClose: () => void;
   onMutated: (name: string) => void;
+  t: Translator["t"];
 }) {
   const qc = useQueryClient();
+  const FIELD_TYPES = buildFieldTypes(t);
   const [name, setName] = useState(existing?.name ?? "");
   const [softDelete, setSoftDelete] = useState(!!existing?.soft_delete);
   const [fields, setFields] = useState<EditorField[]>(
@@ -373,71 +387,71 @@ function CollectionEditorForm({
   const columns: QEditableColumn<EditorField>[] = [
     {
       key: "name",
-      header: "name",
+      header: t("collection_editor.col.name"),
       type: "text",
       required: true,
       width: 150,
-      placeholder: "title",
+      placeholder: t("collection_editor.placeholder.name"),
       inputFilter: /[a-z0-9_]/,
     },
     {
       key: "type",
-      header: "type",
+      header: t("collection_editor.col.type"),
       type: "select",
       width: 120,
-      options: FIELD_TYPES.map((t) => ({ value: t.value, label: t.label })),
+      options: FIELD_TYPES.map((ft) => ({ value: ft.value, label: ft.label })),
     },
-    { key: "required", header: "required", type: "checkbox", width: 80 },
-    { key: "unique", header: "unique", type: "checkbox", width: 75 },
+    { key: "required", header: t("collection_editor.col.required"), type: "checkbox", width: 80 },
+    { key: "unique", header: t("collection_editor.col.unique"), type: "checkbox", width: 75 },
     {
       key: "minLen",
-      header: "min len",
+      header: t("collection_editor.col.minLen"),
       type: "text",
       width: 80,
       disabled: (r) => r.type !== "text" && r.type !== "richtext",
     },
     {
       key: "maxLen",
-      header: "max len",
+      header: t("collection_editor.col.maxLen"),
       type: "text",
       width: 80,
       disabled: (r) => r.type !== "text" && r.type !== "richtext",
     },
     {
       key: "min",
-      header: "min",
+      header: t("collection_editor.col.min"),
       type: "text",
       width: 70,
       disabled: (r) => r.type !== "number",
     },
     {
       key: "max",
-      header: "max",
+      header: t("collection_editor.col.max"),
       type: "text",
       width: 70,
       disabled: (r) => r.type !== "number",
     },
     {
       key: "isInt",
-      header: "int only",
+      header: t("collection_editor.col.intOnly"),
       type: "checkbox",
       width: 70,
       disabled: (r) => r.type !== "number",
     },
     {
       key: "selectValues",
-      header: "options (csv)",
+      header: t("collection_editor.col.options"),
       type: "text",
       width: 170,
-      placeholder: "draft, published",
+      placeholder: t("collection_editor.placeholder.options"),
       disabled: (r) => !SELECT_VALUE_TYPES.includes(r.type),
     },
     {
       key: "relatedCollection",
-      header: "related collection",
+      header: t("collection_editor.col.related"),
       type: "combobox",
       width: 170,
-      placeholder: "select collection…",
+      placeholder: t("collection_editor.placeholder.related"),
       options: allCollections.map((n) => ({ value: n, label: n })),
       disabled: (r) => !RELATION_TYPES.includes(r.type),
     },
@@ -445,7 +459,7 @@ function CollectionEditorForm({
 
   const submit = async () => {
     setError(null);
-    const v = validateLocal(name, fields, isEdit);
+    const v = validateLocal(t, name, fields, isEdit);
     if (v) {
       setError(v);
       return;
@@ -458,8 +472,8 @@ function CollectionEditorForm({
         e instanceof Error
           ? e.message
           : isEdit
-            ? "Update failed."
-            : "Create failed.",
+            ? t("collection_editor.err.updateFailed")
+            : t("collection_editor.err.createFailed"),
       );
     }
   };
@@ -467,7 +481,7 @@ function CollectionEditorForm({
   const handleDelete = async () => {
     if (
       !window.confirm(
-        `Delete collection “${name}”? This drops the table and cannot be undone.`,
+        t("collection_editor.deleteConfirm", { name }),
       )
     ) {
       return;
@@ -477,14 +491,14 @@ function CollectionEditorForm({
       await remove.mutateAsync();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Delete failed.");
+      setError(e instanceof Error ? e.message : t("collection_editor.err.deleteFailed"));
     }
   };
 
   return (
     <div className="space-y-4">
       <div className="space-y-1.5">
-        <Label htmlFor="coll-name">Collection name</Label>
+        <Label htmlFor="coll-name">{t("collection_editor.collectionName")}</Label>
         {isEdit ? (
           <p className="font-mono text-sm">{name}</p>
         ) : (
@@ -501,8 +515,8 @@ function CollectionEditorForm({
         )}
         <p className="text-xs text-muted-foreground">
           {isEdit
-            ? "The name is fixed once created — rename means drop + recreate."
-            : "Lowercase letters, digits, underscores. Becomes the table name and the /api/collections/{name} path."}
+            ? t("collection_editor.nameLockedHelp")
+            : t("collection_editor.nameNewHelp")}
         </p>
       </div>
 
@@ -514,17 +528,16 @@ function CollectionEditorForm({
           className="mt-0.5"
         />
         <span>
-          <span className="block font-medium">Soft delete</span>
+          <span className="block font-medium">{t("collection_editor.softDelete")}</span>
           <span className="block text-xs text-muted-foreground">
-            DELETE marks rows as deleted instead of removing them; they stay
-            recoverable via Trash.
-            {isEdit ? " (fixed after creation)" : ""}
+            {t("collection_editor.softDeleteHelp")}
+            {isEdit ? " " + t("collection_editor.fixedAfterCreation") : ""}
           </span>
         </span>
       </label>
 
       <div className="space-y-1.5 border-t pt-3">
-        <Label>Fields</Label>
+        <Label>{t("collection_editor.fields")}</Label>
         <QEditableList<EditorField>
           columns={columns}
           data={fields}
@@ -532,7 +545,7 @@ function CollectionEditorForm({
           createEmpty={() => blankField()}
           minRows={1}
           showAddButton
-          addLabel="Add field"
+          addLabel={t("collection_editor.addField")}
           disabled={busy}
         />
       </div>
@@ -550,11 +563,11 @@ function CollectionEditorForm({
         <Button type="button" onClick={submit} disabled={busy}>
           {busy
             ? isEdit
-              ? "Saving…"
-              : "Creating…"
+              ? t("collection_editor.saving")
+              : t("collection_editor.creating")
             : isEdit
-              ? "Save changes"
-              : "Create"}
+              ? t("collection_editor.saveChanges")
+              : t("collection_editor.createBtn")}
         </Button>
         <Button
           type="button"
@@ -562,7 +575,7 @@ function CollectionEditorForm({
           onClick={onClose}
           disabled={busy}
         >
-          Cancel
+          {t("common.cancel")}
         </Button>
         {isEdit ? (
           <Button
@@ -572,7 +585,7 @@ function CollectionEditorForm({
             disabled={busy}
             className="ml-auto text-destructive hover:bg-destructive/10 hover:text-destructive"
           >
-            Delete collection
+            {t("collection_editor.deleteCollection")}
           </Button>
         ) : null}
       </div>

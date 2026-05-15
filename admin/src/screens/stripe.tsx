@@ -29,6 +29,7 @@ import {
   type StripePayment,
   type StripeEvent,
 } from "../api/stripe";
+import { useT, type Translator } from "../i18n";
 
 // StripeScreen — Settings → Stripe. The single admin surface for the
 // v2 Stripe billing integration. Conforms to the Schemas/Collections
@@ -39,49 +40,53 @@ import {
 // keep-if-empty contract (a blank secret field on save leaves the
 // stored key alone), same as the mailer config screen.
 
-const TABS = [
-  { id: "config", label: "Configuration" },
-  { id: "catalog", label: "Catalog" },
-  { id: "customers", label: "Customers" },
-  { id: "subscriptions", label: "Subscriptions" },
-  { id: "payments", label: "Payments" },
-  { id: "events", label: "Webhook events" },
-] as const;
+function buildTabs(t: Translator["t"]) {
+  return [
+    { id: "config", label: t("stripe.tab.config") },
+    { id: "catalog", label: t("stripe.tab.catalog") },
+    { id: "customers", label: t("stripe.tab.customers") },
+    { id: "subscriptions", label: t("stripe.tab.subscriptions") },
+    { id: "payments", label: t("stripe.tab.payments") },
+    { id: "events", label: t("stripe.tab.events") },
+  ] as const;
+}
 
 export function StripeScreen() {
+  const { t } = useT();
   const [tab, setTab] = useState<string>("config");
+  const TABS = buildTabs(t);
   return (
     <AdminPage className="max-w-5xl">
       <AdminPage.Header
-        title="Stripe"
-        description="Subscriptions and one-time sales. Credentials are stored in the database; the product catalog is authored here and pushed up to Stripe."
+        title={t("stripe.title")}
+        description={t("stripe.subtitle")}
       />
       <AdminPage.Body>
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="mb-4">
-            {TABS.map((t) => (
-              <TabsTrigger key={t.id} value={t.id}>
-                {t.label}
+            {TABS.map((tab) => (
+              <TabsTrigger key={tab.id} value={tab.id}>
+                {tab.label}
               </TabsTrigger>
             ))}
           </TabsList>
           <TabsContent value="config">
-            <ConfigTab />
+            <ConfigTab t={t} />
           </TabsContent>
           <TabsContent value="catalog">
-            <CatalogTab />
+            <CatalogTab t={t} />
           </TabsContent>
           <TabsContent value="customers">
-            <CustomersTab />
+            <CustomersTab t={t} />
           </TabsContent>
           <TabsContent value="subscriptions">
-            <SubscriptionsTab />
+            <SubscriptionsTab t={t} />
           </TabsContent>
           <TabsContent value="payments">
-            <PaymentsTab />
+            <PaymentsTab t={t} />
           </TabsContent>
           <TabsContent value="events">
-            <EventsTab />
+            <EventsTab t={t} />
           </TabsContent>
         </Tabs>
       </AdminPage.Body>
@@ -110,8 +115,8 @@ function when(ts?: string): string {
   return isNaN(d.getTime()) ? "—" : d.toLocaleString();
 }
 
-function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : "Request failed.";
+function errMsg(e: unknown, fallback = "Request failed."): string {
+  return e instanceof Error ? e.message : fallback;
 }
 
 function ErrorBanner({ error }: { error: unknown }) {
@@ -135,49 +140,49 @@ function StatusBadge({ status }: { status: string }) {
 
 // ── config tab ───────────────────────────────────────────────────
 
-function ConfigTab() {
+function ConfigTab({ t }: { t: Translator["t"] }) {
   const [editing, setEditing] = useState(false);
   const cfgQ = useQuery({ queryKey: ["stripe", "config"], queryFn: stripeAPI.configGet });
 
-  if (cfgQ.isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (cfgQ.isLoading) return <p className="text-sm text-muted-foreground">{t("common.loading")}</p>;
   if (cfgQ.isError) return <AdminPage.Error message={errMsg(cfgQ.error)} />;
   const cfg = cfgQ.data;
 
   return (
     <div className="max-w-2xl space-y-4">
       <div className="flex items-center justify-between gap-3">
-        <StripeStatusLine cfg={cfg} />
+        <StripeStatusLine cfg={cfg} t={t} />
         <Button type="button" size="sm" onClick={() => setEditing(true)}>
-          Edit credentials
+          {t("stripe.editCredentials")}
         </Button>
       </div>
 
       <dl className="divide-y rounded-md border text-sm">
-        <SummaryRow label="Publishable key">
+        <SummaryRow label={t("stripe.publishableKey")}>
           <span className="font-mono break-all">
             {cfg?.publishable_key || "—"}
           </span>
         </SummaryRow>
-        <SummaryRow label="Secret key">
+        <SummaryRow label={t("stripe.secretKey")}>
           {cfg?.secret_key_set ? (
             <span className="font-mono">{cfg.secret_key_hint}</span>
           ) : (
-            <span className="text-muted-foreground">missing</span>
+            <span className="text-muted-foreground">{t("stripe.missing")}</span>
           )}
         </SummaryRow>
-        <SummaryRow label="Webhook secret">
-          {cfg?.webhook_secret_set ? "set" : "missing"}
+        <SummaryRow label={t("stripe.webhookSecret")}>
+          {cfg?.webhook_secret_set ? t("stripe.set") : t("stripe.missing")}
         </SummaryRow>
       </dl>
 
       <div className="rounded border bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-1">
-        <p className="font-medium text-foreground">Webhook endpoint</p>
+        <p className="font-medium text-foreground">{t("stripe.webhookEndpoint")}</p>
         <p>
-          Point a Stripe webhook at{" "}
+          {t("stripe.webhookHintLead")}{" "}
           <code className="font-mono">{location.origin}/api/stripe/webhook</code>{" "}
-          and subscribe to <code className="font-mono">payment_intent.*</code>,{" "}
-          <code className="font-mono">customer.*</code> and{" "}
-          <code className="font-mono">customer.subscription.*</code> events.
+          {t("stripe.webhookHintMid")} <code className="font-mono">payment_intent.*</code>,{" "}
+          <code className="font-mono">customer.*</code> {t("stripe.and")}{" "}
+          <code className="font-mono">customer.subscription.*</code> {t("stripe.events")}.
         </p>
       </div>
 
@@ -185,6 +190,7 @@ function ConfigTab() {
         open={editing}
         cfg={cfg}
         onClose={() => setEditing(false)}
+        t={t}
       />
     </div>
   );
@@ -194,10 +200,12 @@ function StripeConfigDrawer({
   open,
   cfg,
   onClose,
+  t,
 }: {
   open: boolean;
   cfg?: StripeConfigStatus;
   onClose: () => void;
+  t: Translator["t"];
 }) {
   const qc = useQueryClient();
   const [formError, setFormError] = useState<string | null>(null);
@@ -210,26 +218,23 @@ function StripeConfigDrawer({
   const fields: QEditableField[] = [
     {
       key: "secret_key",
-      label: "Secret key",
-      helpText:
-        "sk_test_… / sk_live_… — mode is derived from the prefix. Leave empty to keep the stored key.",
+      label: t("stripe.secretKey"),
+      helpText: t("stripe.secretKeyHelp"),
     },
     {
       key: "publishable_key",
-      label: "Publishable key",
-      helpText: "pk_test_… / pk_live_…. Safe to expose to browsers.",
+      label: t("stripe.publishableKey"),
+      helpText: t("stripe.publishableKeyHelp"),
     },
     {
       key: "webhook_secret",
-      label: "Webhook signing secret",
-      helpText:
-        "whsec_… — verifies POST /api/stripe/webhook deliveries. Leave empty to keep the stored secret.",
+      label: t("stripe.webhookSigningSecret"),
+      helpText: t("stripe.webhookSigningSecretHelp"),
     },
     {
       key: "enabled",
-      label: "Enabled",
-      helpText:
-        "Master switch. When off, every Stripe call short-circuits — catalog edits stay local.",
+      label: t("stripe.enabled"),
+      helpText: t("stripe.enabledHelp"),
     },
   ];
 
@@ -276,7 +281,7 @@ function StripeConfigDrawer({
               checked={value === true}
               onCheckedChange={(v) => onChange(v === true)}
             />
-            <span>Stripe integration enabled</span>
+            <span>{t("stripe.integrationEnabled")}</span>
           </label>
         );
       default:
@@ -296,7 +301,7 @@ function StripeConfigDrawer({
       qc.setQueryData(["stripe", "config"], status);
       close();
     } catch (e) {
-      setFormError(errMsg(e));
+      setFormError(errMsg(e, t("stripe.requestFailed")));
     }
   };
 
@@ -310,10 +315,11 @@ function StripeConfigDrawer({
     >
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-lg">
         <DrawerHeader>
-          <DrawerTitle>Stripe credentials</DrawerTitle>
+          <DrawerTitle>{t("stripe.credentialsTitle")}</DrawerTitle>
           <DrawerDescription>
-            Stored in <code className="font-mono">_settings</code>. Secret
-            fields are kept if left empty.
+            {t("stripe.credentialsDescLead")}{" "}
+            <code className="font-mono">_settings</code>.{" "}
+            {t("stripe.credentialsDescTail")}
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
@@ -329,7 +335,7 @@ function StripeConfigDrawer({
               }}
               renderInput={renderInput}
               onCreate={handleSave}
-              submitLabel="Save"
+              submitLabel={t("common.save")}
               onCancel={close}
               formError={formError}
             />
@@ -340,16 +346,16 @@ function StripeConfigDrawer({
   );
 }
 
-function StripeStatusLine({ cfg }: { cfg?: StripeConfigStatus }) {
+function StripeStatusLine({ cfg, t }: { cfg?: StripeConfigStatus; t: Translator["t"] }) {
   if (!cfg) return null;
   const mode = cfg.mode === "live" ? "live" : cfg.mode === "test" ? "test" : "unset";
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
       <Badge variant={cfg.enabled ? "default" : "secondary"}>
-        {cfg.enabled ? "Enabled" : "Disabled"}
+        {cfg.enabled ? t("stripe.enabledBadge") : t("stripe.disabledBadge")}
       </Badge>
       <Badge variant={mode === "live" ? "destructive" : mode === "test" ? "default" : "secondary"}>
-        {mode} mode
+        {t(`stripe.mode.${mode}`)}
       </Badge>
     </div>
   );
@@ -372,7 +378,7 @@ function SummaryRow({
 
 // ── catalog tab (products + prices) ──────────────────────────────
 
-function CatalogTab() {
+function CatalogTab({ t }: { t: Translator["t"] }) {
   const qc = useQueryClient();
   const productsQ = useQuery({ queryKey: ["stripe", "products"], queryFn: stripeAPI.productsList });
   const pricesQ = useQuery({ queryKey: ["stripe", "prices"], queryFn: stripeAPI.pricesList });
@@ -404,7 +410,7 @@ function CatalogTab() {
     return m;
   }, [pricesQ.data]);
 
-  if (productsQ.isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (productsQ.isLoading) return <p className="text-sm text-muted-foreground">{t("common.loading")}</p>;
   if (productsQ.isError) return <AdminPage.Error message={errMsg(productsQ.error)} />;
 
   const products = productsQ.data?.items ?? [];
@@ -413,7 +419,7 @@ function CatalogTab() {
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <Button type="button" size="sm" onClick={() => setProductTarget("new")}>
-          New product
+          {t("stripe.newProduct")}
         </Button>
         <Button
           type="button"
@@ -422,12 +428,14 @@ function CatalogTab() {
           disabled={pushMu.isPending}
           onClick={() => pushMu.mutate()}
         >
-          {pushMu.isPending ? "Pushing…" : "Push catalog to Stripe"}
+          {pushMu.isPending ? t("stripe.pushing") : t("stripe.pushCatalog")}
         </Button>
         {pushMu.data ? (
           <span className="text-xs text-muted-foreground">
-            Pushed {pushMu.data.products_pushed} product(s),{" "}
-            {pushMu.data.prices_pushed} price(s).
+            {t("stripe.pushedSummary", {
+              products: pushMu.data.products_pushed,
+              prices: pushMu.data.prices_pushed,
+            })}
           </span>
         ) : null}
       </div>
@@ -435,8 +443,7 @@ function CatalogTab() {
 
       {products.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No products yet. Create one, then add prices — they’ll be pushed to
-          Stripe automatically when Stripe is enabled.
+          {t("stripe.noProducts")}
         </p>
       ) : (
         <div className="space-y-3">
@@ -447,6 +454,7 @@ function CatalogTab() {
               prices={pricesByProduct.get(p.id) ?? []}
               onEdit={() => setProductTarget(p)}
               onAddPrice={() => setPriceForProduct(p)}
+              t={t}
             />
           ))}
         </div>
@@ -459,6 +467,7 @@ function CatalogTab() {
           setProductTarget(null);
           void qc.invalidateQueries({ queryKey: ["stripe", "products"] });
         }}
+        t={t}
       />
       <PriceDrawer
         product={priceForProduct}
@@ -467,6 +476,7 @@ function CatalogTab() {
           setPriceForProduct(null);
           void qc.invalidateQueries({ queryKey: ["stripe", "prices"] });
         }}
+        t={t}
       />
     </div>
   );
@@ -477,11 +487,13 @@ function ProductRow({
   prices,
   onEdit,
   onAddPrice,
+  t,
 }: {
   product: StripeProduct;
   prices: StripePrice[];
   onEdit: () => void;
   onAddPrice: () => void;
+  t: Translator["t"];
 }) {
   const qc = useQueryClient();
 
@@ -504,13 +516,13 @@ function ProductRow({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-medium">{product.name}</span>
-            {!product.active ? <Badge variant="secondary">archived</Badge> : null}
+            {!product.active ? <Badge variant="secondary">{t("stripe.archived")}</Badge> : null}
             {product.stripe_product_id ? (
               <span className="font-mono text-xs text-muted-foreground">
                 {product.stripe_product_id}
               </span>
             ) : (
-              <Badge variant="secondary">not pushed</Badge>
+              <Badge variant="secondary">{t("stripe.notPushed")}</Badge>
             )}
           </div>
           {product.description ? (
@@ -519,10 +531,10 @@ function ProductRow({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Button type="button" size="sm" variant="outline" onClick={onEdit}>
-            Edit
+            {t("stripe.edit")}
           </Button>
           <Button type="button" size="sm" variant="outline" onClick={onAddPrice}>
-            Add price
+            {t("stripe.addPrice")}
           </Button>
           <Button
             type="button"
@@ -531,11 +543,11 @@ function ProductRow({
             className="text-destructive hover:bg-destructive/10 hover:text-destructive"
             disabled={deleteMu.isPending}
             onClick={() => {
-              if (window.confirm(`Delete "${product.name}" and its prices from Railbase?`))
+              if (window.confirm(t("stripe.deleteProductConfirm", { name: product.name })))
                 deleteMu.mutate();
             }}
           >
-            {deleteMu.isPending ? "Deleting…" : "Delete"}
+            {deleteMu.isPending ? t("stripe.deleting") : t("stripe.delete")}
           </Button>
         </div>
       </div>
@@ -548,16 +560,19 @@ function ProductRow({
                 <span className="font-mono">{money(pr.unit_amount, pr.currency)}</span>
                 <Badge variant="secondary">
                   {pr.kind === "recurring"
-                    ? `every ${pr.recurring_interval_count > 1 ? pr.recurring_interval_count + " " : ""}${pr.recurring_interval}`
-                    : "one-time"}
+                    ? t("stripe.priceEvery", {
+                        count: pr.recurring_interval_count > 1 ? pr.recurring_interval_count + " " : "",
+                        interval: pr.recurring_interval,
+                      })
+                    : t("stripe.oneTime")}
                 </Badge>
-                {!pr.active ? <Badge variant="secondary">archived</Badge> : null}
+                {!pr.active ? <Badge variant="secondary">{t("stripe.archived")}</Badge> : null}
                 {pr.stripe_price_id ? (
                   <span className="font-mono text-xs text-muted-foreground">
                     {pr.stripe_price_id}
                   </span>
                 ) : (
-                  <Badge variant="secondary">not pushed</Badge>
+                  <Badge variant="secondary">{t("stripe.notPushed")}</Badge>
                 )}
               </div>
               <Button
@@ -567,7 +582,7 @@ function ProductRow({
                 disabled={archiveMu.isPending}
                 onClick={() => archiveMu.mutate(pr)}
               >
-                {pr.active ? "Archive" : "Restore"}
+                {pr.active ? t("stripe.archive") : t("stripe.restore")}
               </Button>
             </div>
           ))}
@@ -583,10 +598,12 @@ function ProductDrawer({
   target,
   onClose,
   onSaved,
+  t,
 }: {
   target: "new" | StripeProduct | null;
   onClose: () => void;
   onSaved: () => void;
+  t: Translator["t"];
 }) {
   const isEdit = target !== null && target !== "new";
   const product = isEdit ? target : null;
@@ -598,9 +615,9 @@ function ProductDrawer({
   };
 
   const fields: QEditableField[] = [
-    { key: "name", label: "Name", required: true },
-    { key: "description", label: "Description" },
-    { key: "active", label: "Active" },
+    { key: "name", label: t("stripe.product.name"), required: true },
+    { key: "description", label: t("stripe.product.description") },
+    { key: "active", label: t("stripe.product.active") },
   ];
 
   const renderInput = (
@@ -614,7 +631,7 @@ function ProductDrawer({
           <Input
             value={(value as string) ?? ""}
             onInput={(e) => onChange(e.currentTarget.value)}
-            placeholder="Pro plan"
+            placeholder={t("stripe.product.namePlaceholder")}
           />
         );
       case "description":
@@ -622,7 +639,7 @@ function ProductDrawer({
           <Input
             value={(value as string) ?? ""}
             onInput={(e) => onChange(e.currentTarget.value)}
-            placeholder="Everything in Free, plus…"
+            placeholder={t("stripe.product.descPlaceholder")}
           />
         );
       case "active":
@@ -632,7 +649,7 @@ function ProductDrawer({
               checked={value === true}
               onCheckedChange={(v) => onChange(v === true)}
             />
-            <span>Active</span>
+            <span>{t("stripe.product.active")}</span>
           </label>
         );
       default:
@@ -644,7 +661,7 @@ function ProductDrawer({
     setFormError(null);
     const name = String(d.name ?? "").trim();
     if (!name) {
-      setFormError("Name is required.");
+      setFormError(t("stripe.err.nameRequired"));
       return;
     }
     const body = {
@@ -660,7 +677,7 @@ function ProductDrawer({
       }
       onSaved();
     } catch (e) {
-      setFormError(errMsg(e));
+      setFormError(errMsg(e, t("stripe.requestFailed")));
     }
   };
 
@@ -674,11 +691,11 @@ function ProductDrawer({
     >
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-md">
         <DrawerHeader>
-          <DrawerTitle>{isEdit ? "Edit product" : "New product"}</DrawerTitle>
+          <DrawerTitle>{isEdit ? t("stripe.product.editTitle") : t("stripe.product.newTitle")}</DrawerTitle>
           <DrawerDescription>
             {isEdit
-              ? "Catalog product — changes push to Stripe on the next catalog push."
-              : "A catalog product. Add prices to it once created."}
+              ? t("stripe.product.editDesc")
+              : t("stripe.product.newDesc")}
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
@@ -694,7 +711,7 @@ function ProductDrawer({
               }}
               renderInput={renderInput}
               onCreate={handleSave}
-              submitLabel={isEdit ? "Save changes" : "Create product"}
+              submitLabel={isEdit ? t("stripe.product.saveBtn") : t("stripe.product.createBtn")}
               onCancel={close}
               formError={formError}
             />
@@ -712,10 +729,12 @@ function PriceDrawer({
   product,
   onClose,
   onSaved,
+  t,
 }: {
   product: StripeProduct | null;
   onClose: () => void;
   onSaved: () => void;
+  t: Translator["t"];
 }) {
   const [kind, setKind] = useState<StripePriceKind>("one_time");
   const [formError, setFormError] = useState<string | null>(null);
@@ -729,12 +748,12 @@ function PriceDrawer({
   };
 
   const baseFields: QEditableField[] = [
-    { key: "amount", label: "Amount", required: true, helpText: "Major units, e.g. 19.99." },
-    { key: "currency", label: "Currency" },
+    { key: "amount", label: t("stripe.price.amount"), required: true, helpText: t("stripe.price.amountHelp") },
+    { key: "currency", label: t("stripe.price.currency") },
   ];
   const recurringFields: QEditableField[] = [
-    { key: "recurring_interval", label: "Interval" },
-    { key: "recurring_interval_count", label: "Interval count" },
+    { key: "recurring_interval", label: t("stripe.price.interval") },
+    { key: "recurring_interval_count", label: t("stripe.price.intervalCount") },
   ];
   const fields =
     kind === "recurring" ? [...baseFields, ...recurringFields] : baseFields;
@@ -770,10 +789,10 @@ function PriceDrawer({
             onChange={(e) => onChange(e.currentTarget.value)}
             className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
           >
-            <option value="day">Day</option>
-            <option value="week">Week</option>
-            <option value="month">Month</option>
-            <option value="year">Year</option>
+            <option value="day">{t("stripe.interval.day")}</option>
+            <option value="week">{t("stripe.interval.week")}</option>
+            <option value="month">{t("stripe.interval.month")}</option>
+            <option value="year">{t("stripe.interval.year")}</option>
           </select>
         );
       case "recurring_interval_count":
@@ -799,7 +818,7 @@ function PriceDrawer({
     setFieldErrors({});
     const major = parseFloat(String(d.amount ?? ""));
     if (!Number.isFinite(major) || major <= 0) {
-      setFieldErrors({ amount: "Enter an amount greater than 0." });
+      setFieldErrors({ amount: t("stripe.err.amountInvalid") });
       return;
     }
     try {
@@ -818,7 +837,7 @@ function PriceDrawer({
       });
       onSaved();
     } catch (e) {
-      setFormError(errMsg(e));
+      setFormError(errMsg(e, t("stripe.requestFailed")));
     }
   };
 
@@ -832,14 +851,14 @@ function PriceDrawer({
     >
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-md">
         <DrawerHeader>
-          <DrawerTitle>New price</DrawerTitle>
+          <DrawerTitle>{t("stripe.price.newTitle")}</DrawerTitle>
           <DrawerDescription>
             {product ? (
               <>
-                For <span className="font-mono">{product.name}</span>.
+                {t("stripe.price.forLead")} <span className="font-mono">{product.name}</span>.
               </>
             ) : (
-              "Add a price."
+              t("stripe.price.addPrice")
             )}
           </DrawerDescription>
         </DrawerHeader>
@@ -848,15 +867,15 @@ function PriceDrawer({
             <div className="space-y-4">
               <div className="space-y-1.5">
                 <span className="font-mono text-xs font-medium text-muted-foreground">
-                  Kind
+                  {t("stripe.price.kind")}
                 </span>
                 <select
                   value={kind}
                   onChange={(e) => setKind(e.currentTarget.value as StripePriceKind)}
                   className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
                 >
-                  <option value="one_time">One-time</option>
-                  <option value="recurring">Recurring</option>
+                  <option value="one_time">{t("stripe.price.kind.oneTime")}</option>
+                  <option value="recurring">{t("stripe.price.kind.recurring")}</option>
                 </select>
               </div>
               <QEditableForm
@@ -870,7 +889,7 @@ function PriceDrawer({
                 }}
                 renderInput={renderInput}
                 onCreate={handleSave}
-                submitLabel="Create price"
+                submitLabel={t("stripe.price.createBtn")}
                 onCancel={close}
                 fieldErrors={fieldErrors}
                 formError={formError}
@@ -885,20 +904,20 @@ function PriceDrawer({
 
 // ── read-only mirror tabs (QDatatable) ───────────────────────────
 
-function CustomersTab() {
+function CustomersTab({ t }: { t: Translator["t"] }) {
   const q = useQuery({ queryKey: ["stripe", "customers"], queryFn: stripeAPI.customersList });
   const columns: ColumnDef<StripeCustomer>[] = [
-    { id: "email", header: "email", accessor: (c) => c.email || "—" },
-    { id: "name", header: "name", accessor: (c) => c.name || "—" },
+    { id: "email", header: t("stripe.col.email"), accessor: (c) => c.email || "—" },
+    { id: "name", header: t("stripe.col.name"), accessor: (c) => c.name || "—" },
     {
       id: "stripe_id",
-      header: "stripe id",
+      header: t("stripe.col.stripeId"),
       accessor: "stripe_customer_id",
       cell: (c) => <span class="font-mono text-xs">{c.stripe_customer_id}</span>,
     },
     {
       id: "created",
-      header: "created",
+      header: t("stripe.col.created"),
       accessor: "created_at",
       cell: (c) => <span class="text-muted-foreground">{when(c.created_at)}</span>,
     },
@@ -911,13 +930,13 @@ function CustomersTab() {
       loading={q.isLoading}
       rowKey="id"
       search
-      searchPlaceholder="Search customers…"
-      emptyMessage="No customers yet."
+      searchPlaceholder={t("stripe.search.customers")}
+      emptyMessage={t("stripe.noCustomers")}
     />
   );
 }
 
-function SubscriptionsTab() {
+function SubscriptionsTab({ t }: { t: Translator["t"] }) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["stripe", "subscriptions"],
@@ -932,29 +951,29 @@ function SubscriptionsTab() {
   const columns: ColumnDef<StripeSubscription>[] = [
     {
       id: "status",
-      header: "status",
+      header: t("stripe.col.status"),
       accessor: "status",
       cell: (s) => (
         <span class="flex items-center gap-1">
           <StatusBadge status={s.status} />
           {s.cancel_at_period_end ? (
-            <span class="text-xs text-muted-foreground">(ends at period)</span>
+            <span class="text-xs text-muted-foreground">{t("stripe.endsAtPeriod")}</span>
           ) : null}
         </span>
       ),
     },
     {
       id: "stripe_id",
-      header: "stripe id",
+      header: t("stripe.col.stripeId"),
       accessor: "stripe_subscription_id",
       cell: (s) => (
         <span class="font-mono text-xs">{s.stripe_subscription_id}</span>
       ),
     },
-    { id: "qty", header: "qty", accessor: (s) => s.quantity },
+    { id: "qty", header: t("stripe.col.qty"), accessor: (s) => s.quantity },
     {
       id: "period_end",
-      header: "period end",
+      header: t("stripe.col.periodEnd"),
       accessor: (s) => s.current_period_end ?? "",
       cell: (s) => (
         <span class="text-muted-foreground">{when(s.current_period_end)}</span>
@@ -971,14 +990,14 @@ function SubscriptionsTab() {
         data={q.data?.items ?? []}
         loading={q.isLoading}
         rowKey="id"
-        emptyMessage="No subscriptions yet."
+        emptyMessage={t("stripe.noSubscriptions")}
         rowActions={(s) => [
           {
-            label: "Cancel subscription",
+            label: t("stripe.cancelSubscription"),
             destructive: true,
             hidden: () => !live(s.status),
             onSelect: () => {
-              if (window.confirm("Cancel this subscription immediately?"))
+              if (window.confirm(t("stripe.cancelSubscriptionConfirm")))
                 cancelMu.mutate(s.id);
             },
           },
@@ -988,30 +1007,30 @@ function SubscriptionsTab() {
   );
 }
 
-function PaymentsTab() {
+function PaymentsTab({ t }: { t: Translator["t"] }) {
   const q = useQuery({ queryKey: ["stripe", "payments"], queryFn: stripeAPI.paymentsList });
   const columns: ColumnDef<StripePayment>[] = [
     {
       id: "amount",
-      header: "amount",
+      header: t("stripe.col.amount"),
       accessor: (p) => p.amount,
       cell: (p) => <span class="font-mono">{money(p.amount, p.currency)}</span>,
     },
     {
       id: "kind",
-      header: "kind",
+      header: t("stripe.col.kind"),
       accessor: "kind",
       cell: (p) => <Badge variant="secondary">{p.kind}</Badge>,
     },
     {
       id: "status",
-      header: "status",
+      header: t("stripe.col.status"),
       accessor: "status",
       cell: (p) => <StatusBadge status={p.status} />,
     },
     {
       id: "description",
-      header: "description",
+      header: t("stripe.col.description"),
       accessor: (p) => p.description || "—",
       cell: (p) => (
         <span class="block max-w-[16rem] truncate">{p.description || "—"}</span>
@@ -1019,7 +1038,7 @@ function PaymentsTab() {
     },
     {
       id: "created",
-      header: "created",
+      header: t("stripe.col.created"),
       accessor: "created_at",
       cell: (p) => <span class="text-muted-foreground">{when(p.created_at)}</span>,
     },
@@ -1031,38 +1050,38 @@ function PaymentsTab() {
       data={q.data?.items ?? []}
       loading={q.isLoading}
       rowKey="id"
-      emptyMessage="No one-time payments yet."
+      emptyMessage={t("stripe.noPayments")}
     />
   );
 }
 
-function EventsTab() {
+function EventsTab({ t }: { t: Translator["t"] }) {
   const q = useQuery({ queryKey: ["stripe", "events"], queryFn: stripeAPI.eventsList });
   const columns: ColumnDef<StripeEvent>[] = [
     {
       id: "type",
-      header: "type",
+      header: t("stripe.col.type"),
       accessor: "type",
       cell: (e) => <span class="font-mono text-xs">{e.type}</span>,
     },
     {
       id: "state",
-      header: "state",
+      header: t("stripe.col.state"),
       accessor: (e) => (e.error ? "failed" : e.processed ? "processed" : "pending"),
       cell: (e) =>
         e.error ? (
           <Badge variant="destructive" title={e.error}>
-            failed
+            {t("stripe.eventState.failed")}
           </Badge>
         ) : e.processed ? (
-          <Badge variant="default">processed</Badge>
+          <Badge variant="default">{t("stripe.eventState.processed")}</Badge>
         ) : (
-          <Badge variant="secondary">pending</Badge>
+          <Badge variant="secondary">{t("stripe.eventState.pending")}</Badge>
         ),
     },
     {
       id: "event_id",
-      header: "event id",
+      header: t("stripe.col.eventId"),
       accessor: "stripe_event_id",
       cell: (e) => (
         <span class="font-mono text-xs text-muted-foreground">
@@ -1072,7 +1091,7 @@ function EventsTab() {
     },
     {
       id: "received",
-      header: "received",
+      header: t("stripe.col.received"),
       accessor: "created_at",
       cell: (e) => <span class="text-muted-foreground">{when(e.created_at)}</span>,
     },
@@ -1084,7 +1103,7 @@ function EventsTab() {
       data={q.data?.items ?? []}
       loading={q.isLoading}
       rowKey="stripe_event_id"
-      emptyMessage="No webhook events received yet."
+      emptyMessage={t("stripe.noEvents")}
     />
   );
 }

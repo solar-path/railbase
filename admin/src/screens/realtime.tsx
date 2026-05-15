@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { adminAPI } from "../api/admin";
 import type { RealtimeSubscription } from "../api/types";
 import { AdminPage } from "../layout/admin_page";
+import { useT, type Translator } from "../i18n";
 import {
   Card,
   CardContent,
@@ -22,75 +23,78 @@ import { QDatatable, type ColumnDef } from "@/lib/ui/QDatatable.ui";
 // client, not the symptom). Per-row drop count surfaces in red when
 // non-zero so operators notice backpressure events.
 
-// Read-only column set for the active-subscription table.
-const columns: ColumnDef<RealtimeSubscription>[] = [
-  {
-    id: "user",
-    header: "User",
-    accessor: "user_id",
-    headClass: "uppercase tracking-wide text-xs",
-    cell: (s) => <span class="font-mono text-xs">{shortenID(s.user_id)}</span>,
-  },
-  {
-    id: "tenant",
-    header: "Tenant",
-    accessor: "tenant_id",
-    headClass: "uppercase tracking-wide text-xs",
-    cell: (s) =>
-      s.tenant_id ? (
-        <span class="font-mono text-xs">{shortenID(s.tenant_id)}</span>
-      ) : (
-        <span class="text-xs text-muted-foreground">site</span>
+// Read-only column factory for the active-subscription table.
+function buildRealtimeColumns(t: Translator["t"]): ColumnDef<RealtimeSubscription>[] {
+  return [
+    {
+      id: "user",
+      header: t("realtime.col.user"),
+      accessor: "user_id",
+      headClass: "uppercase tracking-wide text-xs",
+      cell: (s) => <span class="font-mono text-xs">{shortenID(s.user_id)}</span>,
+    },
+    {
+      id: "tenant",
+      header: t("realtime.col.tenant"),
+      accessor: "tenant_id",
+      headClass: "uppercase tracking-wide text-xs",
+      cell: (s) =>
+        s.tenant_id ? (
+          <span class="font-mono text-xs">{shortenID(s.tenant_id)}</span>
+        ) : (
+          <span class="text-xs text-muted-foreground">{t("realtime.tenant.site")}</span>
+        ),
+    },
+    {
+      id: "topics",
+      header: t("realtime.col.topics"),
+      accessor: (s) => s.topics.join(","),
+      headClass: "uppercase tracking-wide text-xs",
+      cell: (s) => (
+        <>
+          {s.topics.map((t, i) => (
+            <code
+              key={`${s.id}-t-${i}`}
+              class="font-mono mr-1 inline-block rounded bg-muted px-1.5 py-0.5 text-xs"
+            >
+              {t}
+            </code>
+          ))}
+        </>
       ),
-  },
-  {
-    id: "topics",
-    header: "Topics",
-    accessor: (s) => s.topics.join(","),
-    headClass: "uppercase tracking-wide text-xs",
-    cell: (s) => (
-      <>
-        {s.topics.map((t, i) => (
-          <code
-            key={`${s.id}-t-${i}`}
-            class="font-mono mr-1 inline-block rounded bg-muted px-1.5 py-0.5 text-xs"
-          >
-            {t}
-          </code>
-        ))}
-      </>
-    ),
-  },
-  {
-    id: "created",
-    header: "Created",
-    accessor: "created_at",
-    headClass: "uppercase tracking-wide text-xs",
-    class: "text-xs text-muted-foreground",
-    cell: (s) => relativeTime(s.created_at),
-  },
-  {
-    id: "dropped",
-    header: "Dropped",
-    accessor: "dropped",
-    align: "right",
-    headClass: "uppercase tracking-wide text-xs",
-    cell: (s) => (
-      <span
-        class={
-          "tabular-nums " +
-          (s.dropped > 0
-            ? "font-semibold text-destructive"
-            : "text-muted-foreground")
-        }
-      >
-        {s.dropped}
-      </span>
-    ),
-  },
-];
+    },
+    {
+      id: "created",
+      header: t("realtime.col.created"),
+      accessor: "created_at",
+      headClass: "uppercase tracking-wide text-xs",
+      class: "text-xs text-muted-foreground",
+      cell: (s) => relativeTime(t, s.created_at),
+    },
+    {
+      id: "dropped",
+      header: t("realtime.col.dropped"),
+      accessor: "dropped",
+      align: "right",
+      headClass: "uppercase tracking-wide text-xs",
+      cell: (s) => (
+        <span
+          class={
+            "tabular-nums " +
+            (s.dropped > 0
+              ? "font-semibold text-destructive"
+              : "text-muted-foreground")
+          }
+        >
+          {s.dropped}
+        </span>
+      ),
+    },
+  ];
+}
 
 export function RealtimeScreen() {
+  const { t } = useT();
   const q = useQuery({
     queryKey: ["realtime-stats"],
     queryFn: () => adminAPI.realtimeStats(),
@@ -104,23 +108,23 @@ export function RealtimeScreen() {
   return (
     <AdminPage>
       <AdminPage.Header
-        title="Realtime monitor"
-        description="Live snapshot of SSE subscriptions on this replica. Polls every 5 s."
+        title={t("realtime.title")}
+        description={t("realtime.description")}
       />
 
       <AdminPage.Body className="space-y-4">
       {/* Stats banner */}
       <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <StatCard label="Active subscriptions" value={stats?.subscription_count ?? 0} />
+        <StatCard label={t("realtime.stat.active")} value={stats?.subscription_count ?? 0} />
         <StatCard
-          label="Total events dropped"
+          label={t("realtime.stat.dropped")}
           value={totalDropped}
           warn={totalDropped > 0}
         />
         <StatCard
-          label="Auto-refresh"
-          value="5 s"
-          hint="Polling cadence; subscription state updates without reload."
+          label={t("realtime.stat.autoRefresh")}
+          value={t("realtime.stat.autoRefreshValue")}
+          hint={t("realtime.stat.autoRefreshHint")}
         />
       </div>
 
@@ -128,26 +132,24 @@ export function RealtimeScreen() {
       {q.isError ? (
         <Alert variant="destructive">
           <AlertDescription>
-            Failed to load realtime stats. Is the realtime broker wired? ({String(q.error)})
+            {t("realtime.error.load", { error: String(q.error) })}
           </AlertDescription>
         </Alert>
       ) : (
         <Card>
           <CardContent class="p-3">
             <QDatatable
-              columns={columns}
+              columns={buildRealtimeColumns(t)}
               data={subs}
               loading={q.isLoading}
               rowKey="id"
               emptyMessage={
                 <span>
-                  No active subscriptions.
+                  {t("realtime.empty.title")}
                   <span class="mt-1 block text-xs">
-                    Connect with{" "}
-                    <code class="font-mono rounded bg-card px-1">
-                      curl -N {`<host>`}/api/realtime?topics=posts/*
-                    </code>{" "}
-                    to see one appear here.
+                    {t("realtime.empty.body", {
+                      cmd: `curl -N <host>/api/realtime?topics=posts/*`,
+                    })}
                   </span>
                 </span>
               }
@@ -211,15 +213,15 @@ function shortenID(id: string): string {
 // relativeTime renders an ISO-8601 instant as "5s ago" / "2m ago".
 // Matches the cadence-feel of the rest of the admin UI. Falls back to
 // the raw string if parsing fails.
-function relativeTime(iso: string): string {
+function relativeTime(t: Translator["t"], iso: string): string {
   const d = Date.parse(iso);
   if (Number.isNaN(d)) return iso;
   const secs = Math.max(0, Math.floor((Date.now() - d) / 1000));
-  if (secs < 60) return `${secs}s ago`;
+  if (secs < 60) return t("realtime.time.secAgo", { n: secs });
   const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60) return t("realtime.time.minAgo", { n: mins });
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return t("realtime.time.hourAgo", { n: hours });
   const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return t("realtime.time.dayAgo", { n: days });
 }

@@ -48,6 +48,7 @@ import {
   type FilterFields,
 } from './chart.ui'
 import { toast } from './sonner.ui'
+import { useT } from '../../i18n'
 
 // QDatatable — the kit's batteries-included data table. One component
 // for every tabular screen: client- or server-driven, with search,
@@ -225,11 +226,11 @@ export function QDatatable<T>({
   pageSize: initialPageSize = 20,
   pageSizes = [10, 20, 50, 100],
   search: searchEnabled = false,
-  searchPlaceholder = 'Search…',
+  searchPlaceholder,
   rowActions,
   onRowClick,
   initialSort,
-  emptyMessage = 'No results.',
+  emptyMessage,
   loading: externalLoading,
   exportable = false,
   exportFilename = 'export',
@@ -246,6 +247,12 @@ export function QDatatable<T>({
   class: klass,
   className,
 }: QDatatableProps<T>) {
+  const { t } = useT()
+  // Defaults resolved AFTER the t() lookup so language switches re-render
+  // the table with localised "Search…" / "No results." placeholders.
+  // Callers can still pass explicit strings to override the i18n default.
+  const resolvedSearchPlaceholder = searchPlaceholder ?? t('datatable.searchPlaceholder')
+  const resolvedEmptyMessage = emptyMessage ?? t('datatable.empty')
   const serverMode = typeof fetch === 'function'
   const activeFilters = filterable ? chartFiltersSignal.value : []
 
@@ -501,7 +508,7 @@ export function QDatatable<T>({
               <Search class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 class="h-9 w-64 pl-8"
-                placeholder={searchPlaceholder}
+                placeholder={resolvedSearchPlaceholder}
                 value={searchInput}
                 onInput={(e: Event) => setSearchInput((e.target as HTMLInputElement).value)}
               />
@@ -579,7 +586,7 @@ export function QDatatable<T>({
                           : false
                     }
                     onCheckedChange={togglePage}
-                    aria-label="Select all on page"
+                    aria-label={t('datatable.selectAll')}
                   />
                 </TableHead>
               )}
@@ -636,7 +643,7 @@ export function QDatatable<T>({
                   class="h-24 text-center text-muted-foreground"
                   colSpan={columns.length + extraCols}
                 >
-                  {serverState.error ?? emptyMessage}
+                  {serverState.error ?? resolvedEmptyMessage}
                 </TableCell>
               </TableRow>
             ) : (
@@ -662,7 +669,7 @@ export function QDatatable<T>({
                         <Checkbox
                           checked={selectedKeys.has(key)}
                           onCheckedChange={() => toggleRow(key)}
-                          aria-label="Select row"
+                          aria-label={t('datatable.selectRow')}
                         />
                       </TableCell>
                     )}
@@ -694,7 +701,7 @@ export function QDatatable<T>({
                                   size="icon"
                                   variant="ghost"
                                   class="size-7"
-                                  aria-label="Row actions"
+                                  aria-label={t('datatable.rowActions')}
                                 >
                                   <MoreHorizontal class="size-4" />
                                 </Button>
@@ -733,7 +740,7 @@ export function QDatatable<T>({
         </div>
         <div class="flex items-center gap-4">
           <div class="flex items-center gap-2 text-xs text-muted-foreground">
-            <span>Rows per page</span>
+            <span>{t('datatable.rowsPerPage')}</span>
             <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
               <SelectTrigger class="h-8 w-[80px]">
                 <SelectValue />
@@ -749,7 +756,7 @@ export function QDatatable<T>({
           </div>
           <div class="flex items-center gap-2">
             <span class="text-xs text-muted-foreground">
-              Page {Math.min(page, totalPages)} / {totalPages}
+              {t('datatable.pageOf', { page: Math.min(page, totalPages), total: totalPages })}
             </span>
             <Button
               variant="outline"
@@ -757,7 +764,7 @@ export function QDatatable<T>({
               class="size-8"
               disabled={page <= 1 || loading}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
-              aria-label="Previous page"
+              aria-label={t('datatable.prevPage')}
             >
               <ChevronLeft class="size-4" />
             </Button>
@@ -767,7 +774,7 @@ export function QDatatable<T>({
               class="size-8"
               disabled={page >= totalPages || loading}
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              aria-label="Next page"
+              aria-label={t('datatable.nextPage')}
             >
               <ChevronRight class="size-4" />
             </Button>

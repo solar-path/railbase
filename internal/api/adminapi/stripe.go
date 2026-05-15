@@ -78,6 +78,42 @@ type stripeConfigStatus struct {
 	SecretKeySet     bool   `json:"secret_key_set"`
 	SecretKeyHint    string `json:"secret_key_hint"`
 	WebhookSecretSet bool   `json:"webhook_secret_set"`
+	// Warnings is a list of structured "fix me" messages the admin
+	// UI renders as a banner above the Stripe settings page.
+	// FEEDBACK #15 — without this, an operator with `stripe.enabled=true`
+	// and an empty `stripe.webhook_secret` had no visible cue that
+	// webhook delivery was rejecting events with 503.
+	Warnings []stripeWarning `json:"warnings,omitempty"`
+}
+
+// stripeWarning is a single actionable issue with the Stripe config.
+// Stable code so the SPA can map it to a localised string.
+type stripeWarning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// computeStripeWarnings derives the warning list from the current
+// config. Pure function so a test can hit every branch without
+// touching the database.
+func computeStripeWarnings(cfg stripeConfigStatus) []stripeWarning {
+	var out []stripeWarning
+	if cfg.Enabled && !cfg.WebhookSecretSet {
+		out = append(out, stripeWarning{
+			Code: "webhook_secret_missing",
+			Message: "Stripe is enabled but no webhook signing secret is configured — " +
+				"incoming /api/stripe/webhook calls are rejected with 503. " +
+				"Run `stripe listen --forward-to localhost:8095/api/stripe/webhook` " +
+				"and paste the printed `whsec_…` value into the field below.",
+		})
+	}
+	if cfg.Enabled && !cfg.SecretKeySet {
+		out = append(out, stripeWarning{
+			Code:    "secret_key_missing",
+			Message: "Stripe is enabled but no API secret key is configured — outbound calls will fail.",
+		})
+	}
+	return out
 }
 
 // keyHint redacts a secret to "<first 11>…<last 4>" — enough for an
@@ -102,14 +138,16 @@ func (d *Deps) stripeConfigGetHandler(w http.ResponseWriter, r *http.Request) {
 		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "load stripe config"))
 		return
 	}
-	writeJSON(w, http.StatusOK, stripeConfigStatus{
+	status := stripeConfigStatus{
 		Enabled:          cfg.Enabled,
 		Mode:             string(cfg.Mode()),
 		PublishableKey:   cfg.PublishableKey,
 		SecretKeySet:     cfg.SecretKey != "",
 		SecretKeyHint:    keyHint(cfg.SecretKey),
 		WebhookSecretSet: cfg.WebhookSecret != "",
-	})
+	}
+	status.Warnings = computeStripeWarnings(status)
+	writeJSON(w, http.StatusOK, status)
 }
 
 type stripeConfigRequest struct {
@@ -153,14 +191,16 @@ func (d *Deps) stripeConfigPutHandler(w http.ResponseWriter, r *http.Request) {
 		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "save stripe config"))
 		return
 	}
-	writeJSON(w, http.StatusOK, stripeConfigStatus{
+	status := stripeConfigStatus{
 		Enabled:          cur.Enabled,
 		Mode:             string(cur.Mode()),
 		PublishableKey:   cur.PublishableKey,
 		SecretKeySet:     cur.SecretKey != "",
 		SecretKeyHint:    keyHint(cur.SecretKey),
 		WebhookSecretSet: cur.WebhookSecret != "",
-	})
+	}
+	status.Warnings = computeStripeWarnings(status)
+	writeJSON(w, http.StatusOK, status)
 }
 
 // ── products ─────────────────────────────────────────────────────
