@@ -56,6 +56,7 @@ import (
 	"github.com/railbase/railbase/internal/jobs"
 	"github.com/railbase/railbase/internal/mailer"
 	"github.com/railbase/railbase/internal/rbac"
+	"github.com/railbase/railbase/internal/schema/builder"
 	"github.com/railbase/railbase/internal/schema/registry"
 	"github.com/railbase/railbase/internal/settings"
 )
@@ -662,6 +663,24 @@ func authRecordJSON(r *authRow, collectionName string) map[string]any {
 
 func (d *Deps) writeAuthResponse(w http.ResponseWriter, collName string, tok authtoken.Token, row *authRow) {
 	rec := authRecordJSON(row, collName)
+	// FEEDBACK #B8 — the auth response used to return ONLY the
+	// system fields (id/email/verified/last_login_at/collectionName).
+	// Custom profile fields (display_name, avatar_url, bio, ...) were
+	// missing, forcing the SPA to do a second /records GET for the
+	// same record. We now merge in non-secret user-defined fields
+	// from the same row.
+	if extras := fetchAuthCustomFields(context.Background(), d.Pool, collName, row.ID); len(extras) > 0 {
+		for k, v := range extras {
+			// Don't let custom fields overwrite the system fields we
+			// just set — system fields have stable formats (RFC3339-ish
+			// timestamps, etc.) and a custom column named "verified"
+			// shouldn't clobber the bool.
+			if _, taken := rec[k]; taken {
+				continue
+			}
+			rec[k] = v
+		}
+	}
 	setCookie(w, string(tok), d.Production)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -669,6 +688,71 @@ func (d *Deps) writeAuthResponse(w http.ResponseWriter, collName string, tok aut
 		Token:  string(tok),
 		Record: rec,
 	})
+}
+
+// authCustomFieldNames returns the column names safe to include in
+// the auth response: every user-declared field on the auth
+// collection that isn't a system / secret column. The system
+// columns (id, email, verified, password_hash, token_key, ...) live
+// outside spec.Fields, so spec.Fields IS the candidate set.
+// Relations[] columns are skipped because they live in junction
+// tables, not on the main row.
+//
+// FEEDBACK #B8 helper.
+func authCustomFieldNames(collName string) []string {
+	c := registry.Get(collName)
+	if c == nil {
+		return nil
+	}
+	spec := c.Spec()
+	if !spec.Auth {
+		return nil
+	}
+	var out []string
+	for _, f := range spec.Fields {
+		if f.Type == builder.TypeRelations {
+			continue // M2M lives in junction tables
+		}
+		out = append(out, f.Name)
+	}
+	return out
+}
+
+// fetchAuthCustomFields runs one extra SELECT to pull the non-system
+// columns of the auth row and returns them as a map[colname]value.
+// On any error (collection vanished, row missing, type mismatch) we
+// return nil — the auth response degrades gracefully to "system fields
+// only" rather than failing sign-in.
+func fetchAuthCustomFields(ctx context.Context, pool *pgxpool.Pool, collName string, id uuid.UUID) map[string]any {
+	cols := authCustomFieldNames(collName)
+	if len(cols) == 0 {
+		return nil
+	}
+	quoted := make([]string, len(cols))
+	for i, c := range cols {
+		quoted[i] = `"` + strings.ReplaceAll(c, `"`, `""`) + `"`
+	}
+	// collName comes from chi.URLParam after isAuthCollection has
+	// verified it lives in the registry — safe to interpolate.
+	q := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1",
+		strings.Join(quoted, ", "), collName)
+	rows, err := pool.Query(ctx, q, id)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil
+	}
+	values, err := rows.Values()
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]any, len(cols))
+	for i, name := range cols {
+		out[name] = values[i]
+	}
+	return out
 }
 
 func setCookie(w http.ResponseWriter, value string, production bool) {

@@ -46,7 +46,28 @@ func newAdminCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create <email>",
 		Short: "Create a system administrator",
-		Args:  cobra.ExactArgs(1),
+		Long: `Create a new system administrator account.
+
+The email address is a POSITIONAL argument, not a flag. The password is
+read interactively (twice, for confirmation) unless --password is set,
+which is insecure on shared shells (visible in history / ps).
+
+Examples:
+
+  # Interactive password prompt — the recommended path.
+  railbase admin create ops@example.com
+
+  # Non-interactive (CI / scripted bootstrap). Password ends up in
+  # shell history and process list; rotate after first sign-in.
+  railbase admin create ops@example.com --password 's3cret-pass'
+
+  # First-run on a fresh box with no mailer configured — skip the
+  # welcome + broadcast emails entirely.
+  railbase admin create ops@example.com --no-email
+
+FEEDBACK #B9 — earlier drafts of this help made it look like email was
+a --email flag. The shape above is what the binary actually accepts.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rt, err := openRuntime(cmd.Context())
 			if err != nil {

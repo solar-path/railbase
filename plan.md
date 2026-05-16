@@ -775,7 +775,130 @@ After zero 📋 items remain in the audit, v1 SHIP unblocks.
 
 ---
 
-## 6. v2 — расширения (после стабилизации экосистемы)
+## 6. v2.0 — Delegation of Authority + Tasks (новые core primitive'ы)
+
+Major version bump — два первоклассных subsystem'а в core со
+своим API, schema DSL, admin UI, SDK namespace'ом. API-additive
+к v1.x (старые контракты не меняются); честный breakpoint вместо
+размывания v1.x scope. Design proposal зафиксирован
+2026-05-16 в [docs/26-authority.md](docs/26-authority.md) +
+[docs/27-tasks.md](docs/27-tasks.md).
+
+### 6.1 Authority (DoA) — был plugin, стал core (rev2 после ysollo analysis)
+
+**Major architecture shift в rev2** — hybrid schema-as-code + matrix-as-data.
+Schema объявляет gate points (compile-time), matrix data объявляет
+actual rules (runtime, edit-time через admin UI). Effort вырос с 16
+до 25 task-ID после декомпозиции matrix subsystem. См.
+[docs/26-authority.md](docs/26-authority.md) для полного спека.
+
+**Schema-side (минимальная поверхность):**
+
+| ID | Задача | Статус | Эффорт |
+|---|---|---|---|
+| 6.1.1 | Schema DSL `.Authority({Matrix, On, AmountField?, Currency?, ProtectedFields, Required})` + spec validation (multi-Authority overlap checker) | 📋 v2.0 | M |
+| 6.1.2 | Startup-time gate: ensure applicable matrix exists для каждого `.Authority({Required: true})` action_key | 📋 v2.0 | S |
+
+**Matrix subsystem (core новый):**
+
+| ID | Задача | Статус | Эффорт |
+|---|---|---|---|
+| 6.1.3 | Sys-migration 0034 (`_doa_matrices` + `_doa_matrix_levels` + `_doa_matrix_approvers` + `_doa_workflows` + `_doa_workflow_decisions` + `_doa_delegations` + `_authority_audit`) — 7 sys-tables | 📋 v2.0 | M |
+| 6.1.4 | Matrix admin REST: CRUD + `approve` + `revoke` + `version` + version history | 📋 v2.0 | M |
+| 6.1.5 | Matrix selection engine: `(key, status, effective_window, tenant, amount, currency, optional condition)` SELECT с tenant-prefer + amount-specificity ordering | 📋 v2.0 | M |
+| 6.1.6 | Approver type resolution engine: `role` + `user` (v2.0 minimum); `position` + `department_head` (v2.0 stretch если org-structure готов, иначе v2.1) | 📋 v2.0 | M |
+| 6.1.7 | Matrix `condition_expr` evaluator (re-use filter compiler из RBAC) | 📋 v2.0 | S |
+| 6.1.8 | Admin UI: Matrix editor (multi-level, multi-approver, materiality range, escalation per level) | 📋 v2.0 | XL |
+| 6.1.9 | Admin UI: Matrix list + version history + draft-vs-approved diff view | 📋 v2.0 | L |
+
+**Workflow runtime:**
+
+| ID | Задача | Статус | Эффорт |
+|---|---|---|---|
+| 6.1.10 | DoA gate в request pipeline (после RBAC, до handler) + matrix lookup + 409 envelope с suggested workflow create body | 📋 v2.0 | M |
+| 6.1.11 | Workflow create endpoint + level traversal engine (any/all/threshold per-level mode evaluation) | 📋 v2.0 | L |
+| 6.1.12 | Workflow operations REST: `approve` / `reject` / `cancel` / `reassign` / `comment` | 📋 v2.0 | M |
+| 6.1.13 | Consume validation: handler write field-by-field match against `requested_diff` для `ProtectedFields` (см. design-review §P1.4 — anti-bait-and-switch) | 📋 v2.0 | M |
+| 6.1.14 | Builtin `authority_escalation_reaper` job (per-level escalation_hours timeout → auto-promote / final-handler) | 📋 v2.0 | M |
+| 6.1.15 | Builtin `authority_expiry_reaper` job (workflow expires_at handling) | 📋 v2.0 | S |
+| 6.1.16 | Admin UI: Workflow detail (timeline + SLA countdown + level-by-level decisions + transaction details) | 📋 v2.0 | L |
+| 6.1.17 | Admin UI: My inbox + workflow queue (per-role filtering, batch-approve/reject actions из ysollo task.batch.*) | 📋 v2.0 | L |
+
+**Delegation subsystem (первоклассный в v2.0):**
+
+| ID | Задача | Статус | Эффорт |
+|---|---|---|---|
+| 6.1.18 | Delegation REST: CRUD + scope/limit/sub-delegation + time bounds | 📋 v2.0 | M |
+| 6.1.19 | Delegation resolution engine: при resolve approvers — apply active delegations + amount-cap check + scope-match | 📋 v2.0 | M |
+| 6.1.20 | Builtin `authority_delegation_expirer` job (effective_to handling) | 📋 v2.0 | S |
+| 6.1.21 | Admin UI: Delegations CRUD (list + create + revoke) | 📋 v2.0 | M |
+
+**Cross-cutting:**
+
+| ID | Задача | Статус | Эффорт |
+|---|---|---|---|
+| 6.1.22 | Audit chain extension через `target='authority'` в `_audit_seals` (events: workflow.* + matrix.* + delegation.*) | 📋 v2.0 | S |
+| 6.1.23 | Generated TS SDK: `rb.authority.matrix.*` + `rb.authority.workflow.*` + `rb.authority.delegation.*` namespaces | 📋 v2.0 | M |
+| 6.1.24 | JS bindings + Go API: `$app.authority.workflow().create(...)` / `$app.authority.matrix().get(...)` / `app.Authority().{Workflow,Matrix,Delegation}()` | 📋 v2.0 | M |
+| 6.1.25 | Notifications integration (per-level routing: created → level 1 approvers; level_advanced → level N+1; decided → initiator; escalated → next + supervisor) | 📋 v2.0 | M |
+| 6.1.26 | Realtime channels: `authority:workflow:{id}` + `authority:queue:role:{role}` + `authority:queue:user:{user_id}` | 📋 v2.0 | S |
+| 6.1.27 | Emergency bypass: `POST /_admin/.../bypass` + `RAILBASE_ALLOW_AUTHORITY_BYPASS` env + `railbase authority bypass` CLI с required reason | 📋 v2.0 | S |
+| 6.1.28 | Bulk-import bypass через `railbase import data --bypass-authority --reason "..."` + per-row audit events | 📋 v2.0 | S |
+| 6.1.29 | Single-admin install gate (matrix не usable если qualified approver pool пустой) | 📋 v2.0 | S |
+| 6.1.30 | `MockAuthority` testing harness: `AddMatrix(...)`, `AutoApprove(key)`, `RequireNoBypass(t)`, mocking delegation resolution | 📋 v2.0 | M |
+| 6.1.31 | Migration story: schema migration emits informational header + matrix-create checklist; startup-time `Required: true` gate | 📋 v2.0 | S |
+| 6.1.32 | Matrix key namespace enforcement: schema-register validation against `system.*` / plugin namespaces (см. [docs/26 §Matrix key namespacing](docs/26-authority.md)); plugin install conflict detection с bare embedder keys; plugin uninstall refuse-if-active default + `--force --archive-workflows` opt-in | 📋 v2.0 | M |
+
+### 6.2 Tasks — durable human work queue
+
+| ID | Задача | Статус | Эффорт |
+|---|---|---|---|
+| 6.2.1 | Sys-migration 0035 (`_tasks` + indexes) + lifecycle state machine | 📋 v2.0 | M |
+| 6.2.2 | REST `/api/tasks/{mine,claim,unclaim,complete}` + admin oversight + force-complete | 📋 v2.0 | M |
+| 6.2.3 | Go `app.Tasks().Create(...)` + JS `$app.tasks().create(...)` | 📋 v2.0 | S |
+| 6.2.4 | Generated TS SDK `rb.tasks.*` namespace | 📋 v2.0 | S |
+| 6.2.5 | DoA → tasks spawning (one task per qualified signer-role per request); sign → auto-complete | 📋 v2.0 | M |
+| 6.2.6 | Realtime channels `tasks:mine:{user_id}` + `tasks:role:{tenant}:{role}` | 📋 v2.0 | S |
+| 6.2.7 | Builtin `tasks_reaper` (unclaim TTL + expire + orphan cleanup) | 📋 v2.0 | S |
+| 6.2.8 | Admin UI: my-inbox + all-tasks + task detail (kind-specific renderer) | 📋 v2.0 | L |
+| 6.2.9 | Notifications integration (push на created / claimed-by-other / expires-soon / cancelled) | 📋 v2.0 | M |
+| 6.2.10 | `MockTasks` testing harness | 📋 v2.0 | S |
+
+### 6.3 v2.0 verification gate
+
+| ID | Задача | Статус | Эффорт |
+|---|---|---|---|
+| 6.3.1 | 5-min smoke: register DoA-gated collection → request → spawn tasks → 2-role sign → approved → write → audit verify | 📋 v2.0 | M |
+| 6.3.2 | No-bypass coverage tests: hook bypass attempt, job bypass, import bulk attempt — каждый — 409 path с тестом | 📋 v2.0 | M |
+| 6.3.3 | Single-admin install startup-panic test | 📋 v2.0 | S |
+| 6.3.4 | Audit chain integrity test: tamper `_authority_signatures` → verify fails → CLI exit ≠ 0 | 📋 v2.0 | S |
+
+### 6.4 Открытые вопросы перед началом v2.0 (rev2 после ysollo analysis)
+
+Закрытые rev2-shift'ом (через matrix-as-data):
+- ~~Multi-signature ordering~~ → решено через per-level `any/all/threshold` mode + level ordering
+- ~~Delegation v2.0 vs v2.1~~ → first-class в v2.0 (6.1.18-21)
+- ~~Approval-on-behalf~~ → через `_doa_delegations` (легитимный flow)
+- ~~Materiality threshold через filter-expression~~ → first-class amount range на matrix
+- ~~Sequential chain workaround~~ → multi-level workflow natively
+- ~~`requested_changes` recycle complexity~~ → removed, reject is terminal + fresh workflow
+- ~~Bulk preflight endpoint~~ → removed, queue filter покрывает use case
+
+**Все 4 open questions закрыты 2026-05-16** (после ysollo analysis + org-structure audit):
+
+1. **`condition_expr` на matrix** → **opt-in, nullable, feature-flagged, не в initial fast-path**. 80% case'ов покрываются amount-range; expression engine добавляется когда concrete embedder pressure появится. Reuse existing RBAC filter compiler (no новой sandboxing работы). Decision impact: 6.1.7 теперь optional/conditional task — реализуется только если embedder requests до code-freeze v2.0.
+2. **`department_head` resolution timing** → **snapshot only**. Workflow хранит resolved approver IDs + org path + position titles в `_doa_workflow_decisions` на момент creation. Dynamic resolution отверг — ломает audit honesty, делает historical replay ambiguous, создаёт race при re-org. Decision impact: data model add'и 3 nullable columns в `_doa_workflow_decisions` (`approver_position`, `approver_org_path`, `approver_acting`) сейчас — zero cost в v2.0 (NULL), additive для v2.x.
+3. **Matrix immutability после `approved`** → **fully immutable**. `PATCH` только на `draft`; approved edit = создать `version+1`. Резко упрощает audit / cache invalidation / temporal ambiguity. Decision impact: admin REST API (6.1.4) — `PATCH` returns 409 если `status != 'draft'`.
+4. **`position` + `department_head` approver types в v2.0** → **НЕ в v2.0**. См. [docs/26-org-structure-audit.md](docs/26-org-structure-audit.md) — Railbase сейчас имеет flat RBAC, no org chart; даже `railbase-orgs` plugin (designed, не имплементирован) не покрывает departments/positions/hierarchy. Org-chart subsystem — отдельные 2-3 месяца, не в scope v2.0. v2.0 DoA — `role` + `user` only. Decision impact: 6.1.6 approver resolution engine только `role`+`user`; org-aware approvers → v2.x параллельно с future org-chart primitive.
+
+Tasks (docs/27) — закрытые в design-review:
+
+5. **Task descriptions i18n** → ICU templates rendered at GET через `RegisterTemplate(kind, locale, template)`. См. [27](docs/27-tasks.md) §Открытые вопросы. Закрыто.
+6. **Cancelled task retention** → no auto-purge в v2.0; embedder ставит cron'ом если нужно. Закрыто.
+
+---
+
+## 6.x — v2.1+ расширения (после v2.0 ship)
 
 - `railbase-wasm` (wazero hook runtime)
 - Federated/multi-region replication
@@ -785,6 +908,12 @@ After zero 📋 items remain in the audit, v1 SHIP unblocks.
 - BPMN authoring в admin UI
 - White-label theming plugin
 - Module federation для plugin admin UI
+- **DoA grammar extensions**: iterators, parallel chains, sub-requests,
+  time-windowed escalation (см. [docs/26-authority.md](docs/26-authority.md)
+  §«Не входит в v2.0»)
+- **Task extensions**: templates, recurring, subtasks/dependencies,
+  SLA tracking (см. [docs/27-tasks.md](docs/27-tasks.md)
+  §«Не входит в v2.0»)
 
 ---
 

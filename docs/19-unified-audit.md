@@ -181,15 +181,30 @@ CREATE INDEX _audit_log_tenant_request_idx    ON _audit_log_tenant (request_id) 
 
 Existing `_audit_seals` (migration 0022) gains a `target` column
 distinguishing seals over `_audit_log` (legacy v1), `_audit_log_site`,
-and `_audit_log_tenant` per-tenant ranges:
+`_audit_log_tenant` per-tenant ranges, **and** subsystem-owned chains
+like `_authority_audit`:
 
 ```sql
 ALTER TABLE _audit_seals ADD COLUMN target TEXT NOT NULL DEFAULT 'legacy';
--- target ∈ ('legacy', 'site', 'tenant:<uuid>')
+-- target ∈ ('legacy', 'site', 'tenant:<uuid>', 'authority')
+--   'legacy'         — pre-v3.x `_audit_log` chain (read-only after migration)
+--   'site'           — `_audit_log_site` (system + admin actions)
+--   'tenant:<uuid>'  — `_audit_log_tenant` per-tenant chain
+--   'authority'      — `_authority_audit` (v2.0+; DoA workflow / matrix /
+--                       delegation events, см. 26-authority.md)
 
 ALTER TABLE _audit_seals ADD COLUMN tenant_id UUID NULL;
 -- Populated when target LIKE 'tenant:%'. Backs per-tenant verify.
 ```
+
+Subsystem chains extend через same Ed25519 seal pattern. `railbase
+audit verify --target authority` walks `_authority_audit` row-by-row,
+re-computes SHA-256 hash chain, validates Ed25519 signatures из
+`_audit_seals WHERE target='authority'`. Tamper на
+`_doa_matrices` / `_doa_workflow_decisions` ловится через audit
+chain mismatch — application-level CRUD пишет каждое state change
+как audit event с linked prev_hash; manual UPDATE bypasses audit
+writer, hash diverges от next seal'а, verify fails.
 
 ## 4. Writer API
 

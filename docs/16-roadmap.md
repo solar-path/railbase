@@ -363,7 +363,106 @@ S3 + KMS implementations поставляются как scaffolding с build ta
 
 ---
 
-## v2 — расширения
+## v2.0 — Delegation of Authority + Tasks (новые core primitive'ы)
+
+Major version bump, потому что добавляются два первоклассных
+subsystem'а с собственным API surface, schema DSL, admin UI и
+SDK namespace'ом. API-additive (старые v1 контракты не меняются),
+но scope большой → честный breakpoint вместо размывания v1.x.
+
+### v2.0 Authority (DoA в ядре) — hybrid schema+matrix-data model (rev2)
+
+Полный спек: [26-authority.md](26-authority.md) (rev2 после ysollo
+comparison analysis).
+
+**Two-layer architecture**:
+- Schema-as-code объявляет **где** DoA-gate стоит (`.Authority({Matrix: "..."})`)
+- Matrix-as-data объявляет **какие правила** применяются (admin UI editor, versioned)
+
+**Schema-side (минимальное):**
+- `.Authority({Matrix, On, AmountField?, Currency?, ProtectedFields, Required})` на коллекциях
+- ProtectedFields для anti-bait-and-switch consume validation
+
+**Matrix subsystem (новый core):**
+- Sys-tables: `_doa_matrices` + `_doa_matrix_levels` +
+  `_doa_matrix_approvers` (3 для матриц)
+- Matrix lifecycle: `draft → approved → archived/revoked`,
+  с version history + effective_from/to + amount range
+- Selection algorithm: `key + status + tenant + amount range +
+  currency + optional condition_expr` (tenant-prefer + amount-specificity ordering)
+- Approver types: `role / user / position / department_head`
+  (last two — v2.0 stretch при наличии org-structure)
+
+**Workflow runtime:**
+- `_doa_workflows` + `_doa_workflow_decisions`
+- Multi-level traversal с per-level mode (`any / all / threshold`)
+- Per-level `escalation_hours` + final-escalation handler
+- Actions: `approve / reject / cancel / reassign / comment`
+- Reject = terminal (no recycle complexity)
+- Consume validation: field-by-field match for `ProtectedFields`
+
+**Delegation primitive (first-class в v2.0, не deferred):**
+- `_doa_delegations`: delegator → delegate с scope (all / matrix /
+  document_type), max_amount cap, effective window, sub-delegation flag
+
+**REST + SDK + JS surface:**
+- `/api/_admin/authority/matrices/*` (admin CRUD)
+- `/api/authority/workflows/*` (user operations)
+- `/api/authority/delegations/*` (user CRUD)
+- Generated TS SDK: `rb.authority.{matrix, workflow, delegation}.*`
+- JS bindings: `$app.authority.workflow().create(...)` etc.
+
+**Admin UI (large surface):**
+- Matrix editor (multi-level, multi-approver, materiality, escalation)
+- Matrix list + version history + diff
+- Workflow detail (timeline + SLA + decisions)
+- Inbox + queue (batch-approve/reject)
+- Delegations list + create
+
+**Bypass policy** (unchanged from rev1, см. [26](26-authority.md) §«Decisions #1-7»):
+- site-admin UI: нет bypass
+- hooks: нет bypass, есть `$app.authority()` API
+- jobs/cron: scheduled — это уже approved action
+- bulk import: explicit `--bypass-authority --reason` CLI
+- migration / DDL: bypass
+
+**Builtin jobs:**
+- `authority_escalation_reaper` (per-level timeout → promote)
+- `authority_expiry_reaper` (overall TTL)
+- `authority_delegation_expirer` (effective_to handling)
+- `authority_chain_seal` (audit_seal extension через `target='authority'`)
+
+### v2.0 Tasks (durable human work queue)
+
+Полный спек: [27-tasks.md](27-tasks.md).
+
+- `_tasks` sys-table с lifecycle open → claimed → completed
+- Assignment: либо `assignee_user_id`, либо `assignee_role` (не оба)
+- DoA — main consumer (одна task per qualified signer-role per
+  request); embedder API `app.Tasks().Create(...)` для произвольных
+  workflow'ов
+- REST: `/api/tasks/{mine,claim,unclaim,complete}`
+- Realtime channels: `tasks:mine:{user_id}` + `tasks:role:{tenant}:{role}`
+- Admin UI screens: my-inbox, all-tasks (oversight), task detail
+  (kind-specific renderer)
+- Generated TS SDK: `rb.tasks.*`
+- Builtin job `tasks_reaper`: auto-unclaim + expire + orphan cleanup
+
+### v2.0 verification
+
+- 5-min smoke сценарий: register DoA-gated collection → create
+  authority request → spawn tasks → sign from two distinct roles
+  → request approved → write goes through → audit chain verifies
+- No-bypass coverage: hook→raw update, job→direct exec, import
+  bulk → каждый сценарий имеет test exercising the 409 path
+- Single-admin install panic: startup validation, embedder
+  получает чёткое сообщение что нужно provisioning ≥2 акторов до
+  использования `.Authority()`-коллекций
+- Audit chain integrity test: tamper → verify fails → CLI exit ≠ 0
+
+---
+
+## v2.1+ — расширения
 
 - **railbase-wasm** plugin (alt hook runtime через wazero)
 - **Federated / multi-region replication** через Postgres logical replication + region-aware routing helper в SDK
@@ -373,6 +472,17 @@ S3 + KMS implementations поставляются как scaffolding с build ta
 - **BPMN authoring** в admin UI (если railbase-workflow эволюционирует)
 - **White-label theming plugin**
 - **Module federation для plugin admin UI** (вместо iframe)
+- **DoA extensions** (после rev2 v2.0 уже включает delegation,
+  per-level mode, escalation, multi-level workflow):
+  - Acknowledgment workflow (ysollo `documents.ack.*` model)
+  - Sub-request workflows (recursive DoA)
+  - External signer integration (DocuSign-style cryptographic sigs)
+  - Cross-tenant matrix sharing (site-scope approvers для child tenants)
+  - Document access propagation (ysollo `documents.access.via*`,
+    context-inherited access через chat/meeting/task — v2.x, требует
+    entity-relationship graph)
+- **Task templates + recurring tasks + subtasks + SLA tracking**
+  ([27](27-tasks.md) §«Не входит в v2.0»)
 
 ---
 

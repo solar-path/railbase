@@ -524,6 +524,14 @@ type CollectionSpec struct {
 	Name    string      `json:"name"`
 	Tenant  bool        `json:"tenant,omitempty"`
 	Auth    bool        `json:"auth,omitempty"` // schema.AuthCollection() — injects email/password_hash/verified/token_key
+	// PublicProfile, when true on an auth collection, exposes a
+	// read-only `/api/collections/{name}/profiles[/{id}]` endpoint
+	// returning the non-secret user-declared fields (no email,
+	// password_hash, token_key, verified, last_login_at). FEEDBACK
+	// #B2 — closes the byline-without-auth gap for editorial/CMS
+	// projects (blogger's `authors.{name, slug, title, bio, avatar_url}`
+	// for article authorship rendering). No-op on non-auth collections.
+	PublicProfile bool `json:"public_profile,omitempty"`
 	// SoftDelete, when true, replaces DELETE-row with `UPDATE … SET
 	// deleted = now()` and auto-filters LIST/VIEW by `deleted IS NULL`.
 	// Callers can pass `?includeDeleted=true` to opt-in to seeing tombstones
@@ -582,6 +590,80 @@ type CollectionSpec struct {
 	// ?title, ?header, ?footer) override anything in the config so a
 	// one-off request always wins.
 	Exports ExportSet `json:"exports,omitempty"`
+
+	// EntityDocs holds per-entity PDF documents — invoices, statements,
+	// summaries that combine one parent row with related child rows.
+	// Each entry registers a route:
+	//
+	//   GET /api/collections/{name}/{id}/<EntityDocConfig.Name>.pdf
+	//
+	// The template receives `.Record` (the parent row), `.Related`
+	// (map of related-collection slices), `.Now`, and `.Tenant`. The
+	// regular ViewRule for the parent collection gates access — owner
+	// checks via @request.auth.id = customer still apply.
+	//
+	// FEEDBACK #29 — `.Export()` was flat-table-only. Per-entity
+	// documents (an invoice with line items + totals) had no path
+	// other than 250 lines of hand-rolled gopdf in the embedder.
+	EntityDocs []EntityDocConfig `json:"entity_docs,omitempty"`
+}
+
+// EntityDocConfig declares one per-entity PDF document on a
+// collection. FEEDBACK #29.
+type EntityDocConfig struct {
+	// Name is the URL slug for the document (no extension). The
+	// resulting route is /api/collections/{collection}/{id}/{Name}.pdf.
+	// Must be [a-z0-9_-]+; the registry validates this.
+	Name string `json:"name"`
+
+	// Template is the Markdown template under pb_data/pdf_templates/
+	// to render. Same template engine + helpers as .Export() PDFs.
+	// The template's `.` is a struct with .Record, .Related,
+	// .Now, .Tenant.
+	Template string `json:"template"`
+
+	// Title is the document title rendered on the first page when the
+	// template doesn't include its own header. Empty → "{collection}
+	// {id-short}" (e.g. "orders fec43944").
+	Title string `json:"title,omitempty"`
+
+	// Related declares the child queries to run alongside the parent
+	// row. Each entry expands to:
+	//
+	//   SELECT * FROM <Collection>
+	//   WHERE <ChildColumn> = <parent row>.<ParentColumn>
+	//
+	// In the template these land at `.Related["<key>"]` as
+	// []map[string]any. Example wiring for order items:
+	//
+	//   Related: map[string]builder.RelatedSpec{
+	//       "items": {Collection: "order_items", ChildColumn: "order_ref", ParentColumn: "id"},
+	//   }
+	//
+	// Then in invoice.md: `{{ range .Related.items }}{{ .product }} — {{ .qty }}{{ end }}`.
+	Related map[string]RelatedSpec `json:"related,omitempty"`
+}
+
+// RelatedSpec describes one child-table lookup for an EntityDoc.
+type RelatedSpec struct {
+	// Collection is the related collection name.
+	Collection string `json:"collection"`
+
+	// ChildColumn is the foreign-key column on the child collection.
+	ChildColumn string `json:"child_column"`
+
+	// ParentColumn is the column on the parent row supplying the FK
+	// value. Empty → "id" (the common case).
+	ParentColumn string `json:"parent_column,omitempty"`
+
+	// OrderBy is an optional ORDER BY clause (just the column +
+	// direction, e.g. "created ASC"). Empty → no explicit ordering.
+	OrderBy string `json:"order_by,omitempty"`
+
+	// Limit caps the related row count to keep PDF sizes sane.
+	// 0 → 1000 (server-side default; embedders raise via a custom
+	// handler if they need more).
+	Limit int `json:"limit,omitempty"`
 }
 
 // ExportSet groups per-format export configs. Each format has at
@@ -614,11 +696,22 @@ type XLSXExportConfig struct {
 	// the column.
 	Headers map[string]string `json:"headers,omitempty"`
 
-	// Format maps a column key to a format hint (e.g. "YYYY-MM-DD"
-	// for dates, "$#,##0.00" for currency). Reserved for future use
-	// — v1.6.3 stores but does NOT apply formats (writer renders
-	// values verbatim). Honouring formats requires per-column style
-	// registration with excelize; tracked as a v1.6.x polish slice.
+	// Format maps a column key to an Excel number-format code as a
+	// string ("yyyy-mm-dd", "#,##0.00", "$#,##0.00", "0.00%", etc.).
+	//
+	// **Current status (v1.6.3)**: the field is STORED on the spec
+	// but the XLSX writer ignores it — cells render verbatim. Per-column
+	// styling lands in a v1.6.x follow-up; until then, embedders who
+	// need formatted money/dates in Excel should:
+	//   - For dates: pre-format in the row data (`{"created":
+	//     "2026-05-16"}` instead of an RFC3339 string).
+	//   - For currency in cents: use a custom export handler atop
+	//     `pkg/railbase/export.NewXLSXWriter` and write a string cell.
+	//
+	// FEEDBACK #37 — the shopper's `CurrencyFormat(...)` / `DateFormat(...)`
+	// mini-DSL referenced in docs/08-generation.md doesn't exist. Use
+	// plain Excel number-format-code strings here when the writer
+	// honours them. The map shape is fixed (string→string).
 	Format map[string]string `json:"format,omitempty"`
 }
 
@@ -657,10 +750,15 @@ type PDFExportConfig struct {
 	// renders the data-table layout introduced in v1.6.1.
 	//
 	// The template is processed via `text/template` with these helpers:
-	//   - `date "layout"` — format time.Time using Go layout
+	//   - `date "layout" v` — format time.Time using a Go layout string
 	//   - `default fallback v` — fallback when v is zero
 	//   - `truncate N s` — rune-aware truncate with ellipsis
-	//   - `money v` — currency stub (v1.6.5 will use locale)
+	//   - `money v` — USD-defaulted shortcut for `currency v "USD"`
+	//   - `currency v "USD"` — integer minor-units → "$1,234.56" with
+	//     symbols for USD/EUR/GBP/RUB/JPY/CNY/INR (FEEDBACK #34)
+	//   - `str v` — coerce any value to its string form, so
+	//     `{{ slice (str .id) 0 8 }}` works without a printf dance
+	//     (FEEDBACK #33)
 	//   - `each v` — alias of stdlib `range`
 	// plus all text/template built-ins (`if`, `range`, `with`, ...).
 	//

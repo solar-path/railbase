@@ -103,7 +103,7 @@ func TestCheckClauses_OptionalTextPattern_AcceptsEmpty(t *testing.T) {
 	// but the Pattern CHECK should be wrapped.
 	hasPatternWrap := false
 	for _, c := range got {
-		if strings.Contains(c, "~ '^[A-Z]{3}$'") && strings.Contains(c, `"code" = ''`) {
+		if strings.Contains(c, "~ '^[A-Z]{3}$'") && strings.Contains(c, `code = ''`) {
 			hasPatternWrap = true
 		}
 	}

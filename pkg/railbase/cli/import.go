@@ -162,11 +162,30 @@ Unknown headers fail BEFORE the DB is touched, so a typo can't
 half-load. Server-side type coercion + CHECK constraints validate
 each row; a bad row aborts the entire COPY (no partial commit).
 
+Column-type cheatsheet for CSV cells:
+
+  - Number / Int            → bare digits, no thousand separators: 42, -7, 1234
+  - Bool                     → true / false (also 1 / 0)
+  - Date / DateTime          → ISO-8601: 2026-05-16, 2026-05-16T01:13:58Z
+  - Tags / Relations (M2M)   → Postgres array literal: "{tag1,tag2,tag3}"
+                               Quote-wrap if any tag contains commas/spaces.
+                               FEEDBACK #B10 — the array-literal shape is what
+                               COPY FROM expects for text[] columns; an embedder
+                               passing "tag1,tag2" gets a 3-column row, not a tag list.
+  - JSON / Translatable      → quoted JSON object: "{""key"":""val""}"
+  - File                     → import via REST multipart, not CSV
+  - NULL                     → use --null '\\N' (or whatever sentinel you pick)
+
 Examples:
 
     railbase import data posts --file posts.csv
     railbase import data orders --file orders.csv.gz --delimiter ';'
-    railbase import data items  --file items.tsv  --delimiter $'\t'`,
+    railbase import data items  --file items.tsv  --delimiter $'\t'
+
+    # Tags column ("{tag1,tag2}") inside a CSV — note the {} braces:
+    #   id,title,tags
+    #   uuid-1,Hello,"{tutorial,intro}"
+    #   uuid-2,World,"{news}"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if filePath == "" {

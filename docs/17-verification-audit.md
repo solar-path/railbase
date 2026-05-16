@@ -25,7 +25,7 @@ Legend:
 - Goreleaser project_name pin + `make verify-release` Makefile (v1.7.27a-b)
 - CI per-PR binary-size gate (v1.7.28a) — `.github/workflows/ci.yml` cross-build matrix now runs `scripts/check-binary-size.sh bin/` on every PR, catching size regressions before tag-time
 - `railbase test` CLI subcommand (v1.7.28c) — closes §3.12.1 (cobra wrapper over `go test` with composable flag surface)
-- `make verify-release` end-to-end validated (v1.7.29a) — confirmed the full pre-tag chain runs green as a single operator command; all 6 binaries under 30 MB ceiling (3.57 MB headroom)
+- `make verify-release` end-to-end validated (v1.7.29a) — confirmed the full pre-tag chain runs green as a single operator command; all 6 binaries under 30 MB ceiling (3.57 MB headroom). **v1.7.48** bumped ceiling to 32 MB after i18n bundle expansion (9 lazy locale chunks ~1.84 MB raw across 10 languages embedded via `//go:embed all:dist`); largest binary now 31.19 MB with 0.81 MB headroom.
 - Field renderer extensions (slices 1-5 in v1.7.25b / v1.7.26b / v1.7.27c / v1.7.28b / v1.7.29b) — **25 / ~25 §3.8 domain types now have dedicated cell + edit renderers; the field-renderer admin UI track is functionally complete**
 
 **v1.x-bonus track (post v1 SHIP gates closed)**:
@@ -40,7 +40,7 @@ Legend:
 
 | # | Test | Status | Reference / Notes |
 |---|---|---|---|
-| 1 | Build & cross-compile via goreleaser, ≤30MB binary | ✅ | `.goreleaser.yml` (v1.7.24) ships 6-target matrix (linux/darwin/windows × amd64/arm64), CGO_ENABLED=0, draft-release, embedded changelog grouping. `make cross-compile` + `make check-size` provide the same gate without goreleaser installed. Measured 2026-05-12: largest binary 26.25 MB (Windows amd64), smallest 23.88 MB (linux arm64) — **all 6 under the 30 MB ceiling with 3.75 MB headroom**. `scripts/check-binary-size.sh` enforces the budget in CI. |
+| 1 | Build & cross-compile via goreleaser, ≤32MB binary | ✅ | `.goreleaser.yml` (v1.7.24) ships 6-target matrix (linux/darwin/windows × amd64/arm64), CGO_ENABLED=0, draft-release, embedded changelog grouping. `make cross-compile` + `make check-size` provide the same gate without goreleaser installed. Measured 2026-05-12: largest binary 26.25 MB (Windows amd64), smallest 23.88 MB (linux arm64). **v1.7.48** added 10-locale admin SPA i18n (9 lazy locale chunks, ~1.84 MB raw embedded via `//go:embed all:dist`); ceiling bumped 30 → 32 MB to keep "single binary, 10-language admin UI" inside the ship envelope rather than splitting artefacts. Largest binary now 31.19 MB. `scripts/check-binary-size.sh` enforces the budget in CI. |
 | 2 | 5-minute smoke (`railbase init demo` → admin UI works) | ✅ | `scripts/smoke-5min.sh` (v1.7.12) + `make smoke`. 13 HTTP probes: build/size check, /readyz wait, admin bootstrap, signin, all RequireAdmin endpoints (logs/jobs/api-tokens/backups/notifications/audit/schema/settings/me), admin UI HTML, /api/_compat-mode discovery. Tempdir-isolated; SIGTERM cleanup via trap. |
 | 3 | PB drop-in compat (PB JS SDK against Railbase strict mode) | 🔄 | `internal/api/auth/auth_methods_e2e_test.go` covers `/auth-methods` discovery. Full PB-SDK against `RAILBASE_COMPAT_MODE=strict` is operator-test scope. |
 | 4 | PB import (`railbase import schema --from-pb`) | ✅ | `internal/pbimport/import_test.go` — 10 tests under `-race`. Live HTTP path via httptest.Server. |

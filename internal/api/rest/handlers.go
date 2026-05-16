@@ -244,7 +244,7 @@ func (d *handlerDeps) listHandler(w http.ResponseWriter, r *http.Request) {
 	ruleFrag, nextParam, err := compileRule(spec.Rules.List, spec, fctx, startParam)
 	if err != nil {
 		d.log.Error("rest: list rule compile failed", "collection", spec.Name, "err", err)
-		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "rule compile failed"))
+		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "rule compile failed: %v", err))
 		return
 	}
 	combined = combineFragments(combined, ruleFrag)
@@ -353,7 +353,7 @@ func (d *handlerDeps) viewHandler(w http.ResponseWriter, r *http.Request) {
 	extras, err := composeRowExtras(r.Context(), spec, fctx, spec.Rules.View, 2)
 	if err != nil {
 		d.log.Error("rest: view rule compile failed", "collection", spec.Name, "err", err)
-		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "rule compile failed"))
+		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "rule compile failed: %v", err))
 		return
 	}
 	q, qErr := d.queryFor(r.Context(), spec)
@@ -553,7 +553,7 @@ func (d *handlerDeps) createHandler(w http.ResponseWriter, r *http.Request) {
 	ruleFrag, _, err := compileRule(spec.Rules.Create, spec, fctx, 2)
 	if err != nil {
 		d.log.Error("rest: create rule compile failed", "collection", spec.Name, "err", err)
-		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "rule compile failed"))
+		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "rule compile failed: %v", err))
 		return
 	}
 	checkSQL := fmt.Sprintf(
@@ -690,7 +690,7 @@ func (d *handlerDeps) updateHandler(w http.ResponseWriter, r *http.Request) {
 	extras, err := composeRowExtras(r.Context(), spec, fctx, spec.Rules.Update, len(fields)+2)
 	if err != nil {
 		d.log.Error("rest: update rule compile failed", "collection", spec.Name, "err", err)
-		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "rule compile failed"))
+		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "rule compile failed: %v", err))
 		return
 	}
 
@@ -791,7 +791,7 @@ func (d *handlerDeps) deleteHandler(w http.ResponseWriter, r *http.Request) {
 	extras, err := composeRowExtras(r.Context(), spec, fctx, spec.Rules.Delete, 2)
 	if err != nil {
 		d.log.Error("rest: delete rule compile failed", "collection", spec.Name, "err", err)
-		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "rule compile failed"))
+		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "rule compile failed: %v", err))
 		return
 	}
 
@@ -878,7 +878,7 @@ func (d *handlerDeps) restoreHandler(w http.ResponseWriter, r *http.Request) {
 	extras, err := composeRowExtras(r.Context(), spec, fctx, spec.Rules.Update, 2)
 	if err != nil {
 		d.log.Error("rest: restore rule compile failed", "collection", spec.Name, "err", err)
-		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "rule compile failed"))
+		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "rule compile failed: %v", err))
 		return
 	}
 	q, qErr := d.queryFor(r.Context(), spec)

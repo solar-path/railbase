@@ -83,6 +83,26 @@ func (b *CollectionBuilder) Tenant() *CollectionBuilder {
 	return b
 }
 
+// PublicProfile opts the auth collection into an additional read-only
+// HTTP endpoint:
+//
+//	GET /api/collections/{name}/profiles          → public list
+//	GET /api/collections/{name}/profiles/{id}     → public single
+//
+// The endpoints return ONLY the non-secret user-declared fields plus
+// `id` and `collectionName` — never `email`, `password_hash`,
+// `token_key`, `verified`, or `last_login_at`. No authentication is
+// required (the use case is byline/avatar rendering for anonymous
+// site visitors). Use this for editorial/CMS scenarios where the
+// auth collection doubles as the author/contributor directory.
+// FEEDBACK #B2.
+//
+// On a non-Auth collection this is a no-op — only callable in chain.
+func (b *CollectionBuilder) PublicProfile() *CollectionBuilder {
+	b.spec.PublicProfile = true
+	return b
+}
+
 // SoftDelete turns physical DELETE into a "set deleted = now()" UPDATE
 // and auto-filters LIST/VIEW by `deleted IS NULL`. Adds a `deleted
 // TIMESTAMPTZ NULL` system column and a partial index on
@@ -208,6 +228,38 @@ func ExportXLSX(cfg XLSXExportConfig) ExportConfigurer { return xlsxExportArg{cf
 
 // ExportPDF wraps a PDFExportConfig as an ExportConfigurer.
 func ExportPDF(cfg PDFExportConfig) ExportConfigurer { return pdfExportArg{cfg: cfg} }
+
+// EntityDoc registers a per-entity PDF document on this collection.
+// Mounts a route at GET /api/collections/{name}/{id}/<cfg.Name>.pdf
+// that loads the parent row, runs the declared Related queries, and
+// renders cfg.Template (relative to pb_data/pdf_templates/).
+//
+// Example — order invoice with line items:
+//
+//	var Orders = schema.Collection("orders").
+//	    Field("contact_email", schema.Email().Required()).
+//	    EntityDoc(schema.EntityDocConfig{
+//	        Name:     "invoice",
+//	        Template: "invoice.md",
+//	        Title:    "Invoice",
+//	        Related: map[string]schema.RelatedSpec{
+//	            "items": {
+//	                Collection:   "order_items",
+//	                ChildColumn:  "order_ref",
+//	                ParentColumn: "id",
+//	                OrderBy:      "sort_index ASC",
+//	            },
+//	        },
+//	    })
+//
+// FEEDBACK #29 — closes the entity-doc gap that forced the shopper
+// project to hand-roll 250 lines of gopdf for a single invoice
+// endpoint. The regular ViewRule for the parent collection gates
+// access; owner-only invoices fall out via the existing rule grammar.
+func (b *CollectionBuilder) EntityDoc(cfg EntityDocConfig) *CollectionBuilder {
+	b.spec.EntityDocs = append(b.spec.EntityDocs, cfg)
+	return b
+}
 
 // Index declares a user index. Use for queries that the
 // auto-generated indexes (PK, unique, FK-backing) don't already cover.

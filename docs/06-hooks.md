@@ -82,12 +82,65 @@ $app.onRequest((e) => {
 })
 ```
 
-### Authority + Document hooks
+### Authority hooks (v2.0+)
 
-> **Status: deferred.** `onAuthority*` / `onDocument*` are not in the
-> shipping JS surface. For now, register equivalent Go hooks via
-> `app.GoHooks().OnRecordAfterCreate(...)` — see `pkg/railbase/hooks/`
-> for the typed API.
+> **Status:** planned for v2.0 в рамках core DoA primitive
+> (см. [26-authority.md](26-authority.md)). После rev2 hybrid
+> model — hook namespace стабилизирован.
+
+Все authority events — **after-only**. DoA semantics не должны
+зависеть от embedder hook'а (который мог бы упасть / зациклиться);
+hooks читают события, не модифицируют решение workflow'а.
+
+```js
+// Workflow lifecycle events.
+$app.onAuthorityWorkflowCreated((e) => {
+  // e.workflow_id, e.matrix_key, e.collection, e.record_id,
+  // e.initiator_id, e.amount, e.currency
+})
+
+$app.onAuthorityWorkflowDecided((e) => {
+  // Каждое decision (approve/reject); workflow в любом state.
+  // e.workflow_id, e.level_n, e.approver_id, e.decision, e.memo
+})
+
+$app.onAuthorityWorkflowLevelAdvanced((e) => {
+  // Workflow перешёл на следующий level (предыдущий level satisfied).
+  // e.workflow_id, e.from_level, e.to_level, e.qualified_approvers
+})
+
+$app.onAuthorityWorkflowEscalated((e) => {
+  // Auto-escalation после level escalation_hours timeout.
+  // e.workflow_id, e.from_level, e.to_level (или null для final-escalation),
+  // e.reason
+})
+
+$app.onAuthorityWorkflowConsumed((e) => {
+  // Write actually went through (после consume validation).
+  // e.workflow_id, e.collection, e.record_id, e.applied_diff
+})
+
+// Matrix lifecycle events.
+$app.onAuthorityMatrixApproved((e) => {
+  // Matrix перешла из draft в approved — становится active.
+  // e.matrix_id, e.matrix_key, e.version, e.effective_from
+})
+
+// Delegation lifecycle.
+$app.onAuthorityDelegationCreated((e) => {
+  // e.delegation_id, e.delegator_id, e.delegate_id, e.scope, e.max_amount
+})
+```
+
+Equivalent Go API: `app.Hooks().OnAuthorityWorkflowDecided(...)` etc.,
+доступен через `pkg/railbase/hooks/`.
+
+### Document hooks
+
+> **Status: deferred** — documents primitive (`documents.access.*` /
+> `documents.ack.*` из ysollo translation keys) запланирован для
+> v2.1+ (см. [16-roadmap.md](16-roadmap.md) §v2.1+). До тех пор —
+> register equivalent Go hooks через `app.GoHooks().OnRecordAfterCreate(...)`.
 
 ---
 
@@ -98,12 +151,14 @@ $app.onRequest((e) => {
 > `realtime()`) is wired through the goja runtime. The remaining
 > bindings below (`$apis`, `$http`, `$os`, `$security`, `$template`,
 > `$tokens`, `$filesystem`, `$mailer`, `$dbx`, `$inflector`, `$export`,
-> `$documents`, `$authority`, `$jobs`) are roadmap entries — calling
+> `$documents`, `$jobs`) are roadmap entries — calling
 > them from JS today will throw "ReferenceError: $apis is not defined"
-> (or similar). For now, reach those services from Go via the
-> equivalent `app.Mailer()` / `app.Stripe()` / `app.Jobs()` / etc.
-> accessors and register the route with `$app.routerAdd` if you need
-> a JS entry point. Track the full surface in [16-roadmap.md](16-roadmap.md).
+> (or similar). `$authority` is **planned for v2.0** along with the
+> core DoA primitive — see [26-authority.md](26-authority.md). For
+> now, reach those services from Go via the equivalent `app.Mailer()`
+> / `app.Stripe()` / `app.Jobs()` / etc. accessors and register the
+> route with `$app.routerAdd` if you need a JS entry point. Track
+> the full surface in [16-roadmap.md](16-roadmap.md).
 
 ### `$app` — main application object
 
@@ -275,15 +330,41 @@ $documents.list({ ownerType, ownerId })
 
 См. [07-files-documents.md](07-files-documents.md).
 
-### `$authority` — approval engine (с plugin)
+### `$authority` — approval engine (core v2.0, не plugin)
+
+Reclassified в core 2026-05-16 — см. [26-authority.md](26-authority.md)
+для полного спека. JS binding следует hybrid schema+matrix-data
+архитектуре rev2.
 
 ```js
-const decision = $authority.checkOrSubmit({
-  resource: "payments", action: "create", payload, requester,
+// Workflow operations (legitimate programmatic flow — hooks НЕ bypass'ят
+// DoA gate, но могут submit'ить workflow через этот API).
+const workflow = $authority.workflow.create({
+  collection: "articles",
+  record_id: articleId,
+  action_key: "articles.publish",
+  diff: {status: "published"},
+  amount: 5000,           // optional — для materiality matrix selection
+  currency: "USD",
+  notes: "Auto-submitted: urgent breaking news"
+})
+
+const status = $authority.workflow.get(workflow.id)
+// → {status, current_level, decisions: [...], expires_at, sla_countdown}
+
+// Matrix lookup (read-only — matrices редактируются через admin UI).
+const matrix = $authority.matrix.get("article.publish")
+// → {key, version, levels: [...], min_amount, max_amount, currency}
+
+// Delegation check (для custom permission logic в hooks).
+const delegations = $authority.delegation.active({
+  delegate_id: $request.auth.id,
+  matrix_key: "article.publish"
 })
 ```
 
-См. plugin `railbase-authority` в [15-plugins.md](15-plugins.md).
+См. [26-authority.md §JS bindings + Go API](26-authority.md). Equivalent
+Go: `app.Authority().Workflow().Create(ctx, ...)` etc.
 
 ### `$jobs` — background queue
 

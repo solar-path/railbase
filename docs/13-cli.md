@@ -7,15 +7,30 @@
 ### Init & lifecycle
 
 ```
-railbase init <name> [--template basic|saas|mobile|ai]
-  Scaffold pb_data/, pb_hooks/, schema/main.go, railbase.yaml.
+railbase init <name> [--template basic|auth-starter|fullstack]
+                     [--railbase-source <abs-path-to-railbase-checkout>]
+  Scaffold pb_data/, pb_hooks/, schema/main.go, railbase.yaml, Makefile,
+  cmd/<name>/main.go. With --railbase-source the generated go.mod gets a
+  `replace` directive pointing at your local railbase tree (validated:
+  path exists, is a directory, contains a go.mod for github.com/railbase/railbase).
 
 railbase serve [--addr :8095] [--dev]
   Start HTTP server. --dev: hot reload Go code via embedded air-style watcher.
 
+railbase dev [--addr :8095] [--embed-pg] [--web ./web] [--web-cmd "npm run dev"]
+  Run backend + frontend dev server side-by-side with single Ctrl-C lifecycle.
+  Reads RAILBASE_HTTP_ADDR from env when --addr isn't explicitly passed
+  (FEEDBACK #B5 — pre-fix, the cobra default :8095 always won over a .env value).
+
 railbase version
   Print version, build info, plugins installed.
 ```
+
+**Scaffold Makefile.** `railbase init` теперь генерирует Makefile с
+`TAGS_DEV ?= embed_pg` встроенным в targets `build`, `dev`,
+`migrate-diff`, `migrate-up`. `make dev` на свежем проекте сразу даёт
+embedded-postgres путь без знания про `-tags embed_pg`. Production-
+slim бинарь — отдельным `make build-prod` (без тега). FEEDBACK #6/#27.
 
 ### Migrations
 
@@ -45,8 +60,15 @@ railbase migrate user-upgrade
 ### Admin / superusers
 
 ```
-railbase admin create <email> [--password <p>]
-  Create system admin (с force-2FA on first login).
+railbase admin create <email> [--password <p>] [--no-email]
+  Create system admin (с force-2FA on first login). EMAIL is a POSITIONAL
+  argument — `--email X` not accepted (FEEDBACK #B9).
+  Password — interactive prompt by default (insecure path: `--password 'X'`
+  ends up in shell history; rotate after first sign-in).
+  --no-email skips welcome + broadcast notice emails (use on fresh boxes
+  without mailer setup; rerun via `railbase jobs enqueue` later).
+  Prints a one-line note when `mailer.from` is unset so the operator
+  doesn't wonder where the welcome email is (FEEDBACK #10).
 
 railbase admin update <email> [--password <p>]
   Update admin.
@@ -80,11 +102,19 @@ railbase generate schema-json [--out schema.json]
 railbase import schema --from-pb <url> [--admin-email <e>]
   Migrate schema из existing PocketBase. Generates Go DSL + migrations.
 
-railbase import data --from-pb <url> --collection <name>
-  Import data из PocketBase collection.
+railbase import data <collection> --file <csv-path> [--delimiter ,] [--quote "] [--null ""]
+  Bulk-load CSV rows via Postgres COPY FROM STDIN.
+  Header row required; unknown headers fail BEFORE the DB is touched.
 
-railbase import csv <file> --collection <name>
-  Import CSV.
+  Column-type cheatsheet:
+    Number / Int            → bare digits: 42, -7, 1234
+    Bool                    → true / false (also 1 / 0)
+    Date / DateTime         → ISO-8601: 2026-05-16, 2026-05-16T01:13:58Z
+    Tags / Relations (M2M)  → Postgres array literal: "{tag1,tag2}"
+                              FEEDBACK #B10 — quote-wrap if any tag has comma/space.
+    JSON / Translatable     → quoted JSON object: "{""key"":""val""}"
+    File                    → import via REST multipart, not CSV
+    NULL                    → use --null '\N' (or whatever sentinel you pick)
 ```
 
 ### Plugins
@@ -309,7 +339,13 @@ railbase mcp serve
 RAILBASE_CONFIG             config file path
 RAILBASE_DSN                Postgres DSN (`postgres://user:pass@host:port/db?sslmode=...`)
 RAILBASE_EMBED_POSTGRES     "true" для запуска embedded PG subprocess (dev only; refused в RAILBASE_PROD=true)
-RAILBASE_ADDR               listen address
+RAILBASE_EMBED_PG_PORT      override embedded-PG port (1..65535). Без override:
+                            sticky choice из <DataDir>/postgres/.port → default 54329 →
+                            scan [54330, 54429]. Используется для развода двух Railbase-
+                            проектов на одной машине (FEEDBACK #B4).
+RAILBASE_HTTP_ADDR          listen address. Читается и `serve`, и `dev` (FEEDBACK #B5);
+                            explicit `--addr` имеет приоритет над env value.
+RAILBASE_ADDR               legacy alias for RAILBASE_HTTP_ADDR (kept for v0 configs)
 RAILBASE_DATA               data dir
 RAILBASE_DATA_DIR           same as RAILBASE_DATA (admin setup wizard reads this when persisting .dsn)
 RAILBASE_LOG_LEVEL
@@ -317,6 +353,10 @@ RAILBASE_PBCOMPAT           strict | native | both
 RAILBASE_PROD               production mode flag (disables dev features)
 RAILBASE_FORCE_INIT         "1" overrides v1.7.42 foreign-DB safety gate; allows migrating into a non-empty DB
                             that lacks the `_migrations` marker (co-location with another app). Default: refuse.
+RAILBASE_LOCAL_PATH         absolute path to a local railbase checkout for `railbase init`'s
+                            `replace` directive. Validated at init time — path must exist,
+                            be a directory, and contain a go.mod whose `module` line names
+                            `github.com/railbase/railbase` (FEEDBACK #12).
 RAILBASE_CLUSTER_PEERS      cluster mode: "host1:4222,host2:4222" (для railbase-cluster plugin)
 RAILBASE_STORAGE            storage URL: fs:./storage | s3://bucket?...
 RAILBASE_SECRET_KEY         override .secret file

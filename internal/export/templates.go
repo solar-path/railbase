@@ -240,15 +240,23 @@ func (t *PDFTemplates) replace(fresh map[string]*template.Template) {
 
 // defaultPDFFuncs returns the helper funcmap registered on every
 // template. Per docs/08 §Helpers we ship `date`, `default` natively;
-// `if`/`range` are text/template stdlib builtins (free). The remaining
-// docs/08 helpers — `money`, `truncate`, `each` (range alias) — are
-// stubbed so authors can write templates that use them today and have
-// them honoured when v1.6.5 lands.
+// `if`/`range` are text/template stdlib builtins (free).
+//
+// `currency` (FEEDBACK #34) is the recommended helper for money: it
+// takes integer minor units (cents) + an ISO-4217 currency code and
+// renders "1,234.56" with the right symbol. `money` is its
+// USD-defaulted shortcut, kept for backward compatibility.
+//
+// `str` (FEEDBACK #33) converts any value (UUID, time, number) to its
+// string form, so `{{ slice (str .id) 0 8 }}` works without an
+// explicit `printf "%v"` dance — the shopper's exact papercut.
 func defaultPDFFuncs() template.FuncMap {
 	return template.FuncMap{
 		"date":     fnDate,
 		"default":  fnDefault,
 		"money":    fnMoneyStub,
+		"currency": fnCurrency,
+		"str":      fnStr,
 		"truncate": fnTruncate,
 		"each":     fnEachStub,
 	}
@@ -316,6 +324,122 @@ func fnMoneyStub(v any) string {
 		return fmt.Sprintf("$%v", x)
 	case string:
 		return "$" + x
+	}
+	return fmt.Sprint(v)
+}
+
+// fnCurrency formats integer minor-units (cents) as a localised
+// currency string. Pipe-friendly:
+//
+//	{{ currency .total_cents .currency }}     → "₽ 1,234.50"
+//	{{ currency .total_cents "USD" }}          → "$1,234.50"
+//
+// `cents` may be int, int64, or a JSON number (float64 coerced). The
+// currency code is case-insensitive ISO-4217; unknown codes fall back
+// to the bare code + space prefix ("XYZ 1,234.50") rather than panic.
+// FEEDBACK #34.
+func fnCurrency(cents any, code string) string {
+	n, ok := toInt64(cents)
+	if !ok {
+		return fmt.Sprint(cents)
+	}
+	negative := n < 0
+	if negative {
+		n = -n
+	}
+	major, minor := n/100, n%100
+	formatted := groupThousands(major) + "." + fmt.Sprintf("%02d", minor)
+	sym := currencySymbol(strings.ToUpper(strings.TrimSpace(code)))
+	prefix := sym
+	if sym == "" {
+		prefix = strings.ToUpper(code) + " "
+	}
+	// The minus sign goes OUTSIDE the symbol — `-£15.00`, not `£-15.00`.
+	if negative {
+		return "-" + prefix + formatted
+	}
+	return prefix + formatted
+}
+
+// toInt64 coerces a Go value to int64. Accepts int, int64, int32, and
+// float64 (truncating fractional cents — JSON numbers come through as
+// float64 even when the source was an integer).
+func toInt64(v any) (int64, bool) {
+	switch x := v.(type) {
+	case int:
+		return int64(x), true
+	case int64:
+		return x, true
+	case int32:
+		return int64(x), true
+	case float64:
+		return int64(x), true
+	case nil:
+		return 0, false
+	}
+	return 0, false
+}
+
+// currencySymbol returns the most-recognised symbol for an ISO-4217
+// code, or empty for unknown codes (caller falls back to bare code).
+// Limited to the codes embedders actually hit in Railbase apps; expand
+// as needed.
+func currencySymbol(code string) string {
+	switch code {
+	case "USD", "":
+		return "$"
+	case "EUR":
+		return "€"
+	case "GBP":
+		return "£"
+	case "RUB":
+		return "₽"
+	case "JPY":
+		return "¥"
+	case "CNY":
+		return "¥"
+	case "INR":
+		return "₹"
+	}
+	return ""
+}
+
+// groupThousands inserts thousand separators (commas) into a positive
+// integer's decimal representation. fnCurrency calls this on the major
+// units; locale-aware separators (1.234,56 vs 1,234.56) is a v1.6.5
+// concern.
+func groupThousands(n int64) string {
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	// Walk from the right inserting commas every 3 chars.
+	var b strings.Builder
+	rem := len(s) % 3
+	if rem > 0 {
+		b.WriteString(s[:rem])
+	}
+	for i := rem; i < len(s); i += 3 {
+		if b.Len() > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
+}
+
+// fnStr converts any value to its string form. Solves the
+// `{{ slice .id 0 8 }}` papercut where text/template can't slice an
+// `interface{}` directly — FEEDBACK #33. Usage:
+//
+//	{{ slice (str .id) 0 8 }}   → "fec43944"
+//	{{ str .total_cents }}      → "249990"
+func fnStr(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
 	}
 	return fmt.Sprint(v)
 }

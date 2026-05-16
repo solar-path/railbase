@@ -122,6 +122,30 @@ var TenantPosts = schema.Collection("tenant_posts").
 - OpenAPI spec
 - Go-side model struct
 
+> **Reserved keyword renames.** SQL reserved words (`user`, `order`,
+> `group`, `select`, `primary`, …) на уровне столбца отвергаются
+> валидатором с **именованной рекомендацией**:
+> `field name "user" is a SQL reserved keyword — use "customer", or "user_id"/"user_ref" if the relation semantics matter`.
+> Curated table (`reservedKeywordRenames` в
+> `internal/schema/builder/validate.go`) покрывает ~20 распространённых
+> случаев; для остального — generic `_id` / `_ref` fallback.
+
+> **CHECK constraints на optional regex-полях принимают `''`.**
+> URL / Email / Tel / Slug / Color / Text+Pattern на `!Required` поле
+> генерируются как `CHECK (col = '' OR col ~ pattern)` — JSON-форма,
+> постящая `hero_image: ""` для незаполненного поля, не упадёт на 400.
+> Required-поля сохраняют строгий regex (пустое значение в required —
+> валидная ошибка валидации).
+
+> **`migrate diff` отслеживает `Collection ↔ AuthCollection` toggle.**
+> Переключение `schema.Collection("authors")` →
+> `schema.AuthCollection("authors")` (или обратно) теперь эмитирует
+> миграцию: трёхшаговый ADD (nullable → backfill TODO → SET NOT NULL)
+> для `email`/`password_hash`/`token_key` плюс single-line ADD для
+> `verified` (DEFAULT FALSE) и `last_login_at` (NULL). На toggle-off —
+> `DROP COLUMN IF EXISTS … CASCADE` × 5. См. `gen.AuthToggleSQL` в
+> `internal/schema/gen/sql.go`.
+
 ### Runtime collections (admin-managed, v0.9)
 
 Code-defined коллекции выше — основной путь и единственный источник
@@ -1276,6 +1300,30 @@ NNN | filename | content_hash | applied_at | applied_by
 `railbase migrate diff` — сравнивает текущий Go DSL schema с applied schema, генерирует **новую migration файл** автоматически. Это аналог PB's automigration через UI.
 
 Для PB-compat: `railbase migrate jsdiff` генерирует JS migrations файлы.
+
+**Три-шаговый backfill для `NOT NULL ADD COLUMN`.** Простой
+`ALTER TABLE … ADD COLUMN col TYPE NOT NULL` падает на первой
+существующей строке. `migrate diff` теперь эмитирует:
+
+```sql
+-- step 1: nullable add (safe на любой таблице)
+ALTER TABLE posts ADD COLUMN slug TEXT;
+-- step 2: backfill (оператор подставляет реальное выражение)
+UPDATE posts SET slug = /* TODO: backfill expression */ NULL WHERE slug IS NULL;
+-- step 3: финальный constraint
+ALTER TABLE posts ALTER COLUMN slug SET NOT NULL;
+```
+
+Исключения (single-line ADD сохраняется): `HasDefault`,
+`Computed != ""`, `Date + AutoCreate`, `SequentialCode`, `Status`
+с values, и nullable-поля. Логика — `needsBackfillSplit()` в
+`internal/schema/gen/sql.go`.
+
+**`Collection ↔ AuthCollection` toggle.** Toggle спека ловится диффом
+и эмитирует ALTER для каждой auth-injected колонки
+(email / password_hash / verified / token_key / last_login_at) — см.
+выше в §Schema DSL. Без этого `migrate diff` молча отдавал «schema
+unchanged» и операторы писали миграцию вручную.
 
 ### Up + down
 

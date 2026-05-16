@@ -92,10 +92,16 @@ Lifecycle commands. **Контракт**: stable от v1.
     export (xlsx, pdf, templates)
     filter (expression parser, AST)
     logs (как records)
+    authority (v2.0+ — DoA gate + matrix-data + workflow runtime + delegation; см. 26-authority.md)
+    tasks (v2.0+ — durable human work queue; consumes authority + embedder workflows; см. 27-tasks.md)
         ↑
 [ Layer 4 — surface ]
     api/rest, api/pbcompat
-    server (chi assembly, middleware: logging/cors/ratelimit/bodylimit/gzip/auth/audit)
+    server (chi assembly, middleware: logging/cors/ratelimit/bodylimit/gzip/auth/tenant/rbac/authority/audit)
+                                                                                              ↑ v2.0+
+                                                                       Pipeline order: auth → tenant → rbac (gates user)
+                                                                                       → authority (gates action via matrix)
+                                                                                       → handler → audit
     admin (embedded UI)
     plugin (host)
         ↑
@@ -137,11 +143,12 @@ eventbus.Subscribe[RecordCreated](handler)
 ```
 
 **Использование внутри core**:
-- `audit-writer` подписан на: `record.created`, `record.updated`, `record.deleted`, `auth.signin`, `auth.signout`, `rbac.deny`, ...
-- `realtime-broker` подписан на: `record.created/updated/deleted` → форвардит на WebSocket/SSE подписчиков
-- `hooks-dispatcher` подписан на: `record.*` → запускает соответствующие JS hooks
-- `jobs-scheduler` подписан на: `schema.changed` → пересинхронизирует cron jobs
+- `audit-writer` подписан на: `record.created`, `record.updated`, `record.deleted`, `auth.signin`, `auth.signout`, `rbac.deny`, **`authority.*` (v2.0+)** → пишет в `_authority_audit` через `target='authority'` seal
+- `realtime-broker` подписан на: `record.created/updated/deleted` → форвардит на WebSocket/SSE подписчиков; **в v2.0+ также `authority.workflow.*` → `authority:workflow:{id}` channel + `authority:queue:role:{role}` + `tasks.created/claimed/completed` → `tasks:mine:{user_id}` + `tasks:role:{tenant}:{role}`**
+- `hooks-dispatcher` подписан на: `record.*` → запускает соответствующие JS hooks; **в v2.0+ также `authority.*` + `tasks.*`** (см. [06-hooks.md](06-hooks.md))
+- `jobs-scheduler` подписан на: `schema.changed` → пересинхронизирует cron jobs; **в v2.0+ запускает `authority_escalation_reaper` + `authority_expiry_reaper` + `authority_delegation_expirer` + `tasks_reaper` builtins**
 - `documents` подписан на: `record.deleted` → optional cascade-archive
+- **`tasks` (v2.0+)** подписан на: `authority.workflow.created/level_advanced` → спавнит per-approver tasks; `authority.workflow.decided` (terminal) → cancels open spawned tasks; `authority.workflow.escalated` → re-spawns на следующем level
 
 **Backends**:
 - **In-process** (default) — channels + goroutine pool

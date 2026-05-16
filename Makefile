@@ -83,7 +83,7 @@ cross-compile: admin ## v1 SHIP gate — build all 6 target binaries under bin/d
 	  done; \
 	done
 
-check-size: ## docs/17 #1 — fail if any binary in bin/dist/ > 30 MB
+check-size: ## docs/17 #1 — fail if any binary in bin/dist/ > 32 MB
 	bash scripts/check-binary-size.sh bin/dist/
 
 release-snapshot: ## Local goreleaser dry-run (no publish). Needs goreleaser installed.
@@ -97,7 +97,7 @@ verify-release: ## Pre-tag verification: vet + test-race + cross-compile + size-
 	@$(MAKE) -s test-race
 	@echo "→ cross-compile (6 targets)"
 	@$(MAKE) -s cross-compile
-	@echo "→ binary size budget (docs/17 #1, ≤30 MB)"
+	@echo "→ binary size budget (docs/17 #1, ≤32 MB)"
 	@$(MAKE) -s check-size
 	@echo
 	@echo "✓ pre-release gates green — safe to tag."

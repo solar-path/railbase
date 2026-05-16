@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# v1 SHIP gate companion — docs/17 #1 ≤30 MB binary check.
+# v1 SHIP gate companion — docs/17 #1 ≤32 MB binary check.
 #
 # Walks every binary under bin/dist/ (produced by `make cross-compile`
-# or `goreleaser release --snapshot`) and fails if any exceeds 30 MB.
+# or `goreleaser release --snapshot`) and fails if any exceeds 32 MB.
 # Run after a cross-compile sweep to enforce the size budget.
+#
+# History: the ceiling was 30 MB up to v1.7.47. v1.7.48 added the
+# admin SPA i18n bundles (9 lazy locale chunks, ~1.84 MB raw across
+# en + zh/hi/es/fr/ar/bn/pt/ru/ur) embedded via //go:embed all:dist.
+# Bumped to 32 MB to keep "single binary, 10-language admin UI" as
+# part of the ship envelope rather than splitting into two artefacts.
 #
 # Usage:
 #   scripts/check-binary-size.sh            # uses bin/dist/
@@ -14,7 +20,7 @@
 set -euo pipefail
 
 DIR="${1:-bin/dist}"
-LIMIT_MB="${RAILBASE_BIN_LIMIT_MB:-30}"
+LIMIT_MB="${RAILBASE_BIN_LIMIT_MB:-32}"
 
 if [[ ! -d "$DIR" ]]; then
     echo "✗ directory not found: $DIR"

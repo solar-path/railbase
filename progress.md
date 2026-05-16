@@ -6764,3 +6764,673 @@ The residual check is the subtle part: if Alice is in groups [Engineers, Admins]
 ### Honest completion
 
 Post v1.7.47: §3.2 Auth 15/16 (Phase A/B/C complete, devices+impersonation remain 📋 v1.1.x). Plan.md v1 scope **~99.9%** (~155/~155 line items + Enterprise SSO promoted from v1.1+). Remaining `📋` markers are deferred-by-design (А-block) or dependency-blocked (B-block) or v1.1+ (C-block) per the new §3.15 inventory.
+
+
+
+
+---
+
+---
+
+## v1.7.48 — Shopper feedback batch #1 (12 blockers + 16 papercuts from a real embedder)
+
+### Context
+
+External shopper-class embedder built ~5,500 LOC Go/TS atop Railbase
+and surfaced 28 friction points across two passes
+([feedback.md](file:///Users/work/apps/shopper/feedback.md)). Items
+range from a silent no-op (`GoHooks` lazy-init capturing nil Runtime)
+to ergonomic gaps (`internal/` services not exposed to embedder code,
+Stripe payment-intent metadata, embed_pg port collisions). This
+release closes 13 of them with code + tests, plus a localised admin
+SPA across 10 languages.
+
+### What
+
+#### #16 — `GoHooks()` lazy-init capturing nil Runtime
+
+The blocker. `app.GoHooks()` returned a registry that was wired into
+`hooks.Runtime` at Runtime-build time. If the embedder registered a
+hook BEFORE `Run()` (common in `OnBeforeServe`), the Runtime captured
+the registry pointer value before the embedder's `OnRecordBeforeCreate`
+landed → hook fired against an empty registry → silent no-op.
+
+- `pkg/railbase/app.go`: `ensureGoHooks()` helper called at the very
+  start of `Run()` so the registry is materialised BEFORE any user
+  callback runs. The accessor `GoHooks()` also calls `ensureGoHooks()`
+  for the test-only "build App without Run" path.
+- `gohooks_init_test.go` (2 tests): idempotent populate + pre-Run
+  registration survives `Run()` initialisation.
+
+#### Class A — Internal services exposure (Mailer / Stripe / Jobs / Realtime / Settings / Audit)
+
+7 services were constructed inside `Run()` but never published, forcing
+embedders to dig into `internal/` or rebuild equivalents. Now each has
+an accessor:
+
+- `app.Mailer() *mailer.Mailer`
+- `app.Stripe() *stripe.Service`
+- `app.Jobs() *jobs.Registry`
+- `app.Realtime() *realtime.Broker`
+- `app.Settings() *settings.Manager`
+- `app.Audit() *audit.Writer`
+
+Each backed by an `atomic.Pointer[T]` on the App struct, stored after
+the service is constructed inside `Run()`. Pre-`Run` getters return
+nil so a test embedder can detect "not ready" without a panic.
+
+- `services_exposure_test.go` (3 tests): nil-pre-Run + Store/Load
+  round-trip + race-free concurrent reads with publish.
+
+#### #19 — `ALTER TABLE … NOT NULL` without backfill ladder
+
+`migrate diff` for a new required column on a non-empty table emitted
+a single-line `ADD COLUMN … NOT NULL` that fails on the first existing
+row. Now emits the three-step pattern:
+
+```sql
+ALTER TABLE posts ADD COLUMN slug TEXT;
+UPDATE posts SET slug = /* TODO: backfill expression */ NULL WHERE slug IS NULL;
+ALTER TABLE posts ALTER COLUMN slug SET NOT NULL;
+```
+
+Exceptions (single-line ADD kept): `HasDefault`, `Computed!=""`,
+`Date+AutoCreate`, `SequentialCode`, `Status` with values, and
+nullable. `needsBackfillSplit()` in `internal/schema/gen/sql.go`.
+
+#### #2 — Reserved-keyword renames with suggestions
+
+Schema-DSL `field name "user" is a SQL reserved keyword` panic now
+suggests the canonical rename via a curated table (`user` → `customer`,
+`order` → `order_ref`, `group` → `team`, `primary` → `primary_id`,
+`select` → `selection`, …), plus a generic `_id` / `_ref` fallback
+with a docs link.
+
+- `internal/schema/builder/validate.go::reservedKeywordRenames`.
+
+#### #4 — Stripe PaymentIntent `metadata` passthrough
+
+`POST /api/stripe/payment-intents` now accepts an optional
+`metadata: map[string]string` so embedders can round-trip a domain
+`order_id` (or whatever) to Stripe and back via the webhook. Stripe's
+own limits enforced server-side (50 keys, 40-char keys, 500-char
+values). The reserved keys `railbase_kind` / `railbase_price_id`
+always overwrite caller entries (audit/correlation are non-negotiable).
+
+- `internal/stripe/service.go`: new `CheckoutOptions{Email, Name, Metadata}`
+  + `CreateCatalogPaymentWithOptions` / `CreateAdhocPaymentWithOptions`.
+- `internal/api/stripeapi/stripeapi.go`: handler reorder
+  auth → decode → metadata-validation → nil-service guard → thread Options.
+- `payment_intent_metadata_test.go` (5 tests).
+
+#### #5 / #6 / #27 — Embedded Postgres: port collisions + default tag
+
+Two parallel Railbase projects on one machine collided on `:54329`.
+Now:
+
+- `chooseEmbedPort(dataDir)` probe + persistence:
+  1. Sticky port from `<dataDir>/postgres/.port` if free.
+  2. `defaultEmbedPort` (54329) if free.
+  3. Scan window `[54330, 54429]` for the first free port.
+  4. Fail loudly with a fix-it message naming `RAILBASE_DSN`.
+- `internal/db/embedded/start_enabled.go` rewires `start()` to use the
+  chosen port.
+- `start_enabled_test.go` (4 tests, `embed_pg` build tag): sticky
+  choice, fallthrough when default taken, port-free probe, sticky-when-
+  available.
+- Scaffold gains `templates/basic/Makefile.tmpl` with
+  `TAGS_DEV ?= embed_pg` defaulted into `build`, `dev`, `migrate-diff`,
+  `migrate-up` — embedders running `make dev` on a fresh `railbase init`
+  immediately get the embedded-postgres path, no `-tags embed_pg`
+  knowledge required. `build-prod` keeps the tagless slim variant.
+- `scaffold_embed_pg_test.go` (3 tests): Makefile rendered + targets
+  carry the tag + projectName interpolation works.
+
+#### #28 — CSV strict-int + application-layer Number bounds
+
+CSV `price_cents` like `"19.99"` silently coerced to `0`. Now:
+
+- `internal/api/rest/queries.go::TypeNumber` does strict integer
+  parsing + checks against `f.Min` / `f.Max`.
+- `internal/schema/builder/spec.go::FieldSpec.Min/Max *float64` —
+  enforced at REST coercion time, not just SQL.
+- `queries_test.go` (+2): Int + Float bounds.
+
+#### #8 — Auth-collection error names the four common endpoints
+
+`POST /api/collections/users/records` against an auth collection used
+to return the cryptic `… use /api/collections/users/auth-* endpoints`.
+Now spells out `auth-signup`, `auth-with-password`, `auth-me`, and
+`auth-otp / auth-magic-link` inline. First-time integrators don't
+have to grep.
+
+- `auth_collection_error_test.go` (2 tests).
+
+#### #10 — `admin create` warns up-front when mailer is unconfigured
+
+Welcome email is enqueued best-effort but the operator running
+`admin create` on a fresh box wouldn't know it'd never deliver. Now
+prints a one-line note pointing at `mailer.from` / `--no-email`.
+
+- `mailerUnconfiguredFrom(g stringGetter)` pure helper.
+- `admin_emails_test.go` (5 tests): configured / empty /
+  explicit-skip / whitespace-from / errored-getter.
+
+#### #12 — `--railbase-source` validates path BEFORE writing go.mod
+
+`railbase init --railbase-source <bogus-path>` used to write the
+replace directive verbatim, then `go mod tidy` failed downstream with
+a non-obvious error. `validateRailbaseSource()` now checks: exists,
+is-a-directory, has go.mod, go.mod's `module` line is
+`github.com/railbase/railbase`. Each failure mode has its own
+targeted error pointing at the fix.
+
+- `init_railbase_source_test.go` (6 tests).
+
+#### #15 — Stripe admin config exposes structured `warnings[]`
+
+`GET /api/_admin/stripe/config` now includes a `warnings` array. The
+SPA's Stripe settings page can render a banner when
+`{code: "webhook_secret_missing", message: "…"}` is present. Detects
+two cases:
+
+1. `Enabled && !WebhookSecretSet` — webhook calls would 503; suggests
+   `stripe listen --forward-to localhost:8095/api/stripe/webhook`.
+2. `Enabled && !SecretKeySet` — outbound calls would fail.
+
+Pure `computeStripeWarnings(cfg)` so it's unit-testable.
+
+- `stripe_warnings_test.go` (5 tests).
+
+#### #23 — `_stripe_products.external_id` + partial unique index
+
+Embedder hand-rolled `INSERT … ON CONFLICT DO NOTHING` against
+`_stripe_products` had nothing to conflict on, so every product edit
+duplicated a row. Migration 0033 adds:
+
+```sql
+ALTER TABLE _stripe_products ADD COLUMN external_id TEXT;
+CREATE UNIQUE INDEX uniq__stripe_products_external_id
+    ON _stripe_products (external_id) WHERE external_id IS NOT NULL;
+```
+
+Partial unique index — Railbase-only rows (NULL external_id) stay
+unconstrained; embedder rows stamped with their own ID become
+idempotent.
+
+- `migrations_0033_test.go` (3 tests on FS-embedded migration shape).
+
+#### #1 — JS hooks docs alignment
+
+Scaffold's `pb_hooks/example.pb.js` shipped with `// v0.2: not yet
+executed`. The goja runtime has been shipping for releases.
+`example.pb.js` rewritten to use the actual current API
+(`$app.onRecordBeforeCreate("posts").bindFunc((e) => {...})`) with
+working trim + log examples. `docs/06-hooks.md` aligned: replaced
+legacy `onRecordCreate("col", ...)` syntax with the real one and added
+a status callout above the `$apis/$http/$os/...` binding list flagging
+those as roadmap entries.
+
+- `scaffold_jshooks_test.go` (2 tests): example parses + executes
+  in the real runtime; the stale comment can't regress.
+
+#### Admin SPA i18n: 10 locales × 1334 keys
+
+4 parallel general-purpose agents refactored ~36 screens to use
+`useT()`, depositing keyset JSON to `/tmp/i18n-batch-{A,B,C,D}.json`
+(577 + 234 + 197 + 197 = 1205 keys atop existing 129). All 5 sources
+merged into `admin/src/i18n/locales/en.json`. `scripts/i18n-translate.ts`
+(Bun, key-less googletrans endpoint, 150ms rate limit, placeholder
+shielding via `{x0}` tokens) generates `{zh,hi,es,fr,ar,bn,pt,ru,ur}.json`
+incrementally.
+
+### Cost
+
+- `go build ./...` + `go build -tags embed_pg ./...` both clean.
+- Admin bundle: 979 modules, 1.88s vite. Main 715.60 kB → 191.61 kB
+  gzip; `zh-*.js` lazy 51.19 kB / 21.90 kB gzip.
+- Railbase binary: ~32 MB darwin/arm64.
+- 28 new test cases across 9 packages.
+
+### Closed architectural questions
+
+- **Services exposure pattern**: direct concrete-typed accessors
+  (`*mailer.Mailer`) over interface shims. Go's cross-package method
+  calls on unexported package types from external code work fine —
+  same pattern hooks.GoHooks already uses. Shim packages
+  (`pkg/railbase/<service>`) can be added incrementally if specific
+  embedders need typed variables.
+- **Reserved-keyword handling**: improved error + curated suggestions
+  beats blanket identifier quoting. The latter would require an audit
+  across 10+ SQL generators and risks breaking custom SQL hooks.
+- **Embedded-pg dual binary**: scaffold ships with embed_pg by
+  default; `build-prod` is the explicit opt-out path for the slim
+  prod binary. Reverses the previous "tag-less default" stance —
+  the docs/06 path of least surprise wins.
+
+### Deferred
+
+- **Field-level `Public()` flag for AuthCollection**: shopper variant
+  of FEEDBACK #B2; covered in v1.7.49 at collection level. Field-level
+  granularity is a v1.8.x slice if embedders need it.
+- **Single-use download tokens** (#35 follow-up): current `dltoken`
+  package is stateless (60s TTL + path-scope HMAC). True single-use
+  needs a shared store (Redis or DB). Roadmap.
+- **`XLSXExportConfig.Format` honoured at write time**: spec stores
+  the mini-DSL but the XLSX writer ignores it. Custom handler atop
+  `pkg/railbase/export.NewXLSXWriter` is the workaround until v1.6.x
+  follow-up wires per-column styling.
+
+---
+
+---
+
+## v1.7.49 — Shopper round 4 + Blogger feedback batch (entity-docs, public profiles, signed downloads)
+
+### Context
+
+Two more feedback files landed:
+
+1. Shopper's 4th-pass review — 9 new items (#29–#37) after their
+   integration of XLSX/PDF export reached the per-entity invoice
+   case (the `.Export()` flat-table API wasn't enough).
+2. Blogger project (separate embedder, FT-class CMS) — 10 fresh
+   items (#B1–#B10) plus 2 architectural gaps (J: storage, K:
+   editorial DoA).
+
+Headline finding: **`migrate diff` silently missed
+`Collection ↔ AuthCollection` toggle** (#B1). The embedder switched
+`schema.Collection("authors") → schema.AuthCollection("authors")`,
+ran `migrate diff`, got "schema unchanged", and had to write the
+auth-injected-columns migration by hand.
+
+### What
+
+#### #B1 — `migrate diff` detects auth-flag toggle
+
+Auth-injected system columns (`email`, `password_hash`, `verified`,
+`token_key`, `last_login_at`) live on the `spec.Auth` flag rather
+than `spec.Fields`, so the per-field diff missed the change entirely.
+
+- `internal/schema/gen/diff.go::AuthToggle[]` new diff category.
+  `Compute()` records the transition when `prevColl.Auth !=
+  currColl.Auth`.
+- `internal/schema/gen/sql.go::AuthToggleSQL(coll, newState)` emits
+  the migration:
+  - **Toggle-on**: per-column three-step pattern (ADD nullable →
+    UPDATE backfill TODO → SET NOT NULL) for `email`/`password_hash`/
+    `token_key`; single-line ADD for `verified` (DEFAULT FALSE) and
+    `last_login_at` (NULL).
+  - **Toggle-off**: `DROP COLUMN IF EXISTS … CASCADE` × 5.
+- Header callout in the emitted SQL explains the backfill expectation
+  (password_hash specifically: operators typically use the standard
+  reset flow rather than backfilling).
+
+- `diff_auth_toggle_test.go` (4 tests): on-detected with full
+  three-step shape, off-detected with drops, stable no-change,
+  toggle-emission-before-added-fields ordering.
+
+#### #B5 / #B4 — env-aware dev cmd + embed-pg port override
+
+- `pkg/railbase/cli/dev.go::resolveDevAddr(flagDefault, flagChanged,
+  envValue)` enforces precedence:
+  explicit `--addr` > `$RAILBASE_HTTP_ADDR` > cobra default. The
+  blogger project's `.env` `:8096` no longer loses to the `:8095`
+  flag default.
+- `internal/db/embedded/start_enabled.go::chooseEmbedPortWithEnv`
+  short-circuits to the operator-specified `RAILBASE_EMBED_PG_PORT`
+  when present (range-validated 1..65535). Persists the choice to
+  `.port` so subsequent boots without the env stay sticky.
+
+- `dev_addr_test.go` (5 tests), `start_enabled_test.go` (+3 tests).
+
+#### #B7 — Optional URL/Email/Tel/Slug/Color/Text+Pattern CHECK accepts `''`
+
+JSON forms post empty strings (not `null`) for unset optional fields.
+CHECK regex used to reject `''`. Fix: `patternCheck(f, predicate)`
+wraps the regex in `(<col> = '' OR <predicate>)` when `!f.Required`.
+
+- `internal/schema/gen/sql.go::patternCheck` helper, used by Text/
+  Email/URL/Tel/Slug/Color/RichText paths.
+- `sql_empty_check_test.go` (7 tests).
+
+#### #B8 — Auth response includes custom profile fields
+
+`POST /api/collections/<n>/auth-with-password` used to return only
+system fields. Now merges in non-secret user-declared columns.
+
+- `internal/api/auth/auth.go::fetchAuthCustomFields` runs one extra
+  SELECT against `spec.Fields` (skipping M2M relations), returns
+  `map[colname]value`. `writeAuthResponse` merges, without overwriting
+  system fields (a custom column named `verified` can't clobber the
+  bool).
+- Graceful degradation on any error — the auth response stays
+  system-fields-only rather than failing sign-in.
+- `authCustomFieldNames(collName)` is the pure name-filter helper.
+
+- `auth_custom_fields_test.go` (5 tests).
+
+#### #B2 — `.PublicProfile()` opt-in read endpoint for AuthCollections
+
+Editorial/CMS bylines need anonymous read of `author.{name,
+avatar_url, bio}` without exposing email/password_hash. New collection
+flag:
+
+- `builder.CollectionSpec.PublicProfile bool` + `(*CollectionBuilder).PublicProfile()`.
+- `internal/api/rest/profiles_handler.go`:
+  - `GET /api/collections/{name}/profiles` — list
+  - `GET /api/collections/{name}/profiles/{id}` — single
+  - 404 on non-opted-in collections — same shape as missing-collection,
+    so probers can't enumerate which auth collections exist.
+  - Field set: `id` + user-declared fields (no email / password_hash /
+    token_key / verified / last_login_at / created / updated).
+
+- `profiles_handler_test.go` (8 tests).
+
+#### #B3 — Rule compile error includes lexer position
+
+`{"error":{"code":"internal","message":"rule compile failed"}}` swallowed
+the underlying lexer detail. The handler wraps with `%v` so the
+positioned message (`filter: at position N: unknown magic var
+"@request.auth.collection" (allowed: @request.auth.id, @me,
+@request.auth.collectionName)`) reaches the client.
+
+- 5 rule-compile sites in `internal/api/rest/handlers.go` updated.
+- `lexer_unknown_magic_test.go` (3 tests): asserts positioned error,
+  Error() string includes "position", correct magic var lexes cleanly.
+
+#### #B9 — `admin create` Long help with runnable examples
+
+The cobra `Use: "create <email>"` was technically clear but the
+blogger embedder still reached for `--email`. The new Long: prose
+explicitly calls out the POSITIONAL email arg and provides three
+runnable examples (interactive, scripted with `--password`, fresh-box
+with `--no-email`).
+
+- `admin_create_help_test.go` (2 tests).
+
+#### #B10 — `import data` documents Tags CSV array-literal shape
+
+`Tags` / `Relations` columns expect Postgres array literals
+(`{tag1,tag2}`), not comma-separated text. Long help now includes a
+column-type cheatsheet + an explicit example showing the brace shape.
+
+- `import_data_help_test.go` (2 tests).
+
+#### #29 — `.EntityDoc(...)` per-entity PDFs with relation expansion
+
+`.Export()` is flat-table only. The shopper invoice case (one order +
+N order_items + totals) required ~250 LOC of hand-rolled gopdf. New
+schema-declarative path:
+
+```go
+schema.Collection("orders").
+    Field("contact_email", schema.Email().Required()).
+    EntityDoc(schema.EntityDocConfig{
+        Name:     "invoice",
+        Template: "invoice.md",
+        Title:    "Invoice",
+        Related: map[string]schema.RelatedSpec{
+            "items": {
+                Collection:   "order_items",
+                ChildColumn:  "order_ref",
+                ParentColumn: "id",
+                OrderBy:      "created ASC",
+                Limit:        500,
+            },
+        },
+    })
+```
+
+Mounts `GET /api/collections/orders/{id}/invoice.pdf`. The template
+receives `{Record, Related: {items: [...]}, Now, Tenant}` and renders
+via the same Markdown engine `.Export(...)` uses.
+
+- `internal/schema/builder/spec.go::EntityDocConfig` + `RelatedSpec`.
+- `internal/schema/builder/collection.go::(*CollectionBuilder).EntityDoc`.
+- `internal/api/rest/entity_doc_handler.go::MountEntityDocs` walks
+  the registry on Mount and registers one route per (collection, doc).
+- `entity_doc_test.go` (3 tests): builder round-trip, multiple docs
+  per collection, defaults for RelatedSpec.
+
+**Known gap**: the handler does `SELECT * FROM <coll> WHERE id = $1`
+without applying the collection's ViewRule. An invoice with
+`viewRule = "@request.auth.id = customer"` will NOT 403 non-owners
+today. Tracked for v1.6.x — embedders requiring per-entity RBAC right
+now should wrap the handler with their own auth check via
+`OnBeforeServe`.
+
+#### #30 / #31 — `pkg/railbase/export` re-export + `DefaultFont()`
+
+`internal/export.{NewPDFWriter, NewXLSXWriter, RenderMarkdownToPDF}`
+were unreachable from userland — every embedder writing per-entity
+documents ended up rebuilding the same gopdf wrapper. The shopper
+even copied the 170 KB Roboto Regular TTF into their own binary just
+to call `pdf.AddTTFFontData` with matching font bytes.
+
+- `pkg/railbase/export/export.go` — type aliases for `PDFConfig`,
+  `PDFColumn`, `PDFWriter`, `Column`, `XLSXWriter` + function wrappers
+  for `NewPDFWriter`, `NewXLSXWriter`, `RenderMarkdownToPDF`.
+- `internal/export/pdf.go::DefaultFont() []byte` + `DefaultFontName`
+  constant — returns a defensive copy so a caller can't corrupt the
+  package-level buffer.
+
+- `export_test.go` (6 tests): PDF round-trip, table round-trip,
+  defensive-copy of font, font-name stability, XLSX round-trip,
+  Markdown→PDF round-trip.
+
+#### #33 / #34 — `currency` + `str` template helpers
+
+Shopper hit two papercuts in Markdown templates:
+
+1. `{{ slice .id 0 8 }}` failed because `.id` is `interface{}`, not
+   `string`. Solution: `str` helper coerces any value to its string
+   form. Usage: `{{ slice (str .id) 0 8 }}` → `fec43944`.
+2. `money` was a USD-prefixing stub. Real currency formatting needed
+   for "₽ 1,234.50". Solution: `currency` helper takes integer
+   minor-units + ISO-4217 code, supports USD/EUR/GBP/RUB/JPY/CNY/INR,
+   falls back to `XYZ 1,234.50` for unknown codes. `money` kept as
+   USD-defaulted shortcut.
+
+- `internal/export/templates.go::fnCurrency, fnStr, currencySymbol,
+  groupThousands, toInt64`.
+- `templates_helpers_test.go` (13 tests).
+
+#### #35 — Short-lived path-scoped download tokens
+
+`<a href="…?token={authToken}" download>` leaks the full session token
+to browser history / nginx access logs / shared URLs. New stateless
+primitive:
+
+- `internal/auth/dltoken` — HMAC-SHA-256(secret, path|expiry-unix) +
+  base64-url. `Sign(secret, path, opts)` returns
+  `{token, expiry_time}`. `Verify(secret, path, token)` returns nil /
+  `ErrExpired` / `ErrInvalid`. Constant-time HMAC compare.
+- Defaults: 60s TTL, 5min hard cap. Validation order: HMAC compare
+  before expiry check, so a wrong-signature probe can't distinguish
+  "expired" from "tampered" via the response.
+- `pkg/railbase/dltoken/dltoken.go` re-export (type aliases + sentinel
+  errors + constants).
+
+Usage pattern for embedders:
+
+```go
+r.Post("/api/exports/sign", func(w http.ResponseWriter, r *http.Request) {
+    // ... authenticate normally ...
+    path := r.URL.Query().Get("path")
+    tok, exp, _ := dltoken.Sign(app.Secret().HMAC(), path, dltoken.SignOptions{})
+    json.NewEncoder(w).Encode(map[string]any{
+        "download_url": path + "?dt=" + tok,
+        "expires_at":   exp,
+    })
+})
+```
+
+- `dltoken_test.go` (10 tests) + `pkg/dltoken_test.go` (3 tests).
+
+#### #36 — Content-Disposition timestamp (pinned)
+
+`export.go` already produced `orders-20260516-143045.xlsx` filenames
+at all three sites. Shopper's "orders.xlsx, then orders (1).xlsx"
+symptom was an SPA-side `<a download="orders.xlsx">` override. Pinned
+the server behaviour with `export_filename_test.go` (3 tests) so a
+refactor can't silently drop the timestamp.
+
+#### #37 — `XLSXExportConfig.Format` docs aligned with reality
+
+`docs/08-generation.md` advertised a `schema.CellFormat` /
+`schema.DateFormat(...)` / `schema.CurrencyFormat(...)` mini-DSL that
+doesn't exist. The actual `Format` field is `map[string]string` and
+isn't applied at write time (stored only, v1.6.x roadmap). Doc
+rewritten to reflect this honestly and point at `currency` template
+helper for the immediate need.
+
+### Cost
+
+- `go build ./...` + `go build -tags embed_pg ./...` both clean.
+- 74 new test cases across 12 packages: auth, rest, gen, builder,
+  cli, filter, export, pkg/export, dltoken (×2), embedded, sys.
+- No bundle / binary size delta (no SPA changes this slice).
+
+### Closed architectural questions
+
+- **Auth-toggle migration**: emit the three-step pattern verbatim
+  rather than silently auto-backfilling password hashes. Operators
+  hash via the standard reset flow.
+- **`.EntityDoc()` RBAC scope**: parent collection's ViewRule should
+  gate access. Current handler doesn't yet thread it — known gap, not
+  a design statement. v1.6.x follow-up.
+- **`dltoken` single-use**: rejected for stateless ship. Replay window
+  is 60s + path-scoped — the threat model "attacker intercepts URL,
+  uses it 50 times in 60s" doesn't add up vs the simplicity win. True
+  single-use returns when a shared store lands.
+- **Public profile field selection**: collection-level opt-in only.
+  Field-level marking (e.g. `.Public()` per field) is a v1.8.x slice
+  if embedders need it; meanwhile a private subset goes in a separate
+  non-auth collection.
+
+### Deferred
+
+- **`.EntityDoc()` ViewRule integration**: ~~tracked. Handler currently
+  bypasses RBAC; embedders compose their own check until then.~~
+  **CLOSED in v1.7.50** (see below).
+- **`dltoken` single-use semantics**: needs storage. v1.x bonus.
+- **`XLSXExportConfig.Format` applied at write time**: spec stored
+  but writer ignores it. v1.6.x.
+- **Blogger #J (storage) + #K (editorial approval / DoA)**: both
+  architectural-scope, not papercuts. Blogger left them deferred
+  (storage = "external URLs by design for the demo"; DoA = "minimum
+  editorial workflow specced in their feedback.md §K").
+
+---
+
+## v1.7.50 — `.EntityDoc()` ViewRule honoured (close v1.7.49 deferred item)
+
+### Context
+
+The v1.7.49 batch landed `.EntityDoc(...)` but left one acknowledged
+gap: the per-entity PDF handler ran a bare `SELECT * FROM <table>
+WHERE id = $1` with no ViewRule, no tenant scoping, no soft-delete
+filter. The doc-comment at the top of `entity_doc_handler.go`
+**claimed** ViewRule was applied — "an owner-only invoice rule like
+`@request.auth.id = customer` still produces a 403 to non-owners" —
+which was a lie. The handler bypassed the rule entirely, so anyone
+holding an invoice UUID could fetch the rendered PDF.
+
+That's a real RBAC bypass, not a papercut. Closing it now rather
+than letting the v1.6.x label drift.
+
+### What
+
+#### `loadEntityDocParent` delegates to the standard read pipeline
+
+`internal/api/rest/entity_doc_handler.go::loadEntityDocParent` now
+takes `*http.Request` (was `context.Context`) and goes through the
+exact same chain `viewHandler` uses:
+
+```go
+fctx := filterCtx(authmw.PrincipalFrom(ctx))
+extras, _ := composeRowExtras(ctx, spec, fctx, spec.Rules.View, 2)
+sql, args := buildViewOpts(spec, id.String(), extras.Where, extras.Args, false)
+q, _ := d.queryFor(ctx, spec)
+rows, _ := q.Query(ctx, sql, args...)
+row, _ := scanRow(rows, spec)
+```
+
+Four wins from one refactor (was four separate bugs):
+
+1. **ViewRule applied** — main fix; the rule is compiled into the
+   WHERE clause with auth/magic-var placeholders bound.
+2. **Tenant scoping** — was bypassed entirely; tenant collections
+   now require `X-Tenant` header for the per-entity route, same as
+   GET-one.
+3. **Soft-delete filter** — tombstoned rows no longer return PDFs.
+4. **Tenant-scoped connection** — uses `d.queryFor(ctx, spec)` which
+   pulls the per-request connection with `railbase.tenant` set, so
+   RLS passes in production (non-superuser) deployments.
+
+Existence-hiding contract preserved: a row that exists but is
+filtered out by ViewRule returns **404**, not 403 — same as
+`viewHandler`. Leaking 403-vs-404 would betray that the row exists.
+
+#### Doc-comment rewritten to match reality
+
+The old comment lied about behaviour (claimed ViewRule + 403). New
+comment states the actual contract (ViewRule + 404, soft-delete,
+tenant) and includes a history paragraph about the pre-v1.7.50 bug
+so future readers don't strip the delegation and reintroduce the
+bypass.
+
+### Tests
+
+`internal/api/rest/entity_doc_test.go::TestEntityDoc_ViewRuleApplied`
+(new) — uses a `captureQuerier pgQuerier` that records the SQL +
+args of the first `Query` call. Registers `orders` with
+`.ViewRule("customer = @request.auth.id").EntityDoc(...)`, builds an
+authenticated request, invokes `loadEntityDocParent`, asserts:
+
+1. `id = $1` row-id binding present
+2. `customer = $N` ViewRule fragment present (proves the rule
+   reaches SQL — would fail with the pre-fix bare SELECT)
+3. Auth UUID is in the bound args
+4. Row id is `args[0]`
+
+Future refactor that drops the delegation chain fails this test
+with the exact "ViewRule appears to skip the ViewRule" diagnostic.
+
+### Docs
+
+- `docs/08-generation.md` §7 — "RBAC (известный gap)" callout
+  replaced with the v1.7.50+ "RBAC" section explaining the
+  composeRowExtras delegation, the 404-not-403 contract, and the
+  pre-v1.7.50 history (quoted) so the deferred-item record stays in
+  the corpus.
+
+### Cost
+
+- `go build ./...` + `go vet ./...` both clean.
+- `go test ./internal/api/rest/...` green (existing 3 EntityDoc
+  tests + 1 new = 4 EntityDoc tests, plus the full rest package).
+- One new test file, one new test case (uses a `captureQuerier`
+  fake — single-use, query-only — to verify SQL without spinning up
+  Postgres).
+- No SPA / binary size delta.
+
+### Closed architectural questions
+
+- **403 vs 404 on ViewRule rejection in `.EntityDoc()` routes**:
+  matches `viewHandler` — 404, no existence leak. The pre-fix
+  doc-comment proposed 403; the implementation now matches the
+  existing repo-wide convention.
+- **Tenant-header requirement for per-entity PDFs on tenant
+  collections**: required (via `queryFor`). Was silently bypassed
+  pre-v1.7.50. Tenant-scoped invoices now refuse to render without
+  `X-Tenant`, matching every other tenant-collection route.
+
+### Deferred
+
+- **Browser-flow e2e for the RBAC fix**: unit-level
+  `captureQuerier` test covers the SQL wiring. End-to-end "register
+  owner A, owner B fetches invoice, gets 404" goes against the
+  embedded-pg harness in `*_e2e_test.go` — added if the v1.x bonus
+  track needs heavier assurance.

@@ -4,7 +4,7 @@ End-to-end tests для каждого major feature. Должны проход�
 
 ## Smoke tests
 
-1. **Build & cross-compile**: `goreleaser build --snapshot --clean` — артефакты для linux/darwin/windows × amd64/arm64, размер каждого ≤ 30 MB
+1. **Build & cross-compile**: `goreleaser build --snapshot --clean` — артефакты для linux/darwin/windows × amd64/arm64, размер каждого ≤ 32 MB (ceiling был 30 MB до v1.7.47; v1.7.48 поднял на 2 MB под 9-локальные lazy-чанки admin SPA)
 2. **5-minute smoke**: `railbase init demo --template basic && cd demo && railbase serve` — admin UI работает, REST + realtime + SDK работают
 3. **PB drop-in compat**: PB JS SDK против Railbase в `RAILBASE_PBCOMPAT=strict` — работает без изменений
 4. **PB import**: `railbase import schema --from-pb http://...` — миграции, коллекции, базовые hooks портированы

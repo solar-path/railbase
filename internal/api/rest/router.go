@@ -65,6 +65,13 @@ func MountWithAudit(r chi.Router, pool pgQuerier, log *slog.Logger, hooksRT *hoo
 		r.Post("/{id}/restore", d.restoreHandler)
 	})
 
+	// FEEDBACK #B2 — read-only public profiles for AuthCollections
+	// opted in via .PublicProfile(). Returns only the non-secret
+	// user-declared fields, never password_hash / token_key / email.
+	// 404 on non-opted-in collections so probers can't enumerate.
+	r.Get("/api/collections/{name}/profiles", d.publicProfileListHandler)
+	r.Get("/api/collections/{name}/profiles/{id}", d.publicProfileGetHandler)
+
 	// v1.6.0 XLSX export. Sync only — async/.Export()/JS-hook surface
 	// lands in v1.6.x follow-ups. ListRule is reused for RBAC (anyone
 	// who can list can export), so this route shares the same access
@@ -78,4 +85,10 @@ func MountWithAudit(r chi.Router, pool pgQuerier, log *slog.Logger, hooksRT *hoo
 	if fd != nil {
 		MountFiles(r, d, fd)
 	}
+
+	// FEEDBACK #29 — per-entity PDF documents declared via
+	// `.EntityDoc(...)` in the schema DSL. Mounted last so the more-
+	// specific `/{id}/{doc}.pdf` route is tested after the generic
+	// `/records/{id}` patterns.
+	MountEntityDocs(r, d)
 }
