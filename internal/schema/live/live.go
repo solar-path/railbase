@@ -39,18 +39,36 @@ import (
 	"github.com/railbase/railbase/internal/schema/registry"
 )
 
+// CreateOptions configures Create-time behaviour. Used to opt into
+// the auth-collection path (FEEDBACK loadtest #7 — was previously
+// blocked unconditionally).
+type CreateOptions struct {
+	// AuthConfirmIrreversible is required to create an auth collection
+	// via this path. When false and spec.Auth=true, Create rejects.
+	// Forcing the explicit flag prevents accidental auth-table creation
+	// (auth tables wire into session/token/2FA flows; once rows exist
+	// the operator can't easily downgrade to non-auth without data
+	// migration).
+	AuthConfirmIrreversible bool
+}
+
 // Create provisions a brand-new admin-managed collection: it runs the
 // CREATE TABLE DDL, persists the spec to _admin_collections, and — on
 // a clean commit — registers it so CRUD handlers pick it up
 // immediately.
 //
-// Rejected: names already in the registry (code-defined or another
-// live collection), auth collections (auth needs session/token wiring
-// the DDL alone can't provide), and anything that fails the standard
-// builder validation.
+// Rejected: names already in the registry, anything failing builder
+// validation, and auth collections without an explicit confirm flag.
 func Create(ctx context.Context, pool *pgxpool.Pool, spec builder.CollectionSpec) error {
-	if spec.Auth {
-		return fmt.Errorf("auth collections cannot be created from the admin UI — declare them in code")
+	return CreateWithOptions(ctx, pool, spec, CreateOptions{})
+}
+
+// CreateWithOptions is Create + the new CreateOptions surface.
+// FEEDBACK loadtest #7 — auth collections through the REST admin API
+// are now allowed via {auth: true, confirm_irreversible: true}.
+func CreateWithOptions(ctx context.Context, pool *pgxpool.Pool, spec builder.CollectionSpec, opts CreateOptions) error {
+	if spec.Auth && !opts.AuthConfirmIrreversible {
+		return fmt.Errorf("auth collections require explicit confirmation — set confirm_irreversible=true in the request body (once data exists, auth wiring is hard to roll back)")
 	}
 	b := builder.FromSpec(spec)
 	if err := b.Validate(); err != nil {

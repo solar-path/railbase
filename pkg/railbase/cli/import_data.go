@@ -31,13 +31,17 @@ package cli
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 
 	"github.com/railbase/railbase/internal/db/migrate"
@@ -60,14 +64,21 @@ type importDataOptions struct {
 // runImportData drives the full import pipeline. The function is split
 // out from RunE so tests can exercise it without going through cobra.
 func runImportData(cmd *cobra.Command, collectionName string, opts importDataOptions) error {
-	// 1. Resolve the collection. registry.Get returns nil for unknown
-	//    names; we error before opening the DB so the operator gets a
-	//    fast "you typed the wrong name" signal.
-	cb := registry.Get(collectionName)
-	if cb == nil {
-		return fmt.Errorf("unknown collection %q (run `railbase migrate status` to list registered collections)", collectionName)
+	// 1. Resolve the collection. Static registry is tried first; on
+	//    miss we defer to the dynamic store inside _admin_collections
+	//    once the DB is open (see step 4a). FEEDBACK loadtest #3 — was
+	//    previously a hard error for dynamic collections, forcing
+	//    operators to use raw `psql \COPY`.
+	var spec builder.CollectionSpec
+	var dynamicLookupNeeded bool
+	if cb := registry.Get(collectionName); cb != nil {
+		spec = cb.Spec()
+	} else {
+		dynamicLookupNeeded = true
+		// Defer the actual lookup until after the runtime is up. The
+		// header validation depends on spec, so we skip it for the
+		// dynamic path and re-do it after the DB lookup.
 	}
-	spec := cb.Spec()
 
 	// 2. Open the file with gzip auto-detection. Reader is closed on
 	//    function exit regardless of which path we go down.
@@ -112,13 +123,10 @@ func runImportData(cmd *cobra.Command, collectionName string, opts importDataOpt
 	if err != nil {
 		return err
 	}
-	if err := validateColumnsAgainstSpec(spec, cols); err != nil {
-		return err
-	}
 
 	// 4. Open the runtime (pool + embedded PG + sys migrations). We
-	//    do this AFTER validation so a bad CSV file doesn't waste 12s
-	//    of embedded-PG boot.
+	//    do this AFTER reading the file so a bad CSV file doesn't waste
+	//    12s of embedded-PG boot.
 	rt, err := openRuntime(cmd.Context())
 	if err != nil {
 		return err
@@ -130,6 +138,23 @@ func runImportData(cmd *cobra.Command, collectionName string, opts importDataOpt
 	}
 	if err := (&migrate.Runner{Pool: rt.pool.Pool, Log: rt.log}).Apply(cmd.Context(), sys); err != nil {
 		return fmt.Errorf("apply system migrations: %w", err)
+	}
+
+	// 4a. Dynamic collection lookup (FEEDBACK loadtest #3). The
+	//     `_admin_collections` table is sys-migration-managed, so it
+	//     exists right after the Apply above.
+	if dynamicLookupNeeded {
+		dynSpec, err := loadDynamicSpecFromPool(cmd.Context(), rt.pool.Pool, collectionName)
+		if err != nil {
+			return err
+		}
+		if dynSpec == nil {
+			return fmt.Errorf("unknown collection %q (not in static registry nor in _admin_collections — POST /api/_admin/collections to define one)", collectionName)
+		}
+		spec = *dynSpec
+	}
+	if err := validateColumnsAgainstSpec(spec, cols); err != nil {
+		return err
 	}
 
 	// 5. Run COPY FROM STDIN. We acquire one connection from the pool,
@@ -263,4 +288,29 @@ func buildCopySQL(table string, cols []string, opts importDataOptions) string {
 // user-supplied strings unescaped.
 func pgQuoteLiteral(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// loadDynamicSpecFromPool reads a runtime-defined collection from
+// _admin_collections using an already-open pool. Used as fallback
+// when the static Go-side registry doesn't know about a collection.
+//
+// FEEDBACK loadtest #3 — `import data` was previously blind to
+// dynamic collections, forcing operators into raw `psql \COPY`.
+//
+// Returns (nil, nil) when the row is missing — caller maps to the
+// "unknown collection" error.
+func loadDynamicSpecFromPool(ctx context.Context, p *pgxpool.Pool, name string) (*builder.CollectionSpec, error) {
+	var raw []byte
+	row := p.QueryRow(ctx, `SELECT spec FROM _admin_collections WHERE name = $1`, name)
+	if err := row.Scan(&raw); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query _admin_collections: %w", err)
+	}
+	var spec builder.CollectionSpec
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		return nil, fmt.Errorf("decode _admin_collections.spec for %q: %w", name, err)
+	}
+	return &spec, nil
 }

@@ -711,11 +711,12 @@ func (a *App) Run(ctx context.Context) error {
 	// FEEDBACK.md G2 — the scaffolded railbase.yaml `db.pool:` block
 	// is now actually honoured instead of warning at boot.
 	p, err := pool.New(ctx, pool.Config{
-		DSN:             dsn,
-		MaxConns:        a.cfg.DBMaxConns,
-		MinConns:        a.cfg.DBMinConns,
-		MaxConnLifetime: a.cfg.DBMaxConnLifetime,
-		MaxConnIdleTime: a.cfg.DBMaxConnIdleTime,
+		DSN:              dsn,
+		MaxConns:         a.cfg.DBMaxConns,
+		MinConns:         a.cfg.DBMinConns,
+		MaxConnLifetime:  a.cfg.DBMaxConnLifetime,
+		MaxConnIdleTime:  a.cfg.DBMaxConnIdleTime,
+		StatementTimeout: a.cfg.DBStatementTimeout,
 	}, a.log)
 	if err != nil {
 		return fmt.Errorf("db pool: %w", err)
@@ -1742,6 +1743,12 @@ func (a *App) Run(ctx context.Context) error {
 			// lifecycle with the audit log.
 			Audit: auditWriter,
 		})
+
+		// FEEDBACK shopper N5 — built-in download-token signer.
+		// Mounted inside the auth group so callers need a session;
+		// the issued tokens are short-lived (60s default, 5m max) and
+		// path-scoped.
+		rest.MountExportsSign(r, masterKey[:])
 
 		// v1.5.3 notifications: /api/notifications/* CRUD + preferences.
 		// Sender API (`internal/notifications.Service`) is wired separately

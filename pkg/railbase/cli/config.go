@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -60,19 +61,52 @@ func newConfigGetCmd() *cobra.Command {
 }
 
 func newConfigSetCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "set <key> <json-value>",
-		Short: "Write a runtime setting. Value must be valid JSON.",
-		Args:  cobra.ExactArgs(2),
+	var rawString bool
+	cmd := &cobra.Command{
+		Use:   "set <key> <value>",
+		Short: "Write a runtime setting. Value is JSON by default; --string treats it as a literal string.",
+		Long: strings.TrimSpace(`
+Set a runtime configuration value.
+
+By default the <value> argument is parsed as JSON:
+  railbase config set mailer.smtp.port 587            # number
+  railbase config set mailer.smtp.host '"localhost"'  # string (needs JSON quotes)
+  railbase config set mailer.cc '["a@x","b@x"]'       # array
+  railbase config set mailer.tls true                 # bool
+
+If JSON parsing fails AND the value doesn't begin with one of the
+JSON-significant characters ({, [, ", -, digit, t, f, n), the value
+is treated as a literal string (FEEDBACK shopper #11). So the most
+common case — a string setting — works without shell-quoting gymnastics:
+  railbase config set mailer.smtp.host localhost
+
+Pass --string to force string interpretation even when the value would
+otherwise parse as valid JSON (e.g. setting a key to the literal
+string "true").
+`),
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mgr, cleanup, err := openSettingsManager(cmd)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
+			val := args[1]
 			var v any
-			if err := json.Unmarshal([]byte(args[1]), &v); err != nil {
-				return fmt.Errorf("config: value must be JSON: %w", err)
+			if rawString {
+				v = val
+			} else {
+				// Try JSON first. If JSON fails AND the value clearly
+				// isn't trying to be JSON (no leading {, [, ", -, digit,
+				// t, f, n), fall back to literal string. This makes the
+				// common case (string settings) painless without losing
+				// the JSON power-mode.
+				if err := json.Unmarshal([]byte(val), &v); err != nil {
+					if looksLikeJSONStart(val) {
+						return fmt.Errorf("config: value must be JSON (use --string for literal): %w", err)
+					}
+					v = val
+				}
 			}
 			if err := mgr.Set(cmd.Context(), args[0], v); err != nil {
 				return err
@@ -81,6 +115,32 @@ func newConfigSetCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&rawString, "string", false,
+		"Treat <value> as a literal string (skip JSON parsing).")
+	return cmd
+}
+
+// looksLikeJSONStart reports whether the value's first non-space byte
+// matches a JSON-document start. Used by `config set` to decide
+// whether a JSON parse failure is the operator's typo (return error)
+// or a plain-text setting (silently accept). FEEDBACK shopper #11.
+func looksLikeJSONStart(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	switch s[0] {
+	case '{', '[', '"', '-':
+		return true
+	}
+	if s[0] >= '0' && s[0] <= '9' {
+		return true
+	}
+	switch s {
+	case "true", "false", "null":
+		return true
+	}
+	return false
 }
 
 func newConfigDeleteCmd() *cobra.Command {

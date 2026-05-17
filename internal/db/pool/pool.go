@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -24,6 +25,8 @@ const (
 	defaultMaxConnLifetime   time.Duration = 1 * time.Hour
 	defaultMaxConnIdleTime   time.Duration = 30 * time.Minute
 	defaultHealthCheckPeriod time.Duration = 1 * time.Minute
+	// FEEDBACK loadtest #3 — see Config.StatementTimeout doc.
+	defaultStatementTimeout  time.Duration = 30 * time.Second
 )
 
 // defaultMaxConns returns max(4, GOMAXPROCS*2). docs/03 spec.
@@ -44,6 +47,17 @@ type Config struct {
 	MaxConnLifetime   time.Duration
 	MaxConnIdleTime   time.Duration
 	HealthCheckPeriod time.Duration
+
+	// StatementTimeout — FEEDBACK loadtest #3 — server-side ceiling
+	// on individual statement runtime, applied at session-init via
+	// `SET statement_timeout` in AfterConnect. Default 30s. Zero
+	// disables (matches Postgres default of "no limit"). A single
+	// slow LIST query at 5s × 300 concurrent requests no longer
+	// blocks the pool — connections clear in bounded time.
+	//
+	// Tighter per-route timeouts can still be set via `SET LOCAL` in
+	// the handler tx.
+	StatementTimeout time.Duration
 }
 
 // withDefaults fills in zero-valued fields from the docs/03 spec.
@@ -63,6 +77,16 @@ func (c Config) withDefaults() Config {
 	}
 	if c.HealthCheckPeriod <= 0 {
 		c.HealthCheckPeriod = defaultHealthCheckPeriod
+	}
+	// StatementTimeout: zero → default 30s; negative → "disable"
+	// sentinel (env RAILBASE_DB_STATEMENT_TIMEOUT=off threads -1 here).
+	// We convert negative to zero before pgx receives it so the
+	// AfterConnect hook below skips applying the SET entirely.
+	if c.StatementTimeout == 0 {
+		c.StatementTimeout = defaultStatementTimeout
+	}
+	if c.StatementTimeout < 0 {
+		c.StatementTimeout = 0
 	}
 	return c
 }
@@ -94,6 +118,26 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Pool, error) {
 	pgxCfg.MaxConnIdleTime = cfg.MaxConnIdleTime
 	pgxCfg.HealthCheckPeriod = cfg.HealthCheckPeriod
 
+	// FEEDBACK loadtest #3 — apply statement_timeout in AfterConnect
+	// so every connection in the pool comes out of the gate with a
+	// bounded query ceiling. Bypasses are still possible via
+	// `SET LOCAL statement_timeout = 0` inside a tx (used by long-
+	// running maintenance jobs).
+	if cfg.StatementTimeout > 0 {
+		timeoutMS := int64(cfg.StatementTimeout / time.Millisecond)
+		afterConnect := pgxCfg.AfterConnect
+		pgxCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+			if afterConnect != nil {
+				if err := afterConnect(ctx, conn); err != nil {
+					return err
+				}
+			}
+			_, err := conn.Exec(ctx,
+				fmt.Sprintf("SET statement_timeout = %d", timeoutMS))
+			return err
+		}
+	}
+
 	p, err := pgxpool.NewWithConfig(ctx, pgxCfg)
 	if err != nil {
 		return nil, fmt.Errorf("pool: create: %w", err)
@@ -110,6 +154,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Pool, error) {
 		"max_conn_lifetime", pgxCfg.MaxConnLifetime,
 		"max_conn_idle_time", pgxCfg.MaxConnIdleTime,
 		"health_check_period", pgxCfg.HealthCheckPeriod,
+		"statement_timeout", cfg.StatementTimeout,
 	)
 	return &Pool{Pool: p, log: log}, nil
 }

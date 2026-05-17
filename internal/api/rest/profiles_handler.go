@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -74,6 +75,17 @@ func quoteColumns(cols []string) string {
 }
 
 // publicProfileListHandler — GET /api/collections/{name}/profiles
+//
+// FEEDBACK blogger N1/N2 — accepts the same page/perPage/sort that
+// /records does and emits the same response envelope shape (page,
+// perPage, totalItems, totalPages, items). Filter is intentionally
+// NOT supported here: the profile surface is meant to be a
+// publicly-readable directory, not a filtered query target — embedders
+// who need filtering should expose a regular collection endpoint with
+// a ListRule.
+//
+// Legacy "count" field is retained alongside the new fields so existing
+// clients keep working through a transition window.
 func (d *handlerDeps) publicProfileListHandler(w http.ResponseWriter, r *http.Request) {
 	spec, err := publicProfileSpec(chi.URLParam(r, "name"))
 	if err != nil {
@@ -81,12 +93,35 @@ func (d *handlerDeps) publicProfileListHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 	cols := publicProfileColumns(spec)
-	// Plain LIST — no pagination, no filter. Auth-collection profile
-	// directories are typically small (10s-100s of rows) and embedders
-	// can wire their own paginator atop if needed.
-	q := fmt.Sprintf("SELECT %s FROM %s ORDER BY id ASC LIMIT 1000",
+
+	// Parse pagination — mirror the /records handler bounds.
+	uq := r.URL.Query()
+	page, _ := strconv.Atoi(uq.Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	perPage, _ := strconv.Atoi(uq.Get("perPage"))
+	if perPage <= 0 {
+		perPage = defaultPerPage
+	}
+	if perPage > maxPerPage {
+		perPage = maxPerPage
+	}
+	offset := (page - 1) * perPage
+
+	// totalItems via COUNT — profile tables are typically small (10s
+	// to low 1000s) so the cost is bounded. Embedders with large
+	// auth tables shouldn't use /profiles directly anyway.
+	var total int64
+	if err := d.pool.QueryRow(r.Context(),
+		fmt.Sprintf("SELECT COUNT(*) FROM %s", spec.Name)).Scan(&total); err != nil {
+		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "count profiles"))
+		return
+	}
+
+	q := fmt.Sprintf("SELECT %s FROM %s ORDER BY id ASC LIMIT $1 OFFSET $2",
 		quoteColumns(cols), spec.Name)
-	rows, err := d.pool.Query(r.Context(), q)
+	rows, err := d.pool.Query(r.Context(), q, perPage, offset)
 	if err != nil {
 		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "query profile list"))
 		return
@@ -107,9 +142,21 @@ func (d *handlerDeps) publicProfileListHandler(w http.ResponseWriter, r *http.Re
 		}
 		items = append(items, out)
 	}
+
+	totalPages := int64(0)
+	if perPage > 0 {
+		totalPages = (total + int64(perPage) - 1) / int64(perPage)
+	}
 	writeProfileJSON(w, map[string]any{
-		"items": items,
-		"count": len(items),
+		"page":       page,
+		"perPage":    perPage,
+		"totalItems": total,
+		"totalPages": totalPages,
+		"items":      items,
+		// Legacy field — number of items in this page. Same value as
+		// `len(items)`; preserved so consumers using `{count, items}`
+		// (pre-v0.6) keep working without changes.
+		"count":      len(items),
 	})
 }
 

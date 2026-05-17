@@ -150,7 +150,11 @@ a --email flag. The shape above is what the binary actually accepts.`,
 }
 
 func newAdminListCmd() *cobra.Command {
-	return &cobra.Command{
+	// FEEDBACK loadtest #15 — skip the migrations check on read-only
+	// list invocations. The check adds ~150ms per call which makes
+	// CI scripts that loop `admin list` significantly slower.
+	var skipMigrate bool
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List system administrators",
 		Args:  cobra.NoArgs,
@@ -160,8 +164,10 @@ func newAdminListCmd() *cobra.Command {
 				return err
 			}
 			defer rt.cleanup()
-			if err := applySysMigrations(cmd.Context(), rt); err != nil {
-				return err
+			if !skipMigrate {
+				if err := applySysMigrations(cmd.Context(), rt); err != nil {
+					return err
+				}
 			}
 
 			store := admins.NewStore(rt.pool.Pool)
@@ -181,6 +187,9 @@ func newAdminListCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&skipMigrate, "skip-migrate-check", false,
+		"Skip the up-to-date migrations check (saves ~150ms per call; safe for read-only invocations).")
+	return cmd
 }
 
 func newAdminDeleteCmd() *cobra.Command {

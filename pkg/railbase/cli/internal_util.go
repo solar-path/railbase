@@ -60,7 +60,19 @@ func openRuntime(ctx context.Context) (*runtimeContext, error) {
 		})
 	}
 
-	p, err := pool.New(ctx, pool.Config{DSN: dsn}, log)
+	// FEEDBACK loadtest #4 — CLI pool now reads the same RAILBASE_DB_*
+	// env vars the serving process does. Was: bare pool.Config{DSN}
+	// defaulted to max_conns=8 (GOMAXPROCS*2 minimum 4) which silently
+	// limited bulk-load workloads even when operator set
+	// RAILBASE_DB_MAX_CONNS=300.
+	p, err := pool.New(ctx, pool.Config{
+		DSN:              dsn,
+		MaxConns:         cfg.DBMaxConns,
+		MinConns:         cfg.DBMinConns,
+		MaxConnLifetime:  cfg.DBMaxConnLifetime,
+		MaxConnIdleTime:  cfg.DBMaxConnIdleTime,
+		StatementTimeout: cfg.DBStatementTimeout,
+	}, log)
 	if err != nil {
 		cleanup()
 		return nil, err

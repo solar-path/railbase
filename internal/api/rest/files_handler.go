@@ -413,6 +413,30 @@ func (h *filesHandler) updateRecordColumn(r *http.Request, spec builder.Collecti
 			return rerr.New(rerr.CodeNotFound, "record %s not found", recordID)
 		}
 	case builder.TypeFiles:
+		// FEEDBACK shopper #7 — enforce MaxCount before appending so
+		// the cap is honoured at the SQL boundary (race-free even
+		// under concurrent multipart uploads).
+		maxCount := 0
+		for i := range spec.Fields {
+			if spec.Fields[i].Name == fieldName {
+				maxCount = spec.Fields[i].FilesMaxCount
+				break
+			}
+		}
+		if maxCount > 0 {
+			var n int
+			lenSQL := fmt.Sprintf(
+				`SELECT jsonb_array_length(COALESCE(%s, '[]'::jsonb)) FROM %s WHERE id = $1`,
+				pgIdent(fieldName), pgIdent(spec.Name))
+			if err := q.QueryRow(r.Context(), lenSQL, recordID).Scan(&n); err != nil {
+				return rerr.Wrap(err, rerr.CodeInternal, "files max-count probe")
+			}
+			if n >= maxCount {
+				return rerr.New(rerr.CodeValidation,
+					"field %q already at MaxCount (%d files); delete one before uploading another",
+					fieldName, maxCount)
+			}
+		}
 		// JSONB array append; coalesce NULL → [].
 		sql = fmt.Sprintf(`UPDATE %s
 		    SET %s = COALESCE(%s, '[]'::jsonb) || $1::jsonb

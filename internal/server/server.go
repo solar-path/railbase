@@ -141,6 +141,10 @@ func New(cfg Config) *Server {
 
 	r.Get("/healthz", probeHandler(cfg.Probes.Live))
 	r.Get("/readyz", probeHandler(cfg.Probes.Ready))
+	// FEEDBACK loadtest #14 — docker-compose healthcheck / k8s probes
+	// commonly default to /api/health. Alias for parity.
+	r.Get("/api/health", probeHandler(cfg.Probes.Live))
+	r.Get("/api/ready", probeHandler(cfg.Probes.Ready))
 
 	return &Server{
 		cfg:    cfg,

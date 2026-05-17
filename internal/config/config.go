@@ -98,10 +98,13 @@ type Config struct {
 	//   RAILBASE_DB_MIN_CONNS          integer
 	//   RAILBASE_DB_MAX_CONN_LIFETIME  duration (1h, 30m, ...)
 	//   RAILBASE_DB_MAX_CONN_IDLE_TIME duration
-	DBMaxConns        int32
-	DBMinConns        int32
-	DBMaxConnLifetime time.Duration
-	DBMaxConnIdleTime time.Duration
+	//   RAILBASE_DB_STATEMENT_TIMEOUT  duration; "0"/"off" disables.
+	//                                  Default 30s (FEEDBACK loadtest #3).
+	DBMaxConns         int32
+	DBMinConns         int32
+	DBMaxConnLifetime  time.Duration
+	DBMaxConnIdleTime  time.Duration
+	DBStatementTimeout time.Duration
 }
 
 // Default returns the baseline configuration with no env/flag overlay.
@@ -264,6 +267,21 @@ func Load() (Config, error) {
 			return c, fmt.Errorf("RAILBASE_DB_MAX_CONN_IDLE_TIME: %w", err)
 		}
 		c.DBMaxConnIdleTime = d
+	}
+	// FEEDBACK loadtest #3 — server-side statement_timeout. Accepts
+	// "0", "off", "disabled", or "none" as sentinels for "disable"
+	// (passes -1 to the pool to skip applying the SET in AfterConnect).
+	if v := os.Getenv("RAILBASE_DB_STATEMENT_TIMEOUT"); v != "" {
+		switch strings.ToLower(v) {
+		case "0", "off", "disabled", "none":
+			c.DBStatementTimeout = -1
+		default:
+			d, err := time.ParseDuration(v)
+			if err != nil {
+				return c, fmt.Errorf("RAILBASE_DB_STATEMENT_TIMEOUT: %w", err)
+			}
+			c.DBStatementTimeout = d
+		}
 	}
 
 	// v1.7.39: consult the persisted DSN file BEFORE the zero-config

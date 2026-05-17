@@ -32,6 +32,14 @@ type Column struct {
 	// Header is the human-readable label written to row 1. Empty →
 	// fall back to Key.
 	Header string
+	// Format, if non-empty, is an Excel number-format code applied to
+	// every data cell in this column ("yyyy-mm-dd", "#,##0.00",
+	// "$#,##0.00", "0.00%", ...). The writer creates one excelize
+	// style per distinct Format string and tags each cell with the
+	// style ID via excelize.Cell{StyleID:...} so the StreamWriter
+	// emits the format reference into the workbook's styles.xml.
+	// Empty → cells render verbatim (the v1.6.3 baseline). DSL-3.
+	Format string
 }
 
 // XLSXWriter streams rows into a single-sheet XLSX file. Construct
@@ -53,6 +61,10 @@ type XLSXWriter struct {
 	sheet  string
 	row    int // 1-based; row 1 is the header, data starts at 2
 	closed bool
+	// styleIDs[i] is the excelize style ID for column i, or 0 if the
+	// column has no Format set. Resolved once at NewXLSXWriter so
+	// AppendRow doesn't pay NewStyle cost per cell. DSL-3.
+	styleIDs []int
 }
 
 // NewXLSXWriter creates a new workbook with one sheet named `sheet`,
@@ -94,12 +106,37 @@ func NewXLSXWriter(sheet string, cols []Column) (*XLSXWriter, error) {
 		return nil, fmt.Errorf("export: write header: %w", err)
 	}
 
+	// DSL-3 — resolve one style ID per column with a non-empty
+	// Format string. Cached strings (yyyy-mm-dd, #,##0.00 ...) reuse
+	// the same style; we keep a small per-call map so identical
+	// format codes share a single styles.xml entry.
+	styleIDs := make([]int, len(cols))
+	styleCache := make(map[string]int)
+	for i, c := range cols {
+		if c.Format == "" {
+			continue
+		}
+		if id, ok := styleCache[c.Format]; ok {
+			styleIDs[i] = id
+			continue
+		}
+		fmtCode := c.Format
+		id, err := f.NewStyle(&excelize.Style{CustomNumFmt: &fmtCode})
+		if err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("export: register format %q: %w", c.Format, err)
+		}
+		styleIDs[i] = id
+		styleCache[c.Format] = id
+	}
+
 	return &XLSXWriter{
-		file:   f,
-		stream: sw,
-		cols:   cols,
-		sheet:  sheet,
-		row:    2,
+		file:     f,
+		stream:   sw,
+		cols:     cols,
+		sheet:    sheet,
+		row:      2,
+		styleIDs: styleIDs,
 	}, nil
 }
 
@@ -116,7 +153,17 @@ func (w *XLSXWriter) AppendRow(row map[string]any) error {
 	}
 	cells := make([]any, len(w.cols))
 	for i, c := range w.cols {
-		cells[i] = formatCell(row[c.Key])
+		v := formatCell(row[c.Key])
+		// DSL-3 — when the column declared a Format, wrap the cell
+		// value in excelize.Cell{StyleID:...} so the StreamWriter
+		// emits a styled cell. Cells without a format pass through
+		// as raw values (the pre-DSL-3 path) — minimises overhead
+		// for the no-format case.
+		if w.styleIDs[i] != 0 {
+			cells[i] = excelize.Cell{StyleID: w.styleIDs[i], Value: v}
+		} else {
+			cells[i] = v
+		}
 	}
 	cell, err := excelize.CoordinatesToCellName(1, w.row)
 	if err != nil {

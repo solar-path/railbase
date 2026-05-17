@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -120,6 +121,64 @@ type listQuery struct {
 	// the builder prepends `deleted IS NULL AND` to the WHERE clause.
 	// Set true by handler when client passes `?includeDeleted=true`.
 	includeDeleted bool
+	// cursor — FEEDBACK loadtest #2 — opaque keyset position passed by
+	// the client (decoded into an `id > $X` predicate). Mutually
+	// exclusive with `page`; when both set, cursor wins.
+	cursor string
+}
+
+// CountMode controls how the LIST handler reports totalItems.
+//
+// FEEDBACK loadtest #1 (87% PG-CPU eaten by COUNT(*) on 1M rows):
+// the default is no-count for performance; clients that need the exact
+// total opt in via `?count=exact`. Cap-count uses LIMIT N+1 to answer
+// "≥N or exact" cheaply, and estimate uses pg_class.reltuples.
+type CountMode int
+
+const (
+	// CountNone — totalItems is null in the response; totalPages is null.
+	// Default for v0.6+. Cheapest path.
+	CountNone CountMode = iota
+	// CountExact — full SELECT COUNT(*) FROM ... WHERE …. Same as pre-v0.6.
+	// Opt in via ?count=exact.
+	CountExact
+	// CountEstimate — uses pg_class.reltuples; ignores WHERE clause
+	// accuracy. Only honoured for unfiltered list (no WHERE besides
+	// soft-delete). Falls back to CountNone when WHERE is non-trivial.
+	CountEstimate
+	// CountCapped — emits LIMIT (cap+1) and reports min(cap, n) plus
+	// the "more" boolean. UI shows "Page 12 of 10000+".
+	CountCapped
+)
+
+// parseCountMode reads ?count= from a URL query. Recognised values:
+//
+//	"" / "none"         → CountNone
+//	"exact"             → CountExact
+//	"estimate"          → CountEstimate
+//	"cap:<n>" / "cap"   → CountCapped (default cap=10000)
+//
+// Returns (mode, cap). cap is only meaningful when mode==CountCapped.
+func parseCountMode(raw string) (CountMode, int) {
+	const defaultCap = 10000
+	switch {
+	case raw == "" || raw == "none":
+		return CountNone, 0
+	case raw == "exact":
+		return CountExact, 0
+	case raw == "estimate":
+		return CountEstimate, 0
+	case raw == "cap":
+		return CountCapped, defaultCap
+	case strings.HasPrefix(raw, "cap:"):
+		n, err := strconv.Atoi(raw[len("cap:"):])
+		if err != nil || n <= 0 {
+			return CountCapped, defaultCap
+		}
+		return CountCapped, n
+	default:
+		return CountNone, 0
+	}
 }
 
 // buildList returns (sql, args) for the list SELECT and the COUNT
@@ -138,11 +197,121 @@ func buildList(spec builder.CollectionSpec, q listQuery) (selectSQL string, sele
 	}
 	offset := (q.page - 1) * q.perPage
 
+	// FEEDBACK loadtest #2 — keyset cursor pagination. When q.cursor is
+	// non-empty, treat the request as a cursor walk and override
+	// page/offset. The cursor is decoded by the handler (DecodeCursor)
+	// so we trust it here.
+	useCursor := q.cursor != ""
+
 	whereSQL := ""
+	composed := q.where
+	composedArgs := append([]any{}, q.whereArgs...)
+	if useCursor {
+		// Always greater-than for ascending order; descending uses <.
+		op := ">"
+		if len(q.sort) > 0 && q.sort[0].Desc {
+			op = "<"
+		}
+		composedArgs = append(composedArgs, q.cursor)
+		idx := len(composedArgs)
+		cursorFrag := fmt.Sprintf("id %s $%d", op, idx)
+		if composed != "" {
+			composed = composed + " AND " + cursorFrag
+		} else {
+			composed = cursorFrag
+		}
+	}
 	if spec.SoftDelete && !q.includeDeleted {
 		// Prepend the soft-delete predicate. Combined with any user
 		// WHERE, the partial index `…_alive_idx ON (created) WHERE
 		// deleted IS NULL` makes the IS-NULL test free.
+		if composed != "" {
+			whereSQL = " WHERE deleted IS NULL AND " + composed
+		} else {
+			whereSQL = " WHERE deleted IS NULL"
+		}
+	} else if composed != "" {
+		whereSQL = " WHERE " + composed
+	}
+
+	orderSQL := filter.JoinSQL(q.sort)
+	if orderSQL == "" {
+		orderSQL = "created DESC, id DESC"
+	}
+
+	// Pagination args come AFTER the WHERE args (now including the
+	// optional cursor arg), so $N counts continue.
+	limitN := len(composedArgs) + 1
+	selectSQL = ""
+	if useCursor {
+		// Cursor mode — no OFFSET. Order by id ASC|DESC enforces
+		// stable keyset traversal.
+		idOrder := "id ASC"
+		if len(q.sort) > 0 && q.sort[0].Desc {
+			idOrder = "id DESC"
+		}
+		selectArgs = append(composedArgs, q.perPage)
+		selectSQL = fmt.Sprintf(
+			"SELECT %s FROM %s%s ORDER BY %s LIMIT $%d",
+			strings.Join(buildSelectColumns(spec), ", "),
+			spec.Name,
+			whereSQL,
+			idOrder,
+			limitN,
+		)
+	} else {
+		offsetN := len(composedArgs) + 2
+		selectArgs = append(composedArgs, q.perPage, offset)
+		selectSQL = fmt.Sprintf(
+			"SELECT %s FROM %s%s ORDER BY %s LIMIT $%d OFFSET $%d",
+			strings.Join(buildSelectColumns(spec), ", "),
+			spec.Name,
+			whereSQL,
+			orderSQL,
+			limitN, offsetN,
+		)
+	}
+	countSQL = fmt.Sprintf("SELECT COUNT(*) FROM %s%s", spec.Name, whereSQL)
+	countArgs = append([]any{}, q.whereArgs...)
+	return
+}
+
+// EncodeCursor base64url-encodes the row's PK so the client can pass
+// it back unmodified for keyset-paginated next-page reads. Slice-1
+// implementation uses just `id` (UUIDs); multi-column cursors land
+// when sort keys other than id need cursor support.
+func EncodeCursor(id string) string {
+	if id == "" {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(id))
+}
+
+// DecodeCursor reverses EncodeCursor. Returns "" on any malformed
+// input so the handler treats it as "no cursor" rather than a 400 —
+// loose-coupling lets clients pass through stale cursors without
+// blocking pagination.
+func DecodeCursor(s string) string {
+	if s == "" {
+		return ""
+	}
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// buildCapCount returns a COUNT SQL that bounds work to ≤ cap+1 rows:
+// `SELECT COUNT(*) FROM (SELECT 1 FROM <table> WHERE … LIMIT N+1) sub`.
+// On large tables this turns a 5-second seq-scan into a sub-millisecond
+// index probe that stops as soon as it has seen N+1 rows.
+//
+// Caller compares result against `cap`: if it equals cap+1, the true
+// total is "cap+ (unknown)" — surface via the `more: true` field.
+func buildCapCount(spec builder.CollectionSpec, q listQuery, cap int) (string, []any) {
+	whereSQL := ""
+	if spec.SoftDelete && !q.includeDeleted {
 		if q.where != "" {
 			whereSQL = " WHERE deleted IS NULL AND " + q.where
 		} else {
@@ -151,28 +320,14 @@ func buildList(spec builder.CollectionSpec, q listQuery) (selectSQL string, sele
 	} else if q.where != "" {
 		whereSQL = " WHERE " + q.where
 	}
-
-	orderSQL := filter.JoinSQL(q.sort)
-	if orderSQL == "" {
-		orderSQL = "created DESC, id DESC"
-	}
-
-	// Pagination args come AFTER the WHERE args, so $N counts continue.
 	limitN := len(q.whereArgs) + 1
-	offsetN := len(q.whereArgs) + 2
-	selectArgs = append(append([]any{}, q.whereArgs...), q.perPage, offset)
-
-	selectSQL = fmt.Sprintf(
-		"SELECT %s FROM %s%s ORDER BY %s LIMIT $%d OFFSET $%d",
-		strings.Join(buildSelectColumns(spec), ", "),
-		spec.Name,
-		whereSQL,
-		orderSQL,
-		limitN, offsetN,
+	args := append([]any{}, q.whereArgs...)
+	args = append(args, cap+1)
+	sql := fmt.Sprintf(
+		"SELECT COUNT(*) FROM (SELECT 1 FROM %s%s LIMIT $%d) sub",
+		spec.Name, whereSQL, limitN,
 	)
-	countSQL = fmt.Sprintf("SELECT COUNT(*) FROM %s%s", spec.Name, whereSQL)
-	countArgs = append([]any{}, q.whereArgs...)
-	return
+	return sql, args
 }
 
 // buildView returns the single-row SELECT used by the view endpoint

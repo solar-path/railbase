@@ -45,6 +45,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/railbase/railbase/internal/config"
 )
 
 func newDevCmd() *cobra.Command {
@@ -83,6 +85,18 @@ For Sentinel's exact shape:
 
   railbase dev --embed-pg --web ./web`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// FEEDBACK blogger N4 — load ./.env BEFORE reading
+			// RAILBASE_HTTP_ADDR. `serve` does this implicitly via
+			// app.Run; `dev` spawns a child process which only sees
+			// the parent shell env, so a value set ONLY in .env was
+			// invisible. config.LoadDotenvFiles is idempotent and
+			// never overrides already-set env vars.
+			if _, err := config.LoadDotenvFiles(".env"); err != nil {
+				// Parse errors should fail loudly so operators notice
+				// a malformed .env before the child process inherits
+				// silent defaults. Missing file = no-op.
+				return fmt.Errorf("dev: load .env: %w", err)
+			}
 			// FEEDBACK #B5 — if --addr wasn't passed explicitly, fall back
 			// to $RAILBASE_HTTP_ADDR so `dev` honours the same env override
 			// `serve` does. The blogger project hit a port-conflict on

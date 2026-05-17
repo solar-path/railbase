@@ -109,37 +109,72 @@ func (d *handlerDeps) entityDocPDFHandler(w http.ResponseWriter, r *http.Request
 		related[key] = rows
 	}
 
-	// Build template context.
+	// Build context shared by template + programmatic-renderer paths.
 	tenantID := ""
 	if v, ok := parentRow["tenant_id"]; ok && v != nil {
 		tenantID = fmt.Sprint(v)
 	}
-	tplCtx := struct {
-		Record  map[string]any
-		Related map[string][]map[string]any
-		Tenant  string
-		Now     time.Time
-	}{
-		Record:  parentRow,
-		Related: related,
-		Tenant:  tenantID,
-		Now:     time.Now().UTC(),
-	}
+	now := time.Now().UTC()
 
-	if d.pdfTemplates == nil {
-		rerr.WriteJSON(w, rerr.New(rerr.CodeUnavailable,
-			"pdf templates not initialised (no pb_data/pdf_templates directory configured)"))
-		return
-	}
-	out, err := d.pdfTemplates.Render(doc.Template, tplCtx)
-	if err != nil {
-		if errors.Is(err, export.ErrTemplateNotFound) {
-			rerr.WriteJSON(w, rerr.New(rerr.CodeNotFound,
-				"pdf template %q not found in pb_data/pdf_templates", doc.Template))
+	var out []byte
+	switch {
+	case doc.Renderer != nil:
+		// DSL-4 — programmatic renderer takes over. The handler's
+		// only contract is to feed it the same data the template
+		// engine would have received, and to serve the returned
+		// bytes as the PDF body. No template-engine init required —
+		// embedders using only renderers don't need pb_data/pdf_templates
+		// to exist.
+		rctx := builder.EntityDocContext{
+			Record:  parentRow,
+			Related: related,
+			Tenant:  tenantID,
+			Now:     now,
+		}
+		bytes, rerrErr := doc.Renderer(rctx)
+		if rerrErr != nil {
+			d.log.Error("rest: entity-doc renderer failed",
+				"collection", collName, "doc", doc.Name, "err", rerrErr)
+			rerr.WriteJSON(w, rerr.Wrap(rerrErr, rerr.CodeInternal,
+				"entity-doc renderer failed"))
 			return
 		}
-		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "render entity-doc template"))
-		return
+		if len(bytes) == 0 {
+			rerr.WriteJSON(w, rerr.New(rerr.CodeInternal,
+				"entity-doc renderer returned 0 bytes"))
+			return
+		}
+		out = bytes
+
+	default:
+		// Markdown-template path (the pre-DSL-4 behaviour).
+		tplCtx := struct {
+			Record  map[string]any
+			Related map[string][]map[string]any
+			Tenant  string
+			Now     time.Time
+		}{
+			Record:  parentRow,
+			Related: related,
+			Tenant:  tenantID,
+			Now:     now,
+		}
+		if d.pdfTemplates == nil {
+			rerr.WriteJSON(w, rerr.New(rerr.CodeUnavailable,
+				"pdf templates not initialised (no pb_data/pdf_templates directory configured)"))
+			return
+		}
+		bytes, err := d.pdfTemplates.Render(doc.Template, tplCtx)
+		if err != nil {
+			if errors.Is(err, export.ErrTemplateNotFound) {
+				rerr.WriteJSON(w, rerr.New(rerr.CodeNotFound,
+					"pdf template %q not found in pb_data/pdf_templates", doc.Template))
+				return
+			}
+			rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "render entity-doc template"))
+			return
+		}
+		out = bytes
 	}
 
 	// Filename: <collection>-<id-short>-<docname>-<timestamp>.pdf.

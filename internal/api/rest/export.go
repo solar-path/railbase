@@ -77,9 +77,11 @@ func (d *handlerDeps) exportXLSXHandler(w http.ResponseWriter, r *http.Request) 
 	// schema-declared .Export(...) config. Query params still win.
 	var cfgCols []string
 	var cfgHeaders map[string]string
+	var cfgFormats map[string]string
 	if spec.Exports.XLSX != nil {
 		cfgCols = spec.Exports.XLSX.Columns
 		cfgHeaders = spec.Exports.XLSX.Headers
+		cfgFormats = spec.Exports.XLSX.Format
 	}
 	cols, errEnv := resolveExportColumns(spec, q.Get("columns"), cfgCols, cfgHeaders)
 	if errEnv != nil {
@@ -89,6 +91,7 @@ func (d *handlerDeps) exportXLSXHandler(w http.ResponseWriter, r *http.Request) 
 		rerr.WriteJSON(w, errEnv)
 		return
 	}
+	applyFormats(cols, cfgFormats)
 
 	principal := authmw.PrincipalFrom(r.Context())
 	fctx := filterCtx(principal)
@@ -522,6 +525,22 @@ func applyHeaders(cols []export.Column, headers map[string]string) {
 	for i := range cols {
 		if label, ok := headers[cols[i].Key]; ok && label != "" {
 			cols[i].Header = label
+		}
+	}
+}
+
+// applyFormats mutates `cols` so each entry's Format reflects the
+// schema-declared Excel number-format code from XLSXExportConfig.Format.
+// Missing keys leave the column unformatted (cells render verbatim,
+// the pre-DSL-3 behaviour). DSL-3 — closes the loop on the
+// previously-stored-but-ignored Format map.
+func applyFormats(cols []export.Column, formats map[string]string) {
+	if len(formats) == 0 {
+		return
+	}
+	for i := range cols {
+		if code, ok := formats[cols[i].Key]; ok && code != "" {
+			cols[i].Format = code
 		}
 	}
 }

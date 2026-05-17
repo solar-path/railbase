@@ -155,6 +155,35 @@ func start(_ context.Context, cfg Config) (string, StopFunc, error) {
 		"port", port,
 	)
 
+	// ENV-1 — initdb run by the embedded-pg library inherits the
+	// parent's locale env (LC_ALL / LANG). On macOS where users
+	// commonly have LC_ALL=ru_RU.UTF-8 (or any other host locale
+	// not built into the pinned PG binary), initdb fails with
+	// "invalid locale name". We force C/POSIX for the spawn —
+	// the cluster will be created with LC_COLLATE=C / LC_CTYPE=C
+	// regardless of the developer's host locale. This is the
+	// PocketBase-equivalent of "just works on every laptop".
+	//
+	// Restore prior values after Start so we don't pollute the
+	// running process's env for code that observes locale (e.g.
+	// time formatting, sort orders elsewhere).
+	prevLCAll, hadLCAll := os.LookupEnv("LC_ALL")
+	prevLang, hadLang := os.LookupEnv("LANG")
+	_ = os.Setenv("LC_ALL", "C")
+	_ = os.Setenv("LANG", "C")
+	defer func() {
+		if hadLCAll {
+			_ = os.Setenv("LC_ALL", prevLCAll)
+		} else {
+			_ = os.Unsetenv("LC_ALL")
+		}
+		if hadLang {
+			_ = os.Setenv("LANG", prevLang)
+		} else {
+			_ = os.Unsetenv("LANG")
+		}
+	}()
+
 	pg := embeddedpostgres.NewDatabase(
 		embeddedpostgres.DefaultConfig().
 			Database("railbase").

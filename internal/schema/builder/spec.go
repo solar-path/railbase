@@ -21,6 +21,8 @@
 // cost of v0.2.
 package builder
 
+import "time"
+
 // FieldType discriminates FieldSpec. Wire format: lowercase ASCII,
 // matches PB-compat values exactly so strict-mode `_collections`
 // introspection produces the right shape.
@@ -410,6 +412,9 @@ type FieldSpec struct {
 	// --- file modifiers ---
 	AcceptMIME []string `json:"accept_mime,omitempty"`
 	MaxBytes   int64    `json:"max_bytes,omitempty"`
+	// FilesMaxCount caps the size of a Files() array (TypeFiles only).
+	// 0 = no cap. FEEDBACK shopper #7.
+	FilesMaxCount int `json:"files_max_count,omitempty"`
 
 	// --- relation modifiers ---
 	RelatedCollection string `json:"related_collection,omitempty"`
@@ -620,7 +625,28 @@ type EntityDocConfig struct {
 	// to render. Same template engine + helpers as .Export() PDFs.
 	// The template's `.` is a struct with .Record, .Related,
 	// .Now, .Tenant.
+	//
+	// Ignored when Renderer is set — the programmatic renderer takes
+	// full control of the response bytes.
 	Template string `json:"template"`
+
+	// Renderer (DSL-4 / FEEDBACK blogger) is an in-process Go callback
+	// that produces the PDF bytes directly. When non-nil it bypasses
+	// the Markdown-template engine entirely, letting embedders use
+	// their own PDF library (gofpdf, chromedp/headless-chrome, signing
+	// pipelines, watermarking, ...) without writing a template.
+	//
+	// Renderer is NOT JSON-serialised — it can only be wired up
+	// programmatically via `.EntityDoc(builder.EntityDocConfig{
+	// Renderer: myFunc})`. Dynamic-collection JSON specs cannot set
+	// it (and won't see it in `/api/collections/_/spec`), which is the
+	// intended boundary: code-only renderers stay in Go, template
+	// renderers stay declarative.
+	//
+	// Contract: returns the FINAL PDF bytes (Content-Type:
+	// application/pdf is set by the handler). Errors propagate as
+	// 500 with the error message scrubbed.
+	Renderer EntityDocRenderer `json:"-"`
 
 	// Title is the document title rendered on the first page when the
 	// template doesn't include its own header. Empty → "{collection}
@@ -642,6 +668,40 @@ type EntityDocConfig struct {
 	//
 	// Then in invoice.md: `{{ range .Related.items }}{{ .product }} — {{ .qty }}{{ end }}`.
 	Related map[string]RelatedSpec `json:"related,omitempty"`
+}
+
+// EntityDocRenderer is the programmatic callback variant of
+// EntityDocConfig.Renderer (DSL-4). The handler invokes it once per
+// request after loading the parent row + Related results, expecting
+// the function to return the final PDF body.
+//
+// The context type intentionally mirrors the same fields the template
+// engine receives (.Record, .Related, .Tenant, .Now) so swapping
+// between template and renderer modes during development needs no
+// data-shape changes.
+type EntityDocRenderer func(ctx EntityDocContext) ([]byte, error)
+
+// EntityDocContext is the per-request payload handed to an
+// EntityDocRenderer. Pre-loaded by the handler from the same
+// pipeline that feeds the Markdown template — ViewRule has already
+// applied to Record, Related is the result of each declared
+// RelatedSpec.
+type EntityDocContext struct {
+	// Record is the parent row keyed by column name. JSON-friendly
+	// values (string / number / bool / time.Time / []byte / nil).
+	Record map[string]any
+
+	// Related is the result of each RelatedSpec keyed by the map key
+	// used in EntityDocConfig.Related.
+	Related map[string][]map[string]any
+
+	// Tenant is the tenant_id of the parent row (empty string when
+	// the collection isn't tenant-scoped). The renderer should not
+	// trust this for authorization — it is informational.
+	Tenant string
+
+	// Now is the time the request entered the handler (UTC).
+	Now time.Time
 }
 
 // RelatedSpec describes one child-table lookup for an EntityDoc.
@@ -699,19 +759,23 @@ type XLSXExportConfig struct {
 	// Format maps a column key to an Excel number-format code as a
 	// string ("yyyy-mm-dd", "#,##0.00", "$#,##0.00", "0.00%", etc.).
 	//
-	// **Current status (v1.6.3)**: the field is STORED on the spec
-	// but the XLSX writer ignores it — cells render verbatim. Per-column
-	// styling lands in a v1.6.x follow-up; until then, embedders who
-	// need formatted money/dates in Excel should:
-	//   - For dates: pre-format in the row data (`{"created":
-	//     "2026-05-16"}` instead of an RFC3339 string).
-	//   - For currency in cents: use a custom export handler atop
-	//     `pkg/railbase/export.NewXLSXWriter` and write a string cell.
+	// **Status (DSL-3 / FEEDBACK shopper #37)**: applied. The XLSX
+	// writer registers one excelize CustomNumFmt style per distinct
+	// format code and tags each data cell in the column with that
+	// style ID, so opening the workbook in Excel/LibreOffice renders
+	// money/dates/percentages with native formatting (sortable as
+	// numbers, locale-aware separators, etc.).
 	//
-	// FEEDBACK #37 — the shopper's `CurrencyFormat(...)` / `DateFormat(...)`
-	// mini-DSL referenced in docs/08-generation.md doesn't exist. Use
-	// plain Excel number-format-code strings here when the writer
-	// honours them. The map shape is fixed (string→string).
+	// The map shape is fixed (string → string). Use Excel's
+	// number-format-code grammar directly — there is no Railbase-
+	// specific `CurrencyFormat(...)` mini-DSL. Common codes:
+	//   - dates:    "yyyy-mm-dd", "dd.mm.yyyy hh:mm"
+	//   - currency: "$#,##0.00", "#,##0.00 ₽", "#,##0.00 \"USD\""
+	//   - percent:  "0.00%", "0%"
+	//   - integer:  "#,##0"
+	//
+	// Keys not present in the map render verbatim (no style applied),
+	// preserving the pre-DSL-3 behaviour for un-formatted columns.
 	Format map[string]string `json:"format,omitempty"`
 }
 
@@ -791,7 +855,18 @@ type IndexSpec struct {
 
 // RuleSet captures per-CRUD-action filter rules. v0.2 stores only
 // the raw filter expression; the parser/evaluator land in v0.3 with
-// CRUD endpoints. Empty string = no rule (server-only).
+// CRUD endpoints.
+//
+// FEEDBACK loadtest #5 — IMPORTANT semantic clarification: an empty
+// string compiles to a constant-FALSE predicate, which means the API
+// is LOCKED for that action (returns no rows on list/view, denies
+// create/update/delete). This is the secure-by-default posture:
+// forgetting to set a rule fails closed, not open.
+//
+// To open an action to ALL callers, set the rule to `"true"`. For
+// "any authenticated caller", use `'@request.auth.id != ""'`. The
+// inverted convenience flag `Open` (recommended over manual `"true"`)
+// expresses the same intent more readably.
 type RuleSet struct {
 	List   string `json:"list,omitempty"`
 	View   string `json:"view,omitempty"`

@@ -112,8 +112,12 @@ func lex(src string) ([]token, error) {
 		case ch == '~':
 			out = append(out, token{kind: tkOp, val: "~", pos: i})
 			i++
-		case ch == '\'':
-			s, n, err := lexString(src[i:])
+		case ch == '\'' || ch == '"':
+			// FEEDBACK loadtest #6 — docs occasionally show "..." for
+			// string literals; accept both quote characters as
+			// alternative delimiters (mirroring PG / SQL behaviour
+			// where '...' is canonical but tooling often emits "...").
+			s, n, err := lexStringQuoted(src[i:], ch)
 			if err != nil {
 				return out, posErr(i, "%s", err.Error())
 			}
@@ -158,12 +162,19 @@ func lex(src string) ([]token, error) {
 	return out, nil
 }
 
-// lexString consumes 'literal' from the head of src. Supports the
-// two-character escapes \' and \\; everything else is taken
-// verbatim. Returns (decoded value, byte length, error).
+// lexString consumes 'literal' from the head of src. Single-quote
+// only — preserved for unchanged callers and parser unit tests.
 func lexString(src string) (string, int, error) {
-	if len(src) == 0 || src[0] != '\'' {
-		return "", 0, fmt.Errorf("expected '")
+	return lexStringQuoted(src, '\'')
+}
+
+// lexStringQuoted consumes a 'literal' or "literal" depending on the
+// passed quote char. Supports the escapes \q and \\, where q is the
+// active quote; everything else is taken verbatim. FEEDBACK loadtest
+// #6 — was originally hardcoded to single-quote.
+func lexStringQuoted(src string, quote byte) (string, int, error) {
+	if len(src) == 0 || src[0] != quote {
+		return "", 0, fmt.Errorf("expected %c", quote)
 	}
 	var b strings.Builder
 	i := 1
@@ -175,8 +186,8 @@ func lexString(src string) (string, int, error) {
 			}
 			esc := src[i+1]
 			switch esc {
-			case '\'':
-				b.WriteByte('\'')
+			case quote:
+				b.WriteByte(quote)
 			case '\\':
 				b.WriteByte('\\')
 			default:
@@ -185,7 +196,7 @@ func lexString(src string) (string, int, error) {
 			i += 2
 			continue
 		}
-		if ch == '\'' {
+		if ch == quote {
 			return b.String(), i + 1, nil
 		}
 		b.WriteByte(ch)

@@ -693,14 +693,17 @@ func (h *asyncExportHandler) runExport(ctx context.Context, p *asyncExportPayloa
 func (h *asyncExportHandler) runXLSX(ctx context.Context, rows pgx.Rows, spec builder.CollectionSpec, p *asyncExportPayload, maxRows int, out io.Writer) (int, error) {
 	var cfgCols []string
 	var cfgHeaders map[string]string
+	var cfgFormats map[string]string
 	if spec.Exports.XLSX != nil {
 		cfgCols = spec.Exports.XLSX.Columns
 		cfgHeaders = spec.Exports.XLSX.Headers
+		cfgFormats = spec.Exports.XLSX.Format
 	}
 	cols, errEnv := resolveExportColumns(spec, p.Columns, cfgCols, cfgHeaders)
 	if errEnv != nil {
 		return 0, fmt.Errorf("columns: %s", errEnv.Message)
 	}
+	applyFormats(cols, cfgFormats) // DSL-3
 	cfgSheet := ""
 	if spec.Exports.XLSX != nil {
 		cfgSheet = spec.Exports.XLSX.Sheet

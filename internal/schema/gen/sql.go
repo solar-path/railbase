@@ -169,6 +169,25 @@ func AddColumnSQL(coll string, f builder.FieldSpec) string {
 		b.WriteString(" = /* TODO: backfill expression */ NULL WHERE ")
 		b.WriteString(quoteIdent(f.Name))
 		b.WriteString(" IS NULL;\n")
+		// Step 2a: FEEDBACK blogger N5 — explicit guard. Operators
+		// occasionally commit and `migrate up` without filling the
+		// TODO. The ALTER ... SET NOT NULL below would fail with a
+		// confusing 23502 (NOT NULL violation), miles from the actual
+		// cause. This guard raises a clear message AT the offending
+		// row, not 15 steps later.
+		b.WriteString("DO $$ BEGIN\n")
+		b.WriteString("  IF EXISTS (SELECT 1 FROM ")
+		b.WriteString(quoteIdent(coll))
+		b.WriteString(" WHERE ")
+		b.WriteString(quoteIdent(f.Name))
+		b.WriteString(" IS NULL) THEN\n")
+		b.WriteString("    RAISE EXCEPTION 'unmigrated backfill: ")
+		b.WriteString(coll)
+		b.WriteString(".")
+		b.WriteString(f.Name)
+		b.WriteString(" — search for /* TODO: backfill expression */ in this migration and replace before running migrate up';\n")
+		b.WriteString("  END IF;\n")
+		b.WriteString("END $$;\n")
 		// Step 3: flip to NOT NULL.
 		b.WriteString("ALTER TABLE ")
 		b.WriteString(quoteIdent(coll))

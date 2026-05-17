@@ -32,6 +32,7 @@ import (
 	"hash/fnv"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -444,6 +445,15 @@ func tenantIDString(ctx context.Context) string {
 // to "disabled" without branching on errors.
 func ParseRule(s string) (Rule, error) {
 	if s == "" {
+		return Rule{}, nil
+	}
+	// ENV-6 — operators expect "off"/"disabled" to disable a rule
+	// without having to remove the env var entirely. This is the
+	// PocketBase-equivalent of `feature_flag=false`. Accept the
+	// common sentinels case-insensitively and treat them as the
+	// zero-valued (disabled) Rule, same as empty input.
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "0", "off", "disabled", "none", "false", "no":
 		return Rule{}, nil
 	}
 	// Find the slash separator.

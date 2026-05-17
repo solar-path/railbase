@@ -68,7 +68,14 @@ func NewFiles() *FilesField { return &FilesField{s: FieldSpec{Type: TypeFiles}} 
 func (f *FilesField) Required() *FilesField                  { f.s.Required = true; return f }
 func (f *FilesField) AcceptMIME(types ...string) *FilesField { f.s.AcceptMIME = types; return f }
 func (f *FilesField) MaxBytes(n int64) *FilesField           { f.s.MaxBytes = n; return f }
-func (f *FilesField) Spec() FieldSpec                        { return f.s }
+
+// MaxCount caps the size of the JSONB file array. FEEDBACK shopper #7 —
+// previously only TagsField had a MaxCount builder; Files() inherited
+// no upper bound on cardinality. The CRUD layer rejects writes that
+// exceed the cap before persisting any of the files.
+func (f *FilesField) MaxCount(n int) *FilesField { f.s.FilesMaxCount = n; return f }
+
+func (f *FilesField) Spec() FieldSpec { return f.s }
 
 // ---- Relation (single) ----
 

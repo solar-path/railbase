@@ -267,24 +267,74 @@ func (d *handlerDeps) listHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	selectSQL, selectArgs, countSQL, countArgs := buildList(spec, listQuery{
+	// FEEDBACK loadtest #1 — count strategy. Default is no count (87%
+	// PG-CPU saved on 1M-row collections); clients opt in via ?count=
+	// {exact,estimate,cap[:N]}. See parseCountMode in queries.go.
+	countMode, countCap := parseCountMode(q.Get("count"))
+
+	// FEEDBACK loadtest #2 — keyset cursor pagination. ?cursor=<opaque>
+	// switches from OFFSET-based to keyset traversal. When cursor is
+	// present, page/perPage page count is ignored; perPage still
+	// bounds the slice size.
+	cursorRaw := DecodeCursor(q.Get("cursor"))
+
+	lq := listQuery{
 		page:      page,
 		perPage:   perPage,
 		where:     combined.Where,
 		whereArgs: combined.Args,
 		sort:      sortKeys,
+		cursor:    cursorRaw,
 		// Soft-delete: client opts in to seeing tombstones via
 		// ?includeDeleted=true. Anything else (omitted, "false", "0")
 		// excludes them. Lets trash UI and admin tools see deleted rows;
 		// regular API consumers see a clean dataset by default.
 		includeDeleted: parseBoolParam(q.Get("includeDeleted")),
-	})
+	}
+	selectSQL, selectArgs, countSQL, countArgs := buildList(spec, lq)
 
-	var total int64
-	if err := q2.QueryRow(r.Context(), countSQL, countArgs...).Scan(&total); err != nil {
-		d.log.Error("rest: count failed", "collection", spec.Name, "err", err)
-		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "count failed"))
-		return
+	// Compute total according to mode. CountNone skips the COUNT(*)
+	// roundtrip entirely. CountCapped runs SELECT COUNT(*) FROM
+	// (... LIMIT N+1) to bound work to ≤cap rows.
+	var (
+		total     *int64
+		totalMore bool // only meaningful for CountCapped
+	)
+	switch countMode {
+	case CountExact:
+		var n int64
+		if err := q2.QueryRow(r.Context(), countSQL, countArgs...).Scan(&n); err != nil {
+			d.log.Error("rest: count failed", "collection", spec.Name, "err", err)
+			rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "count failed"))
+			return
+		}
+		total = &n
+	case CountEstimate:
+		// pg_class.reltuples — last ANALYZE estimate. Only valid for
+		// "no WHERE" requests; with a WHERE clause the estimate
+		// overcounts. Fall back to no-count when WHERE is non-trivial.
+		if combined.Where == "" {
+			var est float64
+			err := q2.QueryRow(r.Context(),
+				`SELECT reltuples FROM pg_class WHERE relname = $1`, spec.Name).Scan(&est)
+			if err == nil && est > 0 {
+				n := int64(est)
+				total = &n
+			}
+		}
+	case CountCapped:
+		capSQL, capArgs := buildCapCount(spec, lq, countCap)
+		var n int64
+		if err := q2.QueryRow(r.Context(), capSQL, capArgs...).Scan(&n); err != nil {
+			d.log.Error("rest: cap-count failed", "collection", spec.Name, "err", err)
+			rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "count failed"))
+			return
+		}
+		if n > int64(countCap) {
+			totalMore = true
+			n = int64(countCap)
+		}
+		total = &n
 	}
 
 	rows, err := q2.Query(r.Context(), selectSQL, selectArgs...)
@@ -315,23 +365,51 @@ func (d *handlerDeps) listHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	totalPages := int64(0)
-	if perPage > 0 {
-		totalPages = (total + int64(perPage) - 1) / int64(perPage)
+	// totalPages: derived from total when known, else nil.
+	var totalPages *int64
+	if total != nil && perPage > 0 {
+		tp := (*total + int64(perPage) - 1) / int64(perPage)
+		totalPages = &tp
+	}
+
+	// FEEDBACK loadtest #2 — synthesize nextCursor from the last row's
+	// id when the response is a full page (== perPage). Empty when
+	// fewer rows were returned (end-of-list) or items is empty.
+	var nextCursor string
+	if cursorRaw != "" || lq.cursor != "" || (len(items) == perPage) {
+		if len(items) == perPage && len(items) > 0 {
+			var lastRow map[string]any
+			if err := json.Unmarshal(items[len(items)-1], &lastRow); err == nil {
+				if id, ok := lastRow["id"].(string); ok && id != "" {
+					nextCursor = EncodeCursor(id)
+				}
+			}
+		}
 	}
 
 	envelope := struct {
 		Page       int               `json:"page"`
 		PerPage    int               `json:"perPage"`
-		TotalItems int64             `json:"totalItems"`
-		TotalPages int64             `json:"totalPages"`
+		TotalItems *int64            `json:"totalItems"`
+		TotalPages *int64            `json:"totalPages"`
+		// More is non-null only for ?count=cap[:N]. Indicates whether
+		// the true total exceeds the cap.
+		More       *bool             `json:"more,omitempty"`
+		// NextCursor — opaque keyset position to pass back as
+		// `?cursor=` on the next request. Empty when client is on the
+		// final page. FEEDBACK loadtest #2.
+		NextCursor string            `json:"nextCursor,omitempty"`
 		Items      []json.RawMessage `json:"items"`
 	}{
 		Page:       page,
 		PerPage:    perPage,
 		TotalItems: total,
 		TotalPages: totalPages,
+		NextCursor: nextCursor,
 		Items:      items,
+	}
+	if countMode == CountCapped {
+		envelope.More = &totalMore
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
