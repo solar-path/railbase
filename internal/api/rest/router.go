@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/railbase/railbase/internal/audit"
+	"github.com/railbase/railbase/internal/authority"
 	"github.com/railbase/railbase/internal/eventbus"
 	"github.com/railbase/railbase/internal/export"
 	"github.com/railbase/railbase/internal/hooks"
@@ -45,7 +46,27 @@ func Mount(r chi.Router, pool pgQuerier, log *slog.Logger, hooksRT *hooks.Runtim
 // entry point so the many existing Mount() call sites in tests and
 // downstream apps don't need to grow an extra arg.
 func MountWithAudit(r chi.Router, pool pgQuerier, log *slog.Logger, hooksRT *hooks.Runtime, bus *eventbus.Bus, fd *FilesDeps, pdfTpl *export.PDFTemplates, auditW *audit.Writer) {
-	d := &handlerDeps{pool: pool, log: log, hooks: hooksRT, bus: bus, filesDeps: fd, pdfTemplates: pdfTpl, audit: auditW}
+	MountWithAuthority(r, pool, log, hooksRT, bus, fd, pdfTpl, auditW, nil)
+}
+
+// MountWithAuthority is MountWithAudit + a DoA gate Store
+// (v2.0-alpha Slice 0). When `authStore` is non-nil, the updateHandler
+// invokes the DoA gate between BeforeUpdate hook and the DB write —
+// matching mutations either pass (with optional in-tx workflow consume)
+// or get blocked with a 409 GateRequirement envelope.
+//
+// Passing nil for authStore preserves pre-DoA behaviour exactly;
+// every non-DoA collection pays zero overhead.
+func MountWithAuthority(r chi.Router, pool pgQuerier, log *slog.Logger, hooksRT *hooks.Runtime, bus *eventbus.Bus, fd *FilesDeps, pdfTpl *export.PDFTemplates, auditW *audit.Writer, authStore *authority.Store) {
+	MountWithAuthorityAudit(r, pool, log, hooksRT, bus, fd, pdfTpl, auditW, authStore, nil)
+}
+
+// MountWithAuthorityAudit is MountWithAuthority + a DoA audit chain
+// hook (v2.0-alpha Slice 2). When `authAudit` is non-nil, every
+// in-tx workflow consume emits one row into the audit chain.
+// Passing nil preserves the pre-Slice-2 behaviour exactly.
+func MountWithAuthorityAudit(r chi.Router, pool pgQuerier, log *slog.Logger, hooksRT *hooks.Runtime, bus *eventbus.Bus, fd *FilesDeps, pdfTpl *export.PDFTemplates, auditW *audit.Writer, authStore *authority.Store, authAudit *authority.AuditHook) {
+	d := &handlerDeps{pool: pool, log: log, hooks: hooksRT, bus: bus, filesDeps: fd, pdfTemplates: pdfTpl, audit: auditW, authority: authStore, authorityAudit: authAudit}
 
 	r.Route("/api/collections/{name}/records", func(r chi.Router) {
 		r.Get("/", d.listHandler)

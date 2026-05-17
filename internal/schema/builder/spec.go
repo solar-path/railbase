@@ -611,6 +611,17 @@ type CollectionSpec struct {
 	// documents (an invoice with line items + totals) had no path
 	// other than 250 lines of hand-rolled gopdf in the embedder.
 	EntityDocs []EntityDocConfig `json:"entity_docs,omitempty"`
+
+	// Authorities declares DoA (Delegation of Authority) gate points
+	// on this collection. v2.0 prototype (Slice 0). Each entry binds
+	// a state transition (or insert/delete) to a runtime matrix-data
+	// rule lookup. The matrix itself lives in _doa_matrices and is
+	// edited via the admin UI — NOT inline here.
+	//
+	// See docs/26-authority.md for the full hybrid schema+matrix-data
+	// design. Schema declares WHERE the gate sits; matrix data declares
+	// WHAT rules apply.
+	Authorities []AuthorityConfig `json:"authorities,omitempty"`
 }
 
 // EntityDocConfig declares one per-entity PDF document on a
@@ -724,6 +735,107 @@ type RelatedSpec struct {
 	// 0 → 1000 (server-side default; embedders raise via a custom
 	// handler if they need more).
 	Limit int `json:"limit,omitempty"`
+}
+
+// AuthorityConfig declares one DoA (Delegation of Authority) gate
+// point on a collection. v2.0 prototype (Slice 0).
+//
+// Schema-side is minimal — Schema declares WHERE the gate sits
+// (which transition / collection / op), Matrix references the runtime
+// data row in _doa_matrices that declares WHAT rules apply
+// (levels, approver types, materiality, escalation). Editing the
+// matrix happens through the admin UI; deploying a code change to
+// adjust approval rules is NOT required.
+//
+// Example (newsroom):
+//
+//	Articles.Authority(builder.AuthorityConfig{
+//	    Name:            "publish",
+//	    Matrix:          "articles.publish",
+//	    On:              builder.AuthorityOn{Op: "update", Field: "status", To: []string{"published"}},
+//	    ProtectedFields: []string{"title","body","is_premium"},
+//	    Required:        true,
+//	})
+//
+// Full spec: docs/26-authority.md (rev2).
+type AuthorityConfig struct {
+	// Name is the local identifier for this gate within the collection.
+	// Required when the collection has ≥2 Authority() declarations
+	// (registry validates). Used to derive action_key as
+	// "<collection>.<Name>" — e.g. "articles.publish".
+	//
+	// When the collection has exactly one Authority(), Name may be
+	// empty; action_key derives from On.Op (e.g. "articles.update").
+	Name string `json:"name,omitempty"`
+
+	// On declares which mutation triggers this gate. See AuthorityOn.
+	On AuthorityOn `json:"on"`
+
+	// Matrix is the _doa_matrices row key (per docs/26 §Matrix key
+	// namespacing). Embedder default — bare "<entity>.<verb>"
+	// (e.g. "articles.publish"). Plugins must use "<plugin-id>.*"
+	// prefix. Core uses "system.*".
+	//
+	// The registry validates the prefix against installed plugin
+	// namespaces on schema register; mismatches surface as a clear
+	// rename suggestion.
+	Matrix string `json:"matrix"`
+
+	// AmountField is an optional record-column name whose value is
+	// used for materiality matrix selection. If set, the selector
+	// queries _doa_matrices with min_amount/max_amount/currency
+	// constraints. Empty → no amount-based selection.
+	AmountField string `json:"amount_field,omitempty"`
+
+	// Currency is an optional fixed currency code for materiality
+	// matching. If AmountField is set without Currency, the matrix
+	// selector requires Currency to match against matrix.currency.
+	// Embedder may pin (e.g. "USD") or leave empty for any-currency
+	// matrices.
+	Currency string `json:"currency,omitempty"`
+
+	// ProtectedFields names the record columns whose values must
+	// remain unchanged between approve and consume. Consume validation
+	// (in the same tx as the DB write, after BeforeUpdate hooks)
+	// compares each ProtectedField against requested_diff field-by-
+	// field — drift returns 409 "approved diff stale".
+	//
+	// Anti-bait-and-switch invariant (см. design-review §P1.4):
+	// approval sanctions THIS specific diff, not arbitrary writes on
+	// the row.
+	ProtectedFields []string `json:"protected_fields,omitempty"`
+
+	// Required, when true, forces the startup gate to verify that an
+	// applicable approved matrix exists at server boot. Without an
+	// applicable matrix, server startup fails with a clear message.
+	// Default false (permissive: missing matrix → permissive pass,
+	// suitable for prototyping; Slice 0 uses this default).
+	Required bool `json:"required,omitempty"`
+}
+
+// AuthorityOn declares the mutation pattern that triggers a DoA gate.
+// v2.0 prototype: only Op="update" is fully wired in Slice 0;
+// Op="insert" and Op="delete" reserve their slot in the type but are
+// deferred to subsequent slices.
+type AuthorityOn struct {
+	// Op is the discriminator: "update" (default) gates field
+	// transitions; "insert" gates record creation with target field
+	// already at gated value; "delete" gates row deletion.
+	Op string `json:"op,omitempty"`
+
+	// Field is the column whose value transition triggers this gate.
+	// Applies to Op="update" and Op="insert". For Op="delete", Field
+	// must be empty (DELETE has no field-state notion).
+	Field string `json:"field,omitempty"`
+
+	// From limits which source values trigger the gate. Applies to
+	// Op="update". Empty = any source value.
+	From []string `json:"from,omitempty"`
+
+	// To limits which target values trigger the gate. Applies to
+	// Op="update" and Op="insert". Required (empty list = no gate
+	// match — useless).
+	To []string `json:"to,omitempty"`
 }
 
 // ExportSet groups per-format export configs. Each format has at

@@ -14,6 +14,7 @@ import (
 	"github.com/railbase/railbase/internal/audit"
 	"github.com/railbase/railbase/internal/auth/apitoken"
 	"github.com/railbase/railbase/internal/auth/recordtoken"
+	"github.com/railbase/railbase/internal/authority"
 	"github.com/railbase/railbase/internal/jobs"
 	"github.com/railbase/railbase/internal/metrics"
 	"github.com/railbase/railbase/internal/notifications"
@@ -61,6 +62,22 @@ type Deps struct {
 	// skipped. Production wires the v2 Stripe billing service; tests
 	// constructing a bare Deps leave it nil and mountStripe nil-guards.
 	Stripe *stripe.Service
+
+	// Authority is the v2.0-alpha DoA matrix admin store. PROTOTYPE
+	// (Slice 0). When nil, the /api/_admin/authority/* surface is
+	// skipped — production wires authority.NewStore(pool); tests with
+	// bare Deps leave it nil and mountAuthority nil-guards. See
+	// docs/26-authority.md.
+	Authority *authority.Store
+
+	// AuthorityAudit is the optional audit-chain hook for DoA mutations
+	// (Slice 2). When non-nil, every successful matrix/workflow/
+	// delegation lifecycle transition emits one row into the audit
+	// chain via authority.AuditHook. Nil = audit emission skipped (the
+	// underlying business operation still succeeds). Production wires
+	// it with `authority.NewAuditHook(d.Audit)` after both stores are
+	// constructed.
+	AuthorityAudit *authority.AuditHook
 	// CronJobs + JobRegistry power the /api/_admin/cron admin surface
 	// (list / upsert / enable / disable / run-now / delete persisted
 	// schedules in `_cron`). Both must be non-nil for the routes to
@@ -347,6 +364,12 @@ func (d *Deps) Mount(r chi.Router) {
 			// customers, subscriptions, payments, webhook events).
 			// Nil-guarded inside on d.Stripe.
 			d.mountStripe(r)
+
+			// v2.0-alpha — DoA (Delegation of Authority) approval-matrix
+			// admin surface. *** PROTOTYPE (Slice 0). *** Nil-guarded
+			// on d.Authority; bare-Deps tests skip silently.
+			// See docs/26-authority.md.
+			d.mountAuthority(r)
 
 			// Persisted cron schedules — list / upsert / enable / disable
 			// / run-now / delete. Nil-guarded; skipped when CronJobs or
