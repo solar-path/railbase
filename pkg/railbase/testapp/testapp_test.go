@@ -34,9 +34,16 @@ func TestTestApp(t *testing.T) {
 	// One TestApp shared across subtests. Each subtest registers its own
 	// collection name to avoid cross-test interference.
 	users := schemabuilder.NewAuthCollection("users")
+	// Default rules in v0.4+ are LOCKED (empty rule → false). Tests that
+	// exercise anonymous CRUD must opt into public access explicitly.
 	posts := schemabuilder.NewCollection("posts").
 		Field("title", schemabuilder.NewText().Required()).
-		Field("body", schemabuilder.NewText())
+		Field("body", schemabuilder.NewText()).
+		ListRule("true").
+		ViewRule("true").
+		CreateRule("true").
+		UpdateRule("true").
+		DeleteRule("true")
 
 	app := New(t, WithCollection(users, posts))
 	defer app.Close()

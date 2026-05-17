@@ -38,6 +38,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/railbase/railbase/internal/auth/lockout"
 	authmw "github.com/railbase/railbase/internal/auth/middleware"
 	"github.com/railbase/railbase/internal/auth/secret"
 	"github.com/railbase/railbase/internal/auth/session"
@@ -94,7 +95,7 @@ func TestAccountProfileAndPassword_E2E(t *testing.T) {
 	}
 	sessions := session.NewStore(pool, key)
 
-	deps := &Deps{Pool: pool, Sessions: sessions, Log: log}
+	deps := &Deps{Pool: pool, Sessions: sessions, Lockout: lockout.New(), Log: log}
 	r := chi.NewRouter()
 	r.Use(authmw.New(sessions, log))
 	Mount(r, deps)

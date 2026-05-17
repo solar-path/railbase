@@ -99,9 +99,13 @@ func TestMockData(t *testing.T) {
 		// generate + POST 10 rows via the actor. Assert the list endpoint
 		// reports 10 items.
 		a := app.WithTB(t)
+		// Default rules in v0.4+ are LOCKED — opt into public access for
+		// the anonymous-actor smoke check.
 		spec := schemabuilder.NewCollection("mockdata_persist").
 			Field("title", schemabuilder.NewText().Required()).
-			Field("score", schemabuilder.NewNumber().Int())
+			Field("score", schemabuilder.NewNumber().Int()).
+			ListRule("true").
+			CreateRule("true")
 		a.Register(spec)
 
 		md := NewMockData(spec).Seed(99)

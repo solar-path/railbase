@@ -152,14 +152,21 @@ func Backup(ctx context.Context, pool *pgxpool.Pool, w io.Writer, opts Options) 
 		_ = gz.Close()
 	}()
 
-	// Discover tables. `pg_tables` is portable; pg_class would let us
-	// see materialised views too but we explicitly want only ordinary
-	// tables in MVP.
+	// Discover tables. Switched from pg_tables → pg_class so we can
+	// filter on `relkind`:
+	//   'r' — ordinary table (we want these)
+	//   'p' — partitioned-table ROOT (skip — COPY would fail with
+	//         "cannot copy from partitioned table"; the partition
+	//         children are themselves 'r' rows and get dumped naturally)
+	// Audit-log partitioning (introduced for _audit_log_site) brought
+	// the root tables into pg_tables; without this filter the backup
+	// crashed on the root's COPY.
 	rows, err := conn.Query(ctx, `
-		SELECT schemaname, tablename
-		FROM pg_tables
-		WHERE schemaname = 'public'
-		ORDER BY tablename`)
+		SELECT n.nspname, c.relname
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = 'public' AND c.relkind = 'r'
+		ORDER BY c.relname`)
 	if err != nil {
 		return nil, fmt.Errorf("backup: list tables: %w", err)
 	}

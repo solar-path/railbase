@@ -62,13 +62,16 @@ func TestRBACFlowE2E(t *testing.T) {
 	}
 	store := NewStore(pool)
 
-	// === [1] Seed: 8 default roles present ===
+	// === [1] Seed: 9 default roles present ===
+	// 8 from 0013_rbac_seed (system_admin/admin/user/guest at site scope +
+	// owner/admin/member/viewer at tenant scope) + 1 from 0029_rbac_admin_bridge
+	// (system_readonly at site scope).
 	all, err := store.ListRoles(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 8 {
-		t.Errorf("[1] expected 8 seed roles, got %d", len(all))
+	if len(all) != 9 {
+		t.Errorf("[1] expected 9 seed roles, got %d", len(all))
 	}
 	seen := map[string]bool{}
 	for _, r := range all {
@@ -78,14 +81,14 @@ func TestRBACFlowE2E(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"site:system_admin", "site:admin", "site:user", "site:guest",
+		"site:system_admin", "site:system_readonly", "site:admin", "site:user", "site:guest",
 		"tenant:owner", "tenant:admin", "tenant:member", "tenant:viewer",
 	} {
 		if !seen[want] {
 			t.Errorf("[1] missing seed role %s", want)
 		}
 	}
-	t.Logf("[1] seed: 8 roles confirmed")
+	t.Logf("[1] seed: 9 roles confirmed")
 
 	// === [2] Seed grants: site:admin has audit.read ===
 	siteAdmin, err := store.GetRole(ctx, "admin", ScopeSite)

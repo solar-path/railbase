@@ -399,18 +399,24 @@ func (d *Deps) signinHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := session.IPFromRequest(r)
 	ua := r.Header.Get("User-Agent")
-	if locked, until := d.Lockout.Locked(collName, identity); locked {
-		d.Audit.lockout(r.Context(), collName, identity, ip, ua)
-		rerr.WriteJSON(w, rerr.New(rerr.CodeRateLimit,
-			"account temporarily locked; try again at %s", until.UTC().Format(time.RFC3339)))
-		return
+	// Lockout is nil-safe: embedders / tests that don't pass a tracker
+	// get a no-op lockout check (no brute-force protection, but no panic).
+	if d.Lockout != nil {
+		if locked, until := d.Lockout.Locked(collName, identity); locked {
+			d.Audit.lockout(r.Context(), collName, identity, ip, ua)
+			rerr.WriteJSON(w, rerr.New(rerr.CodeRateLimit,
+				"account temporarily locked; try again at %s", until.UTC().Format(time.RFC3339)))
+			return
+		}
 	}
 	row, err := loadAuthRow(r.Context(), d.Pool, collName, identity)
 	if errors.Is(err, errAuthRowMissing) {
 		// Constant-ish-time path: hash a placeholder so the response
 		// time isn't wildly different from the success path.
 		_ = password.Verify(body.Password, dummyHash)
-		d.Lockout.Record(collName, identity)
+		if d.Lockout != nil {
+			d.Lockout.Record(collName, identity)
+		}
 		d.Audit.signin(r.Context(), collName, identity, uuid.Nil, audit.OutcomeFailed, "unknown_user", ip, ua)
 		rerr.WriteJSON(w, rerr.New(rerr.CodeValidation, "invalid credentials"))
 		return
@@ -421,12 +427,16 @@ func (d *Deps) signinHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := password.Verify(body.Password, row.PasswordHash); err != nil {
-		d.Lockout.Record(collName, identity)
+		if d.Lockout != nil {
+			d.Lockout.Record(collName, identity)
+		}
 		d.Audit.signin(r.Context(), collName, identity, row.ID, audit.OutcomeFailed, "wrong_password", ip, ua)
 		rerr.WriteJSON(w, rerr.New(rerr.CodeValidation, "invalid credentials"))
 		return
 	}
-	d.Lockout.Reset(collName, identity)
+	if d.Lockout != nil {
+		d.Lockout.Reset(collName, identity)
+	}
 	d.Audit.signin(r.Context(), collName, identity, row.ID, audit.OutcomeSuccess, "", ip, ua)
 
 	// v1.1.2 MFA branch: if the user has an ACTIVE TOTP enrollment,

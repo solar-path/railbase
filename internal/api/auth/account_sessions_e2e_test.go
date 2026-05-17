@@ -35,6 +35,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/railbase/railbase/internal/auth/lockout"
 	authmw "github.com/railbase/railbase/internal/auth/middleware"
 	"github.com/railbase/railbase/internal/auth/secret"
 	"github.com/railbase/railbase/internal/auth/session"
@@ -89,6 +90,7 @@ func TestAccountSessions_E2E(t *testing.T) {
 	deps := &Deps{
 		Pool:     pool,
 		Sessions: sessions,
+		Lockout:  lockout.New(),
 		Log:      log,
 	}
 	r := chi.NewRouter()
@@ -331,7 +333,7 @@ func TestAccountSessions_E2E(t *testing.T) {
 	// === [7] Confirm the phone token is dead — its lookup must fail ===
 	// We can't directly observe lookup; but a GET /api/auth/me with the
 	// phone token should now 401 because authmw can't find a live session.
-	req, _ := http.NewRequest("GET", srv.URL+"/api/auth/me", nil)
+	req, _ = http.NewRequest("GET", srv.URL+"/api/auth/me", nil)
 	req.Header.Set("Authorization", "Bearer "+aliceTok2)
 	resp2, _ := c.Do(req)
 	resp2.Body.Close()

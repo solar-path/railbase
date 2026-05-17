@@ -36,6 +36,7 @@ import (
 	"net/http"
 	"testing"
 
+	schemabuilder "github.com/railbase/railbase/internal/schema/builder"
 	"github.com/railbase/railbase/pkg/railbase"
 	"github.com/railbase/railbase/pkg/railbase/testapp"
 )
@@ -56,7 +57,11 @@ func TestOnBeforeServeRoute_SeesAuthPrincipal_E2E(t *testing.T) {
 		t.Skip("e2e: skipping in -short mode")
 	}
 
-	app := testapp.New(t)
+	// AsUser("users", ...) signs up against /api/collections/users/auth-*,
+	// so the users auth collection must be registered before boot —
+	// testapp.New no longer auto-registers it.
+	users := schemabuilder.NewAuthCollection("users")
+	app := testapp.New(t, testapp.WithCollection(users))
 	defer app.Close()
 
 	// A custom handler — exactly the shape a Sentinel-style userland

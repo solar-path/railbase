@@ -264,6 +264,14 @@ func (d *Deps) update(w http.ResponseWriter, r *http.Request) {
 		}
 		in.Slug = &s
 	}
+	// Empty PATCH ({} or all-null fields) is a malformed request — a
+	// client that wanted a no-op shouldn't be PATCHing. Surface a 400
+	// so the no-op intent is explicit rather than a silent 200.
+	if in.Name == nil && in.Slug == nil {
+		rerr.WriteJSON(w, rerr.New(rerr.CodeValidation,
+			"patch must include at least one updatable field (name, slug)"))
+		return
+	}
 	t, err := d.Tenants.Update(r.Context(), id, in)
 	if err != nil {
 		switch err {
