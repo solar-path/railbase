@@ -18,6 +18,7 @@ import (
 
 	"github.com/railbase/railbase/internal/audit"
 	authmw "github.com/railbase/railbase/internal/auth/middleware"
+	"github.com/railbase/railbase/internal/authority"
 	rerr "github.com/railbase/railbase/internal/errors"
 	"github.com/railbase/railbase/internal/eventbus"
 	"github.com/railbase/railbase/internal/export"
@@ -107,6 +108,16 @@ type handlerDeps struct {
 	filesDeps    *FilesDeps           // nil → file fields render as raw filename
 	pdfTemplates *export.PDFTemplates // nil → PDFConfig.Template is ignored, handler falls back to data-table layout
 	audit        *audit.Writer        // nil → export handlers skip audit emission (silent no-op)
+	// v2.0-alpha DoA (Slice 0 prototype) — when non-nil, the
+	// updateHandler invokes gate.Check between the BeforeUpdate hook
+	// and the DB write. nil leaves CRUD unchanged (full backward
+	// compat for embedders that haven't opted into DoA wiring).
+	authority *authority.Store
+	// authorityAudit is the optional audit-chain hook for DoA
+	// consume events (Slice 2). Emitted after MarkConsumed succeeds
+	// in-tx. Nil = no audit emission. Independent of `audit` which
+	// fires for regular CRUD audit rows.
+	authorityAudit *authority.AuditHook
 }
 
 // recordURLFn builds the per-record fileURLFunc passed into
@@ -708,6 +719,27 @@ func (d *handlerDeps) updateHandler(w http.ResponseWriter, r *http.Request) {
 	// out from under us, but for audit purposes "what was visible
 	// to this request at the start" is the honest record.
 	auditBefore := fetchPreImage(r.Context(), q, spec, id)
+
+	// v2.0-alpha DoA gate — runs after pre-image fetch. The gate needs
+	// the pre-image regardless of spec.Audit (audit fetch returns nil
+	// when audit is off), so we fetch it separately when DoA wiring is
+	// active. Returns Allowed=false → 409 with envelope; Allowed=true +
+	// ConsumeWorkflowID → stash for in-tx consume after UPDATE succeeds.
+	// See docs/26-authority.md §Lifecycle.
+	var gateBefore map[string]any
+	if d.authority != nil && len(spec.Authorities) > 0 {
+		if auditBefore != nil {
+			gateBefore = auditBefore
+		} else {
+			gateBefore = fetchRowForGate(r.Context(), q, spec, id)
+		}
+	}
+	consumeWorkflowID, gateBlocked := d.runAuthorityGate(r.Context(), w, spec, id,
+		gateBefore, mergeForGate(gateBefore, fields))
+	if gateBlocked {
+		return
+	}
+
 	// v1.5.12 AdjacencyList cycle/depth check on UPDATE. No-op if
 	// `parent` is not in the patch (no chain change).
 	if spec.AdjacencyList {
@@ -722,7 +754,28 @@ func (d *handlerDeps) updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := q.Query(r.Context(), sql, args...)
+	// When consume is required, wrap the UPDATE + MarkConsumed in a tx
+	// to honor the anti-bait-and-switch invariant (docs/26 §P1.4).
+	// Otherwise (the vast majority of mutations — no Authority match)
+	// the existing direct-query path stays unchanged for zero overhead.
+	var queryRunner pgQuerier = q
+	var consumeTx pgx.Tx
+	if consumeWorkflowID != nil {
+		tx, beginErr := q.Begin(r.Context())
+		if beginErr != nil {
+			rerr.WriteJSON(w, rerr.Wrap(beginErr, rerr.CodeInternal, "begin consume tx"))
+			return
+		}
+		defer func() {
+			if consumeTx != nil {
+				_ = consumeTx.Rollback(r.Context()) // no-op after commit
+			}
+		}()
+		consumeTx = tx
+		queryRunner = tx
+	}
+
+	rows, err := queryRunner.Query(r.Context(), sql, args...)
 	if err != nil {
 		if isInvalidUUID(err) {
 			rerr.WriteJSON(w, rerr.New(rerr.CodeNotFound, "record not found"))
@@ -759,6 +812,46 @@ func (d *handlerDeps) updateHandler(w http.ResponseWriter, r *http.Request) {
 		rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "scan failed"))
 		return
 	}
+	// Close rows BEFORE we run MarkConsumed/Commit on the tx — pgx
+	// disallows new queries while rows are still open.
+	rows.Close()
+
+	// DoA consume: now that the UPDATE row exists in the tx, mark the
+	// approving workflow as consumed and commit. Failures here roll
+	// back the UPDATE — the row never lands without the consume.
+	if consumeTx != nil && consumeWorkflowID != nil {
+		if err := d.authority.MarkConsumed(r.Context(), consumeTx, *consumeWorkflowID); err != nil {
+			d.log.Error("rest: update mark consumed failed",
+				"collection", spec.Name, "workflow", consumeWorkflowID, "err", err)
+			rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "consume workflow"))
+			return
+		}
+		if err := consumeTx.Commit(r.Context()); err != nil {
+			rerr.WriteJSON(w, rerr.Wrap(err, rerr.CodeInternal, "commit consume tx"))
+			return
+		}
+		consumeTx = nil // signal deferred rollback to no-op
+
+		// Audit emission for the consume event — fires AFTER commit so a
+		// rollback (which can't happen here past tx.Commit) couldn't
+		// leak a phantom audit row. The audit Writer uses its own pool
+		// connection so it's independent of the now-committed tx.
+		if d.authorityAudit != nil {
+			actor := authority.ActorContext{
+				UserID:         authmw.PrincipalFrom(r.Context()).UserID,
+				UserCollection: authmw.PrincipalFrom(r.Context()).CollectionName,
+				IP:             r.RemoteAddr,
+				UserAgent:      r.UserAgent(),
+			}
+			actionKey := ""
+			if len(spec.Authorities) > 0 {
+				actionKey = spec.Authorities[0].Matrix
+			}
+			d.authorityAudit.WorkflowConsumed(r.Context(), actor, *consumeWorkflowID,
+				spec.Name, id, actionKey)
+		}
+	}
+
 	// v1.2.0 hook dispatch: AfterUpdate.
 	if d.hooks != nil {
 		_, _ = d.hooks.Dispatch(r.Context(), spec.Name, hooks.EventRecordAfterUpdate, row)

@@ -261,6 +261,45 @@ func (b *CollectionBuilder) EntityDoc(cfg EntityDocConfig) *CollectionBuilder {
 	return b
 }
 
+// Authority registers a DoA (Delegation of Authority) gate point on
+// this collection. v2.0 prototype (Slice 0).
+//
+// The gate matches mutations described by cfg.On and looks up
+// approval rules in _doa_matrices keyed by cfg.Matrix at request
+// time. Schema-side declares WHERE the gate sits; the matrix data
+// (edited via admin UI) declares WHAT rules apply. See
+// docs/26-authority.md (rev2) for the hybrid model.
+//
+// Example — newsroom publish workflow with materiality:
+//
+//	var Articles = schema.Collection("articles").
+//	    Field("title",   schema.Text().Required()).
+//	    Field("status",  schema.Select("draft","in_review","published")).
+//	    Field("total_cents", schema.Number().Int()).
+//	    Authority(schema.AuthorityConfig{
+//	        Name:            "publish",
+//	        Matrix:          "articles.publish",
+//	        On: schema.AuthorityOn{
+//	            Op:    "update",
+//	            Field: "status",
+//	            To:    []string{"published"},
+//	        },
+//	        AmountField:     "total_cents",
+//	        Currency:        "USD",
+//	        ProtectedFields: []string{"title","body","total_cents"},
+//	        Required:        true,
+//	    })
+//
+// Slice 0 limits: only AuthorityOn.Op="update" is wired end-to-end.
+// "insert" and "delete" reserve their slot in the type but are
+// deferred. Multiple .Authority() calls on the same collection are
+// permitted (each declares a distinct gate point with its own
+// Matrix key + On pattern).
+func (b *CollectionBuilder) Authority(cfg AuthorityConfig) *CollectionBuilder {
+	b.spec.Authorities = append(b.spec.Authorities, cfg)
+	return b
+}
+
 // Index declares a user index. Use for queries that the
 // auto-generated indexes (PK, unique, FK-backing) don't already cover.
 //

@@ -928,6 +928,68 @@ func RegisterNotificationBuiltins(reg *Registry, flusher NotificationFlusher, lo
 	})
 }
 
+// RegisterDoABuiltins installs the v2.0-alpha DoA reapers
+// (internal/authority). Separate registration function because the
+// DoA reapers need a different lifecycle: they ship as part of v2.0
+// boot, NOT v1.x baseline. Operators upgrading from v1.x get them
+// after they enable the DoA sys-migrations (0034 + 0035).
+//
+//	doa_workflow_reaper    — running workflows past expires_at → expired
+//	doa_delegation_reaper  — active delegations past effective_to → revoked
+func RegisterDoABuiltins(reg *Registry, db ExecQuerier, log *slog.Logger) {
+	if log == nil {
+		log = slog.Default()
+	}
+	// v2.0-alpha — DoA workflow expiration reaper. Sweeps running
+	// workflows whose expires_at has passed and transitions them to
+	// status='expired' atomically. The matrix's on_final_escalation
+	// column is informative-only here; the reaper always uses 'expire'
+	// semantics (rather than 'reject') because expiration is a clock
+	// event, not an actor decision.
+	//
+	// Side-effects: terminal_at is set; current_level is nulled. No
+	// audit row is written here — Slice 2 audit chain integration will
+	// hook a row per transition.
+	reg.Register("doa_workflow_reaper", func(ctx context.Context, j *Job) error {
+		tag, err := db.Exec(ctx, `
+			UPDATE _doa_workflows
+			SET status = 'expired',
+			    current_level = NULL,
+			    terminal_reason = 'expired (past expires_at)',
+			    terminal_at = now()
+			WHERE status = 'running'
+			  AND expires_at < now()`)
+		if err != nil {
+			return fmt.Errorf("doa_workflow_reaper: %w", err)
+		}
+		log.Info("jobs: doa_workflow_reaper", "expired", tag.RowsAffected())
+		return nil
+	})
+
+	// v2.0-alpha — DoA delegation reaper. Active delegations whose
+	// effective_to has passed get auto-revoked with a synthetic reason.
+	// Keeps the delegation table tidy + ensures ResolveApproversWithDelegation
+	// doesn't keep widening pools past the intended window even if the
+	// strict effective_to filter would catch them anyway (defense in
+	// depth + observability via status column flipping in admin UI).
+	reg.Register("doa_delegation_reaper", func(ctx context.Context, j *Job) error {
+		tag, err := db.Exec(ctx, `
+			UPDATE _doa_delegations
+			SET status = 'revoked',
+			    revoked_reason = 'auto-revoked (effective_to passed)',
+			    revoked_at = now(),
+			    updated_at = now()
+			WHERE status = 'active'
+			  AND effective_to IS NOT NULL
+			  AND effective_to < now()`)
+		if err != nil {
+			return fmt.Errorf("doa_delegation_reaper: %w", err)
+		}
+		log.Info("jobs: doa_delegation_reaper", "revoked", tag.RowsAffected())
+		return nil
+	})
+}
+
 // DefaultSchedules returns the cron rows Railbase upserts on first
 // boot. Operators may delete or modify via CLI/admin UI; on
 // subsequent boots we DON'T re-insert deleted ones (they had reasons).
@@ -1033,6 +1095,26 @@ func DefaultSchedules() []DefaultSchedule {
 			Name:       "retry_failed_welcome_emails",
 			Expression: "*/30 * * * *",
 			Kind:       "retry_failed_welcome_emails",
+		},
+		{
+			// v2.0-alpha — DoA workflow expiration reaper. Runs every
+			// 10 min: a workflow whose expires_at slipped past 9 min
+			// ago is still visible as "running" to users for at most
+			// 10 min in the worst case. Tighter cadence isn't worth
+			// the extra DB churn; looser would let stale running
+			// workflows linger uncomfortably.
+			Name:       "doa_workflow_reaper",
+			Expression: "*/10 * * * *",
+			Kind:       "doa_workflow_reaper",
+		},
+		{
+			// v2.0-alpha — DoA delegation expiration reaper. Hourly
+			// cadence: delegations have day/week granularity windows
+			// in practice; sub-hourly precision adds DB load with no
+			// observable benefit.
+			Name:       "doa_delegation_reaper",
+			Expression: "5 * * * *", // hourly at :05
+			Kind:       "doa_delegation_reaper",
 		},
 	}
 }
