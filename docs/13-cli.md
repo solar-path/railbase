@@ -14,8 +14,19 @@ railbase init <name> [--template basic|auth-starter|fullstack]
   `replace` directive pointing at your local railbase tree (validated:
   path exists, is a directory, contains a go.mod for github.com/railbase/railbase).
 
-railbase serve [--addr :8095] [--dev]
+railbase serve [--addr :8095] [--data-dir ./pb_data] [--dsn postgres://...]
+               [--log-level info] [--dev]
   Start HTTP server. --dev: hot reload Go code via embedded air-style watcher.
+
+  Convenience flags (CLI-4, 2026-05-17) layer on top of env vars:
+  flag > env > default. Embedders running ad-hoc instances do not need
+  to export env variables for one-off runs:
+    railbase serve --addr :8195 --data-dir /tmp/run1 --log-level debug
+  Per-flag env equivalents:
+    --addr       $RAILBASE_HTTP_ADDR      (default :8095)
+    --data-dir   $RAILBASE_DATA_DIR       (default ./pb_data)
+    --dsn        $RAILBASE_DSN            (default embedded PG)
+    --log-level  $RAILBASE_LOG_LEVEL      (default info)
 
 railbase dev [--addr :8095] [--embed-pg] [--web ./web] [--web-cmd "npm run dev"]
   Run backend + frontend dev server side-by-side with single Ctrl-C lifecycle.
@@ -76,8 +87,10 @@ railbase admin update <email> [--password <p>]
 railbase admin delete <email>
   Delete admin.
 
-railbase admin list
-  List all system admins.
+railbase admin list [--skip-migrate-check]
+  List all system admins. With --skip-migrate-check (CLI-5, 2026-05-17),
+  applySysMigrations is bypassed — recovery path on a database that
+  cannot apply migrations (broken state, pending manual fix).
 
 railbase admin reset-2fa <email>
   Reset 2FA для admin (audit обязательный).
@@ -219,6 +232,23 @@ railbase auth oauth2-test --provider <name>
 
 railbase auth scim-token --tenant <id>
   Issue SCIM provisioning token (с plugin railbase-scim).
+
+railbase auth set-password <collection> <email> <password>
+  Set/reset password on a non-admin auth collection record (CLI-1,
+  2026-05-17). Mirrors `admin reset-password` for `users` / `authors`
+  /etc. Verifies the collection has auth=true, hashes with argon2id,
+  sets verified=TRUE so the user can sign in without a second email-
+  verification step. Defensive guard refuses non-auth collections by
+  checking _admin_collections or information_schema for password_hash
+  column.
+
+  Example: railbase auth set-password authors margaret@example.com hunter2
+
+railbase auth origins list <user-id>
+  Inspect device / IP origins recorded for a user (per-record auth surface).
+
+railbase auth token <subcommand>
+  Manage API tokens (long-lived bearer credentials).
 ```
 
 ### Database
@@ -241,13 +271,28 @@ railbase db stats
 
 ```
 railbase config get <key>
-  Read config value (env-resolved).
+  Read config value (env-resolved). Output is JSON-encoded.
 
-railbase config set <key> <value>
-  Set runtime-mutable setting (стores в _settings).
+railbase config set <key> <value> [--string]
+  Set runtime-mutable setting (stores в _settings).
+  By default the <value> argument is parsed as JSON:
+    railbase config set mailer.smtp.port 587            # number
+    railbase config set mailer.tls true                 # bool
+    railbase config set mailer.cc '["a@x","b@x"]'       # array
+  CLI-2 (2026-05-17): plain strings work without shell-quoting
+  gymnastics — if the value doesn't begin with a JSON-significant
+  character ({, [, ", -, digit, t, f, n) it's treated as a literal
+  string. Most common case stays painless:
+    railbase config set mailer.smtp.host localhost      # string
+  Pass --string to force literal-string interpretation even when the
+  value would parse as JSON (e.g. setting key to the literal "true"):
+    railbase config set my.flag --string true
+
+railbase config delete <key>
+  Remove a runtime setting (falls back to default / env value).
 
 railbase config list [--section <s>]
-  List all settings.
+  Print every settings key + value as JSON.
 ```
 
 ### Mailer

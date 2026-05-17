@@ -202,6 +202,75 @@ Forensic audit of the Sentinel project (real consumer at /Users/work/apps/sentin
 - **C3 / Hook reentry guards** ✅ — `internal/hooks/hooks.go::Dispatch` carries a depth counter (max 5) via context. Closes Sentinel's "recursive hook reentry guards" gap from `schema/tasks.go:21` — runaway rollup loops surface as `ErrHookDepthExceeded`, not deadlocks.
 - **B5 / SDK session manager** ✅ — `createRailbaseClient({ storage: localStorage })` hydrates the token on construction, persists on `setToken()`, clears on logout. Closes Sentinel's hand-rolled `lib/client.ts:4-54` localStorage boilerplate.
 
+### shopper / loadtest / blogger feedback wave ✅
+
+After three independent embedder projects (shopper, loadtest GRC pilot,
+blogger) shipped feedback simultaneously, 22 fixes landed in one commit
+batch (`2172035`). Closes the dormant gaps the Slice 0/1 sprints
+hadn't covered:
+
+**PERF — hot path under load:**
+- **PERF-1** ✅ — Lazy-count + cap-count strategies on LIST. New `?count=
+  none|exact|estimate|capped` query param. Default = `none`, saves 87%
+  PG-CPU on 1M-row collections that did `SELECT COUNT(*)` per page.
+- **PERF-2** ✅ — Keyset cursor pagination via `?cursor=<opaque>`.
+  Base64-encoded `(id, sort_dir)` payload, ASC/DESC honoured from sort key.
+- **PERF-3** ✅ — `statement_timeout` via `pool.Config.StatementTimeout` +
+  `pgxpool.AfterConnect` hook + `RAILBASE_DB_STATEMENT_TIMEOUT` env
+  (30s default; `0|off|disabled|none` sentinel disables).
+- **PERF-4** ✅ — CLI pool reads full `RAILBASE_DB_*` env set
+  (MaxConns/MinConns/Lifetime/IdleTime/StatementTimeout).
+
+**OPS:**
+- **OPS-1** ✅ — `railbase import data` resolves dynamic collections
+  from `_admin_collections.spec` (was code-only before).
+- **OPS-2** ✅ — Auth-collection creation through REST admin via
+  `confirm_irreversible` flag; empty-rule warnings (`rule_locked` code).
+
+**API:**
+- **API-1/2** ✅ — `/api/profiles` pagination + unified envelope shape
+  (`{page, perPage, totalItems, totalPages, items, count}`).
+- **API-6** ✅ — `/api/health` + `/api/ready` aliases next to `/healthz` /
+  `/readyz` (matches k8s convention).
+- **API-7** ✅ — `POST /api/exports/sign` (dltoken-backed signed download
+  URLs with allowlist `/api/collections/`, `/api/files/`).
+
+**BEH — operator-visible:**
+- **BEH-1** ✅ — RuleSet doc clarity: empty = LOCKED + Open marker.
+- **BEH-2** ✅ — Filter parser accepts both `'` and `"` string quoting.
+- **BEH-3** ✅ — `railbase dev` loads `.env` via `config.LoadDotenvFiles`.
+- **BEH-4** ✅ — Generated migrations now `RAISE EXCEPTION` on missing
+  backfill + WARNING banner header.
+
+**DSL:**
+- **DSL-1** ✅ — `Files().MaxCount(N)` — JSONB-array length check before
+  append.
+- **DSL-3** ✅ — XLSX Format actually applied via excelize CustomNumFmt
+  styles (was stored-but-ignored).
+- **DSL-4** ✅ — `EntityDocConfig.Renderer EntityDocRenderer` —
+  programmatic Go callback bypassing the Markdown template engine.
+
+**CLI:**
+- **CLI-1** ✅ — `railbase auth set-password <collection> <email> <pw>`.
+- **CLI-2** ✅ — `config set` accepts plain strings (no JSON quoting needed)
+  + `--string` flag.
+- **CLI-4** ✅ — `railbase serve --addr --data-dir --dsn --log-level`.
+- **CLI-5** ✅ — `railbase admin list --skip-migrate-check`.
+
+**ENV:**
+- **ENV-1** ✅ — Embedded PG forces `LC_ALL=C` / `LANG=C` for `initdb`
+  (closes the macOS-non-UTF8-locale → initdb-fails class of bugs).
+- **ENV-6** ✅ — Rate-limit `ParseRule` accepts
+  `0|off|disabled|none|false|no` sentinels.
+
+A follow-up dormant-test sweep (commit `880968a`) caught six pre-existing
+test failures that lived behind `//go:build embed_pg` + `-short` and
+never ran in CI: RBAC seed count 8→9 (0029 added `system_readonly`),
+testapp+mockdata default-rule expectations, principal_e2e_test users
+registration, account_{sessions,profile} missing `Lockout`,
+tenants empty-PATCH 400, backup table discovery excluding
+partitioned roots.
+
 ### v3.x Unified Audit Log — Phase 1.5 / 2 / 3 / 4 ✅
 
 Все четыре фазы реализованы в этой же ветке:
@@ -301,7 +370,8 @@ S3 + KMS implementations поставляются как scaffolding с build ta
 - **railbase-cluster** (NATS distributed realtime)
 - **railbase-orgs** (organizations entity, invites, seats, ownership transfer; per-tenant RBAC уже в core)
 - **railbase-billing** (Stripe primary)
-- **railbase-authority** (approval engine)
+- ~~**railbase-authority** (approval engine)~~ → **в core с v2.0**,
+  см. [26-authority.md](26-authority.md) + раздел «v2.0» ниже
 - **railbase-fx** (FX rates для currency conversions: ECB / OXR / Fixer / CoinGecko adapters)
 - **railbase-pdf-preview** (poppler sidecar)
 
@@ -370,7 +440,19 @@ subsystem'а с собственным API surface, schema DSL, admin UI и
 SDK namespace'ом. API-additive (старые v1 контракты не меняются),
 но scope большой → честный breakpoint вместо размывания v1.x.
 
-### v2.0 Authority (DoA в ядре) — hybrid schema+matrix-data model (rev2)
+> **Статус DoA: Slice 0 + Slice 1 + Slice 2 delivered** (2026-05-17,
+> коммиты `5ee1b68` + `0e8d502`). Backend сторона core DoA
+> (schema-as-code + matrix data + workflow runtime + gate + delegation
+> + reapers + inbox + audit-chain) полностью в `main`. Осталось:
+> Slice 3+ — admin UI screens, tasks integration (зависит от Tasks
+> subsystem ниже), realtime/notifications fan-out, `position` +
+> `department_head` approver types. Подробности и измерения — в
+> [26-slice0-findings.md](26-slice0-findings.md).
+>
+> **Статус Tasks: pending** — спец [27-tasks.md](27-tasks.md) актуален,
+> реализация не начата.
+
+### v2.0 Authority (DoA в ядре) — hybrid schema+matrix-data model (rev2) ✅ Slice 0/1/2
 
 Полный спек: [26-authority.md](26-authority.md) (rev2 после ysollo
 comparison analysis).

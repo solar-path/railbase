@@ -31,11 +31,17 @@ var Posts = schema.Collection("posts").
             Columns: []string{"title", "status", "author.email", "created"},
             Headers: map[string]string{"author.email": "Author"},
             // Format maps column keys to Excel number-format codes.
-            // **v1.6.3 status: stored but not yet applied** — see
-            // FEEDBACK #37; targets v1.6.x follow-up. For now,
-            // pre-format the values in your row data or use a custom
-            // handler via pkg/railbase/export.NewXLSXWriter.
-            Format:  map[string]string{"created": "yyyy-mm-dd"},
+            // **Status: applied** (DSL-3, 2026-05-17). The writer
+            // registers one excelize CustomNumFmt style per distinct
+            // format code and tags each cell in the column via
+            // excelize.Cell{StyleID: ...}, so Excel/LibreOffice render
+            // the column with the declared formatting (sortable as
+            // numbers, locale-aware separators).
+            Format:  map[string]string{
+                "created":  "yyyy-mm-dd",
+                "subtotal": "$#,##0.00",
+                "tax_rate": "0.00%",
+            },
         }),
         schema.ExportPDF(schema.PDFExportConfig{
             Template: "posts-report.md",   // relative to pb_data/pdf_templates
@@ -48,9 +54,10 @@ var Posts = schema.Collection("posts").
 > `schema.CurrencyFormat(...)` DSL — the type names in earlier drafts of
 > this doc were aspirational. `Format` is a `map[string]string` where
 > the value is a raw Excel number-format code (`yyyy-mm-dd`,
-> `#,##0.00`, `$#,##0.00`, `0.00%`, ...). For PDF templates, use the
-> `currency` template helper (see §Template helpers below) — it works
-> today, no schema-level formatting needed.
+> `#,##0.00`, `$#,##0.00`, `0.00%`, ...). Codes share styles internally,
+> so 50 columns with the same `"yyyy-mm-dd"` code produce one
+> `styles.xml` entry, not 50. For PDF templates, use the `currency`
+> template helper (see §Template helpers below).
 
 Это автоматически создаёт endpoints:
 
@@ -220,6 +227,33 @@ Customer: {{ .Record.contact_email }}
 Multiple `.EntityDoc(...)` вызовы на одной коллекции дают несколько
 routes (`invoice.pdf`, `receipt.pdf`, …). Все используют тот же
 template engine + helpers, что `.Export()` (см. §Helpers ниже).
+
+#### Programmatic renderer (DSL-4, 2026-05-17)
+
+Когда Markdown-шаблон не достаточен — нужна Go-функция, которая
+читает Record + Related и возвращает готовые PDF-байты (свой layout,
+сторонняя библиотека, watermark, цифровая подпись и т.д.) —
+заполняйте `Renderer` вместо `Template`:
+
+```go
+import "github.com/railbase/railbase/internal/schema/builder"
+
+EntityDoc(schema.EntityDocConfig{
+    Name: "invoice",
+    Renderer: func(ctx builder.EntityDocContext) ([]byte, error) {
+        // ctx.Record / ctx.Related / ctx.Tenant / ctx.Now — те же,
+        // что увидел бы шаблон. Верните финальные PDF-байты.
+        return generateInvoicePDF(ctx.Record, ctx.Related["items"])
+    },
+})
+```
+
+Renderer **не сериализуется в JSON** (поле `json:"-"`) — динамические
+коллекции из `_admin_collections.spec` поднять Go-функцию не могут.
+Граница ясная: programmatic путь живёт только в Go-коде, шаблонный —
+доступен и через JSON-спеки. Когда `Renderer != nil`, шаблон
+игнорируется полностью, инициализация `pb_data/pdf_templates`
+embedder'ам с чисто-программными доками не нужна.
 
 **RBAC** (v1.7.50+): handler идёт через ту же compose/build/queryFor
 chain, что и обычный `GET /api/collections/{name}/records/{id}` —

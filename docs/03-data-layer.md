@@ -223,7 +223,7 @@ DSL signatures user-facing — стабильны. Storage column всегда P
 | Select (single) | `schema.Enum("a", "b")` | native `ENUM` type или `TEXT + CHECK` | btree | |
 | Select (multi) | `schema.MultiSelect("a", "b")` | `TEXT[]` | GIN | + min/max selections |
 | File (single) | `schema.File()` | `TEXT` (path) | btree | + size/mime/thumbnails в metadata table |
-| File (multi) | `schema.Files()` | `JSONB` (array of file refs) | GIN | |
+| File (multi) | `schema.Files()` | `JSONB` (array of file refs) | GIN | `.MaxCount(N)` ограничивает длину массива (DSL-1, jsonb_array_length probe перед append) |
 | Relation (single) | `schema.Relation("users")` | `UUID` или `TEXT` (FK) | btree, FK constraint | + `.CascadeDelete()`, `.Required()` |
 | Relation (multi) | `schema.Relations("tags")` | через junction table (`m2m`) или `UUID[]` | GIN если array, btree если junction | |
 | JSON | `schema.JSON()` | `JSONB` | GIN | typed via Go generic: `schema.JSONOf[MyType]()` |
@@ -1540,23 +1540,59 @@ Same syntax + extensions:
 
 ## Pagination
 
-Два mode (PB-compat + native):
+Два mode (PB-compat offset + native keyset cursor).
 
-### Offset (PB-compat)
+### Offset (PB-compat) — `?page=&perPage=`
 
 ```
 GET /api/collections/posts/records?page=2&perPage=20
-→ { items: [...], page: 2, perPage: 20, totalItems: 1234, totalPages: 62 }
+→ { items: [...], page: 2, perPage: 20, totalItems: <see ?count below>, totalPages: ... }
 ```
 
-### Cursor (native, рекомендованный для больших коллекций)
+### Cursor (native, рекомендован для коллекций >100k строк) — `?cursor=`
 
 ```
-GET /v1/posts?limit=20&after=eyJpZCI6Ii4uLiJ9
-→ { items: [...], next_cursor: "eyJpZCI6Ii4uLiJ9", has_more: true }
+GET /api/collections/posts/records?perPage=20&sort=-created&cursor=eyJpZCI...
+→ { items: [...], perPage: 20, more: true, nextCursor: "eyJpZCI..." }
 ```
 
-Cursor = base64(JSON({sort_field_value, id})). Stable across inserts/deletes.
+`nextCursor` — это `base64url(id)` последней строки в текущей странице.
+ASC/DESC выводится из `?sort=` (первый ключ); WHERE-фрагмент дополняется
+`id > $N` (или `id < $N` для DESC). Курсор устойчив к параллельным
+insert'ам/delete'ам (нет «сдвига страниц» как у OFFSET).
+
+### `?count=` strategies (PERF-1, 2026-05-17)
+
+`SELECT COUNT(*)` на горячем LIST'е держит до **87% PG-CPU** на 1M-row
+коллекциях. По умолчанию COUNT не запускается; клиент сам решает,
+платить ли за точное число строк.
+
+| `?count=` | Поведение | Когда использовать |
+|---|---|---|
+| (omitted) / `none` | `totalItems: null`, `totalPages: null` | Бесконечная прокрутка / `?cursor=` — UI не показывает «X из Y» |
+| `exact` | `SELECT COUNT(*) FROM <coll> WHERE <filter>` | Маленькие таблицы (<10k) или явный «X из Y» в UI |
+| `estimate` | `SELECT reltuples FROM pg_class` (только если WHERE пустой) | Глобальная агрегатная цифра на dashboard |
+| `capped[:N]` | `SELECT COUNT(*) FROM (SELECT 1 FROM <coll> WHERE <filter> LIMIT N+1)` | UI «1-50 of 50+» — N по умолчанию 1000 |
+
+Capped-mode дополнительно возвращает `more: true|false` — флаг, что
+дальше есть строки за пределами `N`.
+
+Совместимость: старые v1-клиенты без `?count` получают `totalItems:
+null`. Они должны переключиться на `?count=exact` если строят
+«X из Y» UI. Зацепка пойманая на shopper FEEDBACK #11.
+
+### Statement timeout (PERF-3, 2026-05-17)
+
+Каждое соединение в pgxpool получает `SET statement_timeout = X` через
+`AfterConnect` хук. Параметр поднимается из env:
+
+- `RAILBASE_DB_STATEMENT_TIMEOUT=30s` — default (любой `time.Duration` literal)
+- `RAILBASE_DB_STATEMENT_TIMEOUT=0` (или `off|disabled|none`) — выключить
+- Поле `Config.DBStatementTimeout` в Go API
+
+В сумме с `?count=none` и keyset cursor пагинацией это закрывает
+loadtest-feedback'овую трёхголовую болезнь: COUNT-bottleneck + OFFSET
+drift + runaway query без потолка по времени.
 
 ---
 

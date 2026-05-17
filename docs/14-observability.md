@@ -548,6 +548,18 @@ All four are PUBLIC (no RequireAdmin) by design — operator can't be admin unti
 - `/healthz` — всегда 200, just liveness
 - `/readyz` — 200 если: DB reachable + migrations applied + admin exists + broker started; иначе 503
 
+**Aliases under `/api/*`** (API-6, 2026-05-17): GCP/k8s/AWS-style probes
+часто конфигурируются с префиксом `/api/`, чтобы один и тот же reverse-
+proxy gate'ил всё под `/api/*`. Чтобы не плодить два прокси-правила,
+у обоих probe'ов есть alias под `/api/`:
+
+- `/api/health` ≡ `/healthz` (liveness)
+- `/api/ready` ≡ `/readyz` (readiness)
+
+Обе пары делят один и тот же handler — поведение/коды идентичны. Operators
+свободны конфигурировать k8s liveness/readiness pointing at либо к `/healthz`,
+либо к `/api/health`.
+
 CLI alternative: `railbase health` для container probes без HTTP.
 
 ---
@@ -608,6 +620,12 @@ Scheduled backup → upload → local copy retained per retention.
 - `golang.org/x/time/rate` token bucket per IP, sharded
 - Default: 60 req/sec, burst 120
 - Configurable per-route в `railbase.yaml` или admin UI Settings
+- Rule strings: `"100/min"`, `"30/s"`, `"5000/hour"`, `"50000/day"`
+- **Disable sentinels** (ENV-6, 2026-05-17): для выключения axis без
+  удаления env-переменной `ParseRule` принимает case-insensitive
+  `0|off|disabled|none|false|no` — возвращает zero-value Rule
+  (= axis disabled). Полезно когда операторы переключают axes per-env
+  через config management.
 
 ### Per-user (opt-in)
 
@@ -1024,8 +1042,8 @@ LimitNOFILE=65536
 - ConfigMap для config
 - Secret для `.secret` и env vars
 - Service + Ingress
-- Liveness probe → `/healthz`
-- Readiness probe → `/readyz`
+- Liveness probe → `/healthz` (или `/api/health` alias)
+- Readiness probe → `/readyz` (или `/api/ready` alias)
 - Horizontal scaling — managed Postgres (RDS / Cloud SQL / Supabase) + S3 storage; для очень крупных (десятки реплик) — `railbase-cluster` plugin (NATS broker) поверх
 
 ### Edge / single-VPS

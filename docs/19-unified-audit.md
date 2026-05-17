@@ -206,6 +206,35 @@ chain mismatch — application-level CRUD пишет каждое state change
 как audit event с linked prev_hash; manual UPDATE bypasses audit
 writer, hash diverges от next seal'а, verify fails.
 
+**Status: DoA chain integration delivered Slice 2.3 (2026-05-17).**
+`internal/authority/audit_hook.go` определяет `AuditHook` (обёртка над
+`audit.Writer`) с девятью типизированными методами эмиссии под одной
+chain `target='authority'`:
+
+| Event method | When fired | Source site |
+|---|---|---|
+| `MatrixCreated` | Admin creates matrix (status='draft') | `adminapi/authority.go` |
+| `MatrixApproved` | Admin transitions draft→approved | `adminapi/authority.go` |
+| `MatrixRevoked` | Admin transitions approved→revoked | `adminapi/authority.go` |
+| `WorkflowCreated` | Mutation hits gate, triggers workflow | `authorityapi/workflow.go` |
+| `WorkflowDecision` | Approver signs (approve or reject) | `authorityapi/workflow.go` |
+| `WorkflowCancelled` | Initiator cancels running workflow | `authorityapi/workflow.go` |
+| `WorkflowConsumed` | UPDATE+`MarkConsumed` tx commits | `rest/handlers.go` (post-tx) |
+| `DelegationCreated` | User publishes delegation | `adminapi/delegations.go` |
+| `DelegationRevoked` | User/reaper revokes delegation | `adminapi/delegations.go` |
+
+Все 9 точек эмиссии **nil-safe** — когда `AuthorityAudit` не выставлен
+на `adminapi.Deps`/`rest.handlerDeps`, бизнес-операции работают
+молча. Audit emission failures **не** валят бизнес-операции
+(fire-and-forget pattern, тот же что у `audit.Writer`). Один особый
+случай — `WorkflowConsumed` — эмитируется AFTER tx commit, чтобы
+phantom row не утёк в chain если transaction откатится.
+
+Регрессионное покрытие: `TestAuditHook_EmitsDoALifecycle` вызывает
+все 9 методов + проверяет chain integrity (`prev_hash[N] ==
+hash[N-1]`, без gaps). `TestAuditHook_NilSafe` — no-panic с nil
+hook / nil writer.
+
 ## 4. Writer API
 
 ### 4.1 Go surface (canonical)

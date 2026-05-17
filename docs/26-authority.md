@@ -1,7 +1,41 @@
 # 26 — Authority: Delegation of Authority в ядре
 
-> **Статус**: design proposal (v2.0), **rev2** после ysollo comparison.
-> Drafted 2026-05-16, rev2 — same day.
+> **Статус**: **implemented in v2.0** — Slice 0 + Slice 1 + Slice 2
+> delivered 2026-05-16 → 2026-05-17. Доставлены в `main` коммитами
+> `5ee1b68` (Slice 1+2 integration) и `0e8d502` (worktree → main merge).
+> Полный таймлайн с покрытием и что прошло вне scope — см.
+> [26-slice0-findings.md](26-slice0-findings.md).
+>
+> **Что закрыто:**
+> - **Slice 0** — 5 sys-таблиц + domain layer (`internal/authority/`:
+>   `store.go`, `selector.go`, `workflow.go`, `gate.go`, `types.go`) +
+>   admin REST (`internal/api/adminapi/authority.go`) + workflow REST
+>   (`internal/api/authorityapi/workflow.go`) + bench 199 µs / `Check()`.
+> - **Slice 1** — gate в `PATCH /api/collections/{name}/records/{id}`
+>   через `MountWithAuthority` + in-tx UPDATE+MarkConsumed (anti-bait-
+>   and-switch); delegation primitive (`_doa_delegations` + Store +
+>   admin REST + `ResolveApproversWithDelegation`); workflow REST E2E
+>   (11 путей).
+> - **Slice 2** — reaper-job'ы (`doa_workflow_reaper` 10 мин,
+>   `doa_delegation_reaper` hourly) в `internal/jobs/builtins.go`;
+>   approver inbox (`Store.ListWorkflowsForApprover` +
+>   `GET /api/authority/workflows/inbox`); audit-chain integration
+>   (`internal/authority/audit_hook.go`, 9 типизированных событий,
+>   wired в admin matrix, admin delegation, workflow REST, REST
+>   updateHandler post-tx).
+>
+> **Что остаётся на Slice 3+:**
+> - Admin UI screens (matrix CRUD, workflow inbox, delegation manager)
+> - Tasks integration (заблокировано на [docs/27-tasks.md](27-tasks.md))
+> - i18n / locale-aware decision rendering
+> - Realtime publishes на workflow state transitions
+> - Notifications fan-out (email/in-app при назначении в inbox)
+> - `position` + `department_head` approver types (заблокировано на
+>   org-chart primitive — см. [26-org-structure-audit.md](26-org-structure-audit.md))
+>
+> История правок дизайна (rev1 → rev2) сохранена ниже как контекст —
+> поведение, описанное в rev2, и есть то, что в `main`. **rev2** после
+> ysollo comparison. Drafted 2026-05-16, rev2 — same day.
 >
 > **Rev1** (initial draft) использовал schema-as-code модель: правила
 > подписи зашиты в Go DSL через `Authority(AuthorityConfig{...})` с
